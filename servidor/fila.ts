@@ -196,7 +196,7 @@ export async function estado(c: Contexto): Promise<Response> {
     config: {
       airflow: cfg.airflow ? { dag_id: cfg.airflow.dagId, task: cfg.airflow.taskResultado, key: cfg.airflow.chaveResultado } : null,
       lote_max: cfg.loteMax,
-      chat: Boolean(cfg.chatUrl),
+      slack: Boolean(cfg.slackUrl),
       cron_chave: Boolean(cfg.cronChave),
       tokens: cfg.tokens.length,
       problemas: cfg.problemas,

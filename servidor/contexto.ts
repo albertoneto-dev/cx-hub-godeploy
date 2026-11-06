@@ -10,7 +10,7 @@ export type Dependencias = {
   db: Banco;
   cfg: Config;
   relogio: Relogio;
-  fetch: Busca; // saídas: Airflow e Google Chat
+  fetch: Busca; // saídas: Airflow e Slack
 };
 
 export type Contexto = Dependencias & {

@@ -1,5 +1,5 @@
 // Ambiente de teste: o mesmo servidor/app.ts do Worker, com SQLite em memória no lugar do env.DB, relógio manual,
-// rede falsa (o Airflow e o Google Chat) e um Airflow falso que guarda os runs, o XCom e os clears.
+// rede falsa (o Airflow e o Slack) e um Airflow falso que guarda os runs, o XCom e os clears.
 
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
@@ -22,7 +22,8 @@ export const TOKEN = "token-de-teste-da-fila";
 export const TOKEN_NOVO = "token-novo-durante-a-troca";
 export const CHAVE_CRON = "cron_chave_de_teste";
 export const HOST_AIRFLOW = "airflow.exemplo:8080";
-export const HOST_CHAT = "chat.exemplo";
+export const HOST_SLACK = "hooks.slack.exemplo";
+export const URL_SLACK = `https://${HOST_SLACK}/services/T000/B000/segredo-de-teste`;
 export const DAG = "gobeaute_reenvio_reembolso_etl";
 export const URL_APP = "https://cx-hub.devgogroup.com";
 // 04/11/2026, 10h em Brasília.
@@ -167,7 +168,7 @@ export function resultadoDaDag(conf: Conf, o: {
 
 type Resposta = { status: number; cabecalhos: Headers; json: Json };
 
-export async function criarAmbiente(op: { segredos?: Segredos; semChat?: boolean } = {}) {
+export async function criarAmbiente(op: { segredos?: Segredos; semSlack?: boolean } = {}) {
   limparCacheAirflow();
   const segredos: Segredos = {
     CXHUB_FILA_TOKENS: `${TOKEN}, ${TOKEN_NOVO}`,
@@ -176,7 +177,7 @@ export async function criarAmbiente(op: { segredos?: Segredos; semChat?: boolean
     AIRFLOW_BASE_URL: `http://${HOST_AIRFLOW}/`,
     AIRFLOW_USER: "cxhub",
     AIRFLOW_PASSWORD: "senha-de-teste",
-    ...(op.semChat ? {} : { GCHAT_ALERT_WEBHOOK_URL: `https://${HOST_CHAT}/v1/spaces/TESTE/messages?key=k&token=t` }),
+    ...(op.semSlack ? {} : { SLACK_ALERT_WEBHOOK_URL: URL_SLACK }),
     ...op.segredos,
   };
   const cfg = lerConfig(segredos);
@@ -184,7 +185,8 @@ export async function criarAmbiente(op: { segredos?: Segredos; semChat?: boolean
   const rede = new RedeFalsa();
   const airflow = new AirflowFalso();
   rede.responder(HOST_AIRFLOW, airflow.manipular);
-  rede.responder(HOST_CHAT, () => Response.json({ name: "spaces/TESTE/messages/1" }));
+  // O Incoming Webhook do Slack responde 200 com "ok" em texto.
+  rede.responder(HOST_SLACK, () => new Response("ok"));
   const deps: Dependencias = { db: banco(bancoEmMemoria()), cfg, relogio, fetch: rede.fetch };
 
   async function chamar(metodo: string, caminho: string, o: { cabecalhos?: Record<string, string>; corpo?: unknown } = {}): Promise<Resposta> {
@@ -205,7 +207,7 @@ export async function criarAmbiente(op: { segredos?: Segredos; semChat?: boolean
     chamar(metodo, caminho, { corpo, cabecalhos: { "x-cxhub-fila-token": TOKEN, ...(corpo !== undefined ? { "content-type": "application/json" } : {}) } });
 
   const lote = () => fila("POST", "/api/v1/interno/lote");
-  const avisos = () => rede.para(HOST_CHAT).map(ch => String((JSON.parse(ch.corpo) as { text: string }).text));
+  const avisos = () => rede.para(HOST_SLACK).map(ch => String((JSON.parse(ch.corpo) as { text: string }).text));
   const situacao = async (tabela: "casos" | "atualizacoes", id: string) => {
     const col = tabela === "casos" ? "id_solicitacao" : "id_atualizacao";
     return deps.db.um(`SELECT situacao, erro, tentativas, lote_id, posicao FROM ${tabela} WHERE ${col} = ?`, [id]);

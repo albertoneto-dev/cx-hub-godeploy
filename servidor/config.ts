@@ -15,14 +15,14 @@ export type Config = {
   cronChave: string | null;  // GODEPLOY_CRON_KEY, injetada pela plataforma
   airflow: ConfigAirflow | null;
   loteMax: number;
-  chatUrl: string | null;
+  slackUrl: string | null;   // SLACK_ALERT_WEBHOOK_URL, o Incoming Webhook do canal dos avisos
   problemas: string[];
 };
 
 export type Segredos = Partial<Record<
   | "CXHUB_FILA_TOKENS" | "GODEPLOY_CRON_KEY"
   | "AIRFLOW_BASE_URL" | "AIRFLOW_USER" | "AIRFLOW_PASSWORD" | "AIRFLOW_DAG_ID"
-  | "AIRFLOW_RESULTADO_TASK_ID" | "AIRFLOW_RESULTADO_KEY" | "LOTE_MAX" | "GCHAT_ALERT_WEBHOOK_URL", string>>;
+  | "AIRFLOW_RESULTADO_TASK_ID" | "AIRFLOW_RESULTADO_KEY" | "LOTE_MAX" | "SLACK_ALERT_WEBHOOK_URL", string>>;
 
 export const DAG_PADRAO = "gobeaute_reenvio_reembolso_etl";
 export const LOTE_MAX_PADRAO = 200;
@@ -65,12 +65,12 @@ export function lerConfig(env: Segredos): Config {
     else problemas.push(`LOTE_MAX inválido: vale o padrão ${LOTE_MAX_PADRAO}`);
   }
 
-  let chatUrl: string | null = (env.GCHAT_ALERT_WEBHOOK_URL || "").trim() || null;
-  if (!chatUrl) problemas.push("GCHAT_ALERT_WEBHOOK_URL vazio: os avisos só vão para o log");
-  else if (protocolo(chatUrl) !== "https:") {
-    problemas.push("GCHAT_ALERT_WEBHOOK_URL não é https: os avisos só vão para o log");
-    chatUrl = null;
+  let slackUrl: string | null = (env.SLACK_ALERT_WEBHOOK_URL || "").trim() || null;
+  if (!slackUrl) problemas.push("SLACK_ALERT_WEBHOOK_URL vazio: os avisos só vão para o log");
+  else if (protocolo(slackUrl) !== "https:") {
+    problemas.push("SLACK_ALERT_WEBHOOK_URL não é https: os avisos só vão para o log");
+    slackUrl = null;
   }
 
-  return { tokens, cronChave: env.GODEPLOY_CRON_KEY?.trim() || null, airflow, loteMax, chatUrl, problemas };
+  return { tokens, cronChave: env.GODEPLOY_CRON_KEY?.trim() || null, airflow, loteMax, slackUrl, problemas };
 }
