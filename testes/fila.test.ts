@@ -305,3 +305,42 @@ describe("marcas sem Cosmos: apice, yenzah e denavita", () => {
     expect(a.airflow.ultimo()[1].conf.casos).toEqual(casos);
   });
 });
+
+// Gobeaute é o site multimarca www.gobeaute.com.br, registrado como marca própria (ADR-014 do CX Hub): pedido SH{n}GB,
+// só REENVIO e REEMBOLSO.
+describe("gobeaute, o site multimarca", () => {
+  const ids = (r: { json: { casos: { id_solicitacao: string }[] } }) => r.json.casos.map(x => x.id_solicitacao);
+
+  it.each(["REENVIO", "REEMBOLSO"])("%s: POST /casos aceita, e GET /casos e /casos/abertos leem pela marca", async tipo => {
+    const a = await criarAmbiente();
+    const c1 = caso({ tipo, marca: "gobeaute", numero_pedido: "SH1041GB" });
+    const r = await a.fila("POST", "/api/v1/casos", { casos: [c1] });
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ code: "ENFILEIRADO", ids: [c1.id_solicitacao] });
+
+    const lidos = await a.fila("GET", `/api/v1/casos?tipo=${tipo}&marca=gobeaute&pedido=1041`);
+    expect(lidos.status).toBe(200);
+    expect(lidos.json.casos).toEqual([{
+      id_solicitacao: c1.id_solicitacao, tipo, marca: "gobeaute", numero_pedido: "SH1041GB",
+      criado_em: "2026-11-04T10:00:00-03:00", responsavel: "Ana", situacao: "pendente",
+    }]);
+
+    const abertos = await a.fila("GET", `/api/v1/casos/abertos?tipo=${tipo}&marca=gobeaute&pedido=1041`);
+    expect(abertos.status).toBe(200);
+    expect(ids(abertos)).toEqual([c1.id_solicitacao]);
+  });
+
+  it("o mesmo número na Gobeaute e na loja da Ápice não se misturam, e o caso vai ao conf como veio", async () => {
+    const a = await criarAmbiente();
+    const site = caso({ tipo: "REENVIO", marca: "gobeaute", numero_pedido: "SH1041GB" });
+    const loja = caso({ tipo: "REENVIO", marca: "apice", numero_pedido: "SH1041AP" });
+    expect((await a.fila("POST", "/api/v1/casos", { casos: [site, loja] })).json.ids).toEqual([site.id_solicitacao, loja.id_solicitacao]);
+
+    expect(ids(await a.fila("GET", "/api/v1/casos?tipo=REENVIO&marca=gobeaute&pedido=1041"))).toEqual([site.id_solicitacao]);
+    expect(ids(await a.fila("GET", "/api/v1/casos?tipo=REENVIO&marca=apice&pedido=1041"))).toEqual([loja.id_solicitacao]);
+    expect(ids(await a.fila("GET", "/api/v1/casos/abertos?tipo=REENVIO&marca=gobeaute"))).toEqual([site.id_solicitacao]);
+
+    await a.lote();
+    expect(a.airflow.ultimo()[1].conf.casos).toEqual([site, loja]);
+  });
+});
