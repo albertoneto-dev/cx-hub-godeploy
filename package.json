@@ -1,0 +1,14 @@
+{
+  "name": "cx-hub-fila",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "checar": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.worker.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}
