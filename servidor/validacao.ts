@@ -2,7 +2,8 @@
 // é o contrato.ts do CX Hub, conferido antes de enfileirar, e a DAG confere de novo no lote.
 
 export const TIPOS = ["REENVIO", "REEMBOLSO", "CANCELAMENTO"];
-export const MARCAS = ["lescent", "kokeshi", "bysamia", "aua", "barbours", "rituaria"];
+// As 6 marcas do Cosmos e as 3 que só registram pelo CX Hub, sem Cosmos (ADR-013 do CX Hub).
+export const MARCAS = ["lescent", "kokeshi", "bysamia", "aua", "barbours", "rituaria", "apice", "yenzah", "denavita"];
 export const MAX_POR_CHAMADA = 10;
 
 export const ID_SOLICITACAO = /^[A-Za-z0-9-]{1,64}$/;

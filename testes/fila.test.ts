@@ -266,3 +266,42 @@ describe("leituras", () => {
     expect(JSON.stringify(r.json)).not.toContain("senha-de-teste");
   });
 });
+
+// Ápice, Yenzah e Denavita registram pelo CX Hub sem Cosmos (ADR-013 do CX Hub): o pedido é SH{n}{sufixo da loja}.
+describe("marcas sem Cosmos: apice, yenzah e denavita", () => {
+  const SUFIXO_DO_PEDIDO = { apice: "AP", yenzah: "YE", denavita: "DN" };
+  const ids = (r: { json: { casos: { id_solicitacao: string }[] } }) => r.json.casos.map(x => x.id_solicitacao);
+
+  it.each(Object.entries(SUFIXO_DO_PEDIDO))("%s: POST /casos aceita, e GET /casos e /casos/abertos leem pela marca", async (marca, sufixo) => {
+    const a = await criarAmbiente();
+    const c1 = caso({ tipo: "REENVIO", marca, numero_pedido: `SH123${sufixo}` });
+    const r = await a.fila("POST", "/api/v1/casos", { casos: [c1] });
+    expect(r.status).toBe(200);
+    expect(r.json).toEqual({ code: "ENFILEIRADO", ids: [c1.id_solicitacao] });
+
+    const lidos = await a.fila("GET", `/api/v1/casos?tipo=REENVIO&marca=${marca}&pedido=123`);
+    expect(lidos.status).toBe(200);
+    expect(lidos.json.casos).toEqual([{
+      id_solicitacao: c1.id_solicitacao, tipo: "REENVIO", marca, numero_pedido: `SH123${sufixo}`,
+      criado_em: "2026-11-04T10:00:00-03:00", responsavel: "Ana", situacao: "pendente",
+    }]);
+
+    const abertos = await a.fila("GET", `/api/v1/casos/abertos?tipo=REENVIO&marca=${marca}&pedido=123`);
+    expect(abertos.status).toBe(200);
+    expect(ids(abertos)).toEqual([c1.id_solicitacao]);
+  });
+
+  it("as 3 numa chamada: cada leitura traz só a sua marca, e as 3 vão ao conf como vieram", async () => {
+    const a = await criarAmbiente();
+    const casos = Object.entries(SUFIXO_DO_PEDIDO).map(([marca, sufixo]) => caso({ tipo: "REENVIO", marca, numero_pedido: `SH123${sufixo}` }));
+    expect((await a.fila("POST", "/api/v1/casos", { casos })).json.ids).toEqual(casos.map(x => x.id_solicitacao));
+
+    for (const c of casos) {
+      expect(ids(await a.fila("GET", `/api/v1/casos?tipo=REENVIO&marca=${c.marca}&pedido=123`))).toEqual([c.id_solicitacao]);
+      expect(ids(await a.fila("GET", `/api/v1/casos/abertos?tipo=REENVIO&marca=${c.marca}`))).toEqual([c.id_solicitacao]);
+    }
+
+    await a.lote();
+    expect(a.airflow.ultimo()[1].conf.casos).toEqual(casos);
+  });
+});
