@@ -6,3 +6,6 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# Saída dos testes de leitura contra a API no ar (dados mascarados, mas de produção): fica só na máquina.
+out.txt

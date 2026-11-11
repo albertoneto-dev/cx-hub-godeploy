@@ -142,6 +142,9 @@ async function rodada(dataDeCompatibilidade) {
     r = await pedir("/api/nao-existe");
     conferir("rota desconhecida: 404 { code }", r.status === 404 && (await r.json()).code === "NOT_FOUND");
 
+    r = await pedir("/docs");
+    conferir("/docs devolve a página em HTML", r.status === 200 && r.headers.get("content-type")?.startsWith("text/html") && (await r.text()).includes("<title>Gogroup · CX Hub API</title>"), `HTTP ${r.status}`);
+
     r = await pedir("/api/auth/login", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "a", password: "b" }) });
     conferir("corpo chega à rota pelo Request remontado (login sem config: 500 da rota)", r.status === 500 && (await r.json()).error === "Server configuration error");
 

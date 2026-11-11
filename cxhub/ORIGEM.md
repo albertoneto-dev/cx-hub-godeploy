@@ -112,7 +112,8 @@ Do `e8fe51c` para o `8a1b1a9`, em 2026-11-11, foi feito assim:
    - o que mudou dos dois lados é mesclado, e os conflitos são resolvidos à mão.
 4. Refaça os testes trazidos à mão a partir das versões novas.
 5. Confira o código novo ou mudado contra o Worker: `cache`, env lida na carga do módulo, `Buffer`, `node:*`.
-6. Ponha a rota nova em `api/roteador.ts` e em `docs/api.md`, e a env nova no `.env.example`.
+6. Ponha a rota nova em `api/roteador.ts`, em `docs/api.md` e na página `/docs` (`api/docs.ts`, com o commit novo no
+   cabeçalho dela), e a env nova no `.env.example`.
 
 Nessa atualização houve um conflito só, em `shared/lib/sheets/server.ts`: o CX Hub renomeou a variável do `catch` e
 este app tinha tirado o `cache: 'no-store'`. Ficaram as duas mudanças.

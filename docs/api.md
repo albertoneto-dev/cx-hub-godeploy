@@ -8,6 +8,10 @@ mesmo Worker:
 - O resto: as 23 rotas que o CX Hub tem na Vercel, **nos mesmos caminhos, métodos, corpos e respostas**. O código é
   o do CX Hub (`cxhub/`, com origem em `cxhub/ORIGEM.md`); as regras de negócio estão no `CLAUDE.md` de lá.
 
+Para quem integra: `GET /docs` é uma página HTML (`api/docs.ts`) com o que muda para quem chamava a Vercel, os
+exemplos de antes e depois e as rotas. Ela vai no pacote do Worker, porque esta pasta `docs/` não sobe ao GoDeploy.
+Mudou rota, header ou resposta: atualize a página também (o `testes/docs.test.ts` cobra as rotas e os métodos).
+
 ## Autenticação
 
 Toda chamada passa primeiro pelo gateway do GoDeploy:
@@ -90,4 +94,5 @@ npm test         # a fila, a cola (testes/api.test.ts) e os testes do CX Hub (cx
 npm run workerd  # o worker.ts empacotado rodando no workerd, sem nodejs_compat (ferramentas/workerd/)
 ```
 
-Sobem para o GoDeploy `worker.ts`, `servidor/`, `api/` e `cxhub/` (sem `cxhub/__tests__` e sem o `ORIGEM.md`).
+Sobem para o GoDeploy `worker.ts`, `servidor/`, `api/` (inclusive a página `api/docs.ts`) e `cxhub/` (sem
+`cxhub/__tests__` e sem o `ORIGEM.md`).

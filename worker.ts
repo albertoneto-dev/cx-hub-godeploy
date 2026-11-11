@@ -3,10 +3,12 @@
 //     docs/fila-cxhub.md no repositório do CX Hub), com o cron do GoDeploy.
 //   - o resto: as 23 rotas que o CX Hub tem na Vercel (cxhub/, portadas; api/ é a cola com o Worker). Elas entregam
 //     casos e atualizações à fila sem rede (api/filaNoWorker.ts).
+// E /docs, a página do que muda para quem chamava a Vercel (api/docs.ts), que não depende de segredo nenhum.
 // Liga os segredos do app (env) às dependências reais e passa cada requisição para a parte dela.
 
 // Primeiro import de propósito: o process.env que o código do CX Hub lê precisa existir antes de ele ser avaliado.
 import { atualizarAmbiente } from "./api/ambiente";
+import { ehCaminhoDosDocs, servirDocs } from "./api/docs";
 import { transporteDaFilaNoWorker } from "./api/filaNoWorker";
 import { type ContextoDoWorker, tratarNaApi } from "./api/roteador";
 import { usarTransporteDaFila } from "./cxhub/shared/lib/fila/client";
@@ -46,10 +48,12 @@ usarTransporteDaFila(transporteDaFilaNoWorker(() => {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx?: ContextoDoWorker): Promise<Response> {
+    const caminho = new URL(request.url).pathname;
+    if (ehCaminhoDosDocs(caminho)) return servirDocs(request);
     atualizarAmbiente(env as unknown as Record<string, unknown>);
     const deps = dependenciasDaFila(env);
     depsAtuais = deps;
-    if (new URL(request.url).pathname.startsWith("/api/v1/")) return tratar(request, deps);
+    if (caminho.startsWith("/api/v1/")) return tratar(request, deps);
     return tratarNaApi(request, ctx);
   },
 };
