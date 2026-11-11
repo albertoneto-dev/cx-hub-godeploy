@@ -1,0 +1,57 @@
+import type { ResendSubmissionData } from '@modules/reenvios/types';
+
+/**
+ * Um valor DIFERENTE por campo, para que qualquer coluna trocada no builder apareça no teste
+ * (com valores repetidos, dois campos invertidos passariam despercebidos).
+ */
+export const RESEND_DATA: ResendSubmissionData = {
+    timestamp: '27/10/2026, 15:00:00',
+    dataSolicitacao: 'DATA_SOL',
+    data_criacao: '20/10/2026',
+    tipoSolicitacao: 'TIPO',
+    responsavel: 'RESP',
+    origemReclamacao: 'ORIGEM',
+    idAtendimento: 'ID',
+    cdOrigem: 'CD',
+    nomeCliente: 'NOME',
+    telefoneCliente: '(11) 99999-0000',
+    enderecoCliente: 'END',
+    cep: 'CEP',
+    estado: 'UF',
+    numeroPedido: '#SHOPIFY220183',
+    numeroNF: 'NF',
+    chaveNF: 'CHAVE',
+    cosmosId: '42',
+    produtoComProblema: 'PROD_PROB',
+    produtoReenviar: 'PROD_REEN',
+    loteProduto: 'LOTE',
+    problemaProduto: 'PROBLEMA',
+    transportadoraOriginal: 'T_ORIG',
+    transportadoraReenvio: 'T_REEN',
+    devolucao: 'DEVOL',
+    ticketTransportadora: 'TICKET',
+    statusPedido: 'STATUS_PED',
+    ReenvioCompleto: 'COMPLETO',
+    valorReenvio: 'VALOR',
+    status: 'STATUS',
+    codNfd: 'NFD',
+    automacao: 'Automação',
+    erp: 'ERP',
+    comentarios: 'COMENT',
+    apiData: {
+        carrierId: 161,
+        carrierServiceName: 'Expresso',
+        shippingCost: '10.00',
+        discountAmount: '5.00',
+        resendProducts: [{ product_id: 7, quantity: 2, unit_price: '49.90' }],
+        shippingAddress: {
+            street: 'Rua A',
+            number: '10',
+            complement: 'Ap 1',
+            neighborhood: 'Centro',
+            city: 'São Paulo',
+            state: 'SP',
+            postal_code: '01001000',
+        },
+    },
+};

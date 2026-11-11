@@ -1,2 +1,8 @@
 node_modules/
 *.sqlite
+
+# Segredos de verdade nunca sobem: os valores ficam no GoDeploy (setAppSecret) e, para teste local, num .env.
+# O .env.example só tem os nomes e o motivo de cada um, e fica no repositório.
+.env
+.env.*
+!.env.example

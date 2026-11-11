@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "checar": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.worker.json"
+    "checar": "tsc --noEmit -p . && tsc --noEmit -p tsconfig.worker.json",
+    "workerd": "node ferramentas/workerd/conferir.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.19.0",
