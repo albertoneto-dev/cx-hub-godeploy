@@ -24,11 +24,32 @@ export interface RespostaDosDadosDoFormulario {
 const falha = (status: number, error: string, code?: string): RespostaDosDadosDoFormulario =>
     ({ status, body: code ? { error, code } : { error } });
 
+/**
+ * Adaptação do app GoDeploy cx-hub (cxhub/ORIGEM.md): a leitura pode passar por uma cache. No app ela é a do env.DB
+ * (api/cacheDaRotaDados.ts), que o cron renova a cada 5 min; sem leitor (os testes do CX Hub), a busca é ao vivo,
+ * como no CX Hub.
+ */
+export type LeitorDaRotaDados = (
+    origin: FormDataOrigin,
+    aoVivo: () => Promise<RespostaDosDadosDoFormulario>,
+) => Promise<RespostaDosDadosDoFormulario>;
+
+let leitor: LeitorDaRotaDados | null = null;
+
+export function usarLeitorDaRotaDados(novo: LeitorDaRotaDados | null): void {
+    leitor = novo;
+}
+
 export async function buscarDadosDoFormulario(origin: string, timeoutMs: number): Promise<RespostaDosDadosDoFormulario> {
     if (!ORIGENS.includes(origin as FormDataOrigin)) {
         return falha(400, `origin inválido: use ${ORIGENS.join(', ')}`);
     }
+    const aoVivo = () => buscarDadosDoFormularioAoVivo(origin as FormDataOrigin, timeoutMs);
+    return leitor ? leitor(origin as FormDataOrigin, aoVivo) : aoVivo();
+}
 
+/** A busca direto no app rota-dados-cxhub, sem cache: a do CX Hub, e a que o cron usa para renovar a cache. */
+export async function buscarDadosDoFormularioAoVivo(origin: FormDataOrigin, timeoutMs: number): Promise<RespostaDosDadosDoFormulario> {
     const base = (process.env.FORM_DATA_API_URL ?? '').replace(/\/+$/, '');
     const token = process.env.FORM_DATA_API_TOKEN;
     if (!base || !token) {

@@ -18,5 +18,5 @@
       "next/server": ["./api/next-server.ts"]
     }
   },
-  "include": ["worker.ts", "servidor", "api", "cxhub", "testes", "vitest.config.ts"]
+  "include": ["worker.ts", "servidor", "api", "cxhub", "backoffice", "testes", "vitest.config.ts"]
 }

@@ -14,7 +14,7 @@ const ROTA_DA_FILA = /^\/api\/v1\/(casos|atualizacoes|estado)(?:\/([^/]+))?$/;
 const NEGADO = "x-cxhub-fila-token ausente ou inválido.";
 
 // Compara com todos os tokens aceitos, sem parar no primeiro: o tempo não revela qual chegou perto.
-function tokenValido(req: Request, tokens: string[]): boolean {
+export function tokenValido(req: Request, tokens: string[]): boolean {
   const veio = (req.headers.get("x-cxhub-fila-token") || "").trim();
   let ok = false;
   for (const t of tokens) ok = iguais(veio, t) || ok;

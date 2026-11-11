@@ -69,6 +69,10 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   trazem (`cosmos/client.ts`, `shopify/client.ts`, `registro/client.ts`) ficaram como estão: não rodam no servidor.
 - O `after()` do Next, o `NextRequest`, o `NextResponse` e o `VERCEL_ENV` vêm de `api/` (`next-server.ts`,
   `ambiente.ts`), sem mudança nas rotas.
+- `shared/lib/formDataApi.ts` (2026-11-11): a leitura passa por um leitor trocável (`usarLeitorDaRotaDados`). O
+  `worker.ts` põe nele a cache do `env.DB` (`api/cacheDaRotaDados.ts`), que o cron renova a cada 5 min. O motivo é
+  que cada chamada à rota dados, outro app do GoDeploy, paga o gateway de novo (~0,8 s). A busca de antes virou
+  `buscarDadosDoFormularioAoVivo`, que o cron usa. Sem leitor (os testes do CX Hub), tudo fica como no CX Hub.
 
 ## Decisões deste app (o comportamento muda em relação ao CX Hub)
 

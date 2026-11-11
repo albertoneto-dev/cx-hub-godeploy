@@ -142,6 +142,9 @@ async function rodada(dataDeCompatibilidade) {
     r = await pedir("/api/nao-existe");
     conferir("rota desconhecida: 404 { code }", r.status === 404 && (await r.json()).code === "NOT_FOUND");
 
+    r = await pedir("/api/backoffice/eu", { headers: { "x-usuario-email": "ana.silva@gocase.com" } });
+    conferir("backoffice em /api/backoffice: quem chama pelo x-usuario-email", r.status === 200 && (await r.json()).email === "ana.silva@gocase.com", `HTTP ${r.status}`);
+
     r = await pedir("/docs");
     conferir("/docs devolve a página em HTML", r.status === 200 && r.headers.get("content-type")?.startsWith("text/html") && (await r.text()).includes("<title>Gogroup · CX Hub API</title>"), `HTTP ${r.status}`);
 

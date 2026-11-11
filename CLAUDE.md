@@ -6,6 +6,8 @@ Este repositório é o código do app GoDeploy `cx-hub` (id `66edd698`, https://
 | Caminho | O que é | Código |
 |---|---|---|
 | `/api/v1/*` | A fila de registro. Guarda casos e atualizações do CX Hub no `env.DB` e manda tudo em lote ao Airflow. | `servidor/` (código deste app) |
+| `/api/backoffice/*` | O backoffice de reenvio e reembolso: a lista da gold + raw, as edições e o lote delas para a mesma DAG | `backoffice/` (cópia do app `backoffice-hub`) |
+| `/api/interno/rota-dados` | A rodada do cron que renova a cache da rota dados no `env.DB` | `api/cacheDaRotaDados.ts` |
 | `/api/*` (o resto) | As 23 rotas que o CX Hub tinha na Vercel, nos mesmos caminhos, métodos e corpos | `cxhub/` (cópia do CX Hub) + `api/` (cola com o Worker) |
 | `/docs` | A página da API para quem integra | `api/docs.ts` + `api/docsRotas.ts` |
 
@@ -20,6 +22,10 @@ O CX Hub (o site, a tela) continua no repositório `rpaiagogroup/cx-hub`. Lá es
   `cron.ts` (quem pode chamar o lote), `aviso.ts` (o Slack) e `config.ts` (os segredos).
 - `cxhub/`: a cópia do backend do CX Hub. A origem está em `cxhub/ORIGEM.md` (o commit, o que foi adaptado à mão e por
   quê, e o roteiro para atualizar).
+- `backoffice/`: a cópia do backend do app `backoffice-hub` (`servidor/`, `shared/`, `testes/`). A origem, as
+  adaptações e o que ainda falta estão em `backoffice/ORIGEM.md`. A infraestrutura dele (banco, Airflow, cron, Slack)
+  é a mesma da fila, em cópia própria, com as tabelas `bo_*`.
+- `api/cacheDaRotaDados.ts`: a cache das listas da rota dados no `env.DB` e a rota do cron que a renova.
 - `api/`: a cola com o Worker. `roteador.ts` (as 23 rotas), `next-server.ts` (o pouco do Next que as rotas usam),
   `ambiente.ts` (o `process.env` montado dos segredos), `filaNoWorker.ts` (as rotas falam com a fila sem rede) e a
   página `/docs`.
@@ -80,6 +86,68 @@ O contrato é o da Vercel: os mesmos caminhos, métodos, corpos e respostas de s
   a mesma causa sai no máximo uma vez a cada 15 min. Um aviso nunca muda o desfecho da chamada. Sem o webhook, vão só
   ao log. Em 2026-11-11 o webhook ainda não estava cadastrado.
 
+### O backoffice (`/api/backoffice`)
+
+As regras vieram do app `backoffice-hub` sem mudança (`backoffice/ORIGEM.md` lista as adaptações, que são de
+infraestrutura e de acesso, não de negócio).
+
+**O que se lê**
+- **A lista** é a `gold.fct_reenvio_reembolso_gobeaute` com os casos do CX Hub que a raw já mudou e a gold ainda não
+  mostra, remontados da raw com **as mesmas regras do dbt** (`backoffice/servidor/raw.ts`). Mudou uma regra no dbt,
+  mude lá.
+- **A paginação é por cursor** (`data_solicitacao desc, chave_unica desc`), porque o Metabase não pagina SQL nativo, e
+  OFFSET num filtro que muda pula ou repete linha.
+
+**O que se edita** (`editabilidade`, em `backoffice/servidor/edicoes.ts`). Uma linha só se edita quando **todas** as
+regras abaixo valem; senão, `422 NOT_EDITABLE`:
+1. É caso do CX Hub (`chave_unica` = `cxhub|<id>`).
+2. É reenvio ou reembolso.
+3. Foi solicitado há até 30 dias.
+4. Não está cancelado.
+5. Se é reembolso, não está `Realizado`.
+6. Se é reenvio, o Cosmos ainda não o registrou (`automacao = true` na criação).
+
+As regras 4 e 5 olham o caso **com as edições guardadas por cima**: marcar Cancelado aqui já trava a linha.
+
+**Como cada campo se edita**
+- **Campos:** a lista é fechada no contrato da DAG (`backoffice/shared/campos.ts`); campo fora dele faz a DAG recusar.
+- **Motivo:** só um da lista da rota dados.
+- **SKUs:** nunca se digitam. Saem dos itens do pedido no Data Mart; do kit, sempre os itens.
+- **Valor do reembolso:** sai dos mesmos itens e nunca passa do total do pedido. Só se digita com exceção à política.
+- **Mimo:** só do catálogo da marca, de 1 a 10 unidades.
+- **Dados do cliente** do reenvio: ficam **só** no `env.DB` (`bo_clientes`), porque o Metabase não guarda dado pessoal.
+
+**O lote** (`backoffice/servidor/lote.ts`) é o mesmo desenho da fila, com estas diferenças:
+- a edição gravada sai do `env.DB` quando a raw já a mostra; se não aparecer em 6 h, sai com aviso;
+- na segunda falha sem resultado, a edição é recusada;
+- a recusada fica 7 dias, para quem editou ver o motivo;
+- o `dag_run_id` é `cxhub_backoffice__…`.
+
+**Quem chama:** o autor é o `x-usuario-email` (a pessoa na tela de quem chama). Sem ele, vale o e-mail do gateway.
+
+### A cache da rota dados
+
+As listas da rota dados (marcas, responsáveis, motivos, transportadoras) ficam no `env.DB`. O motivo é que cada chamada
+a outro app do GoDeploy paga o gateway de novo, cerca de 0,8 s medidos em 2026-11-11.
+
+| Situação | O que acontece |
+|---|---|
+| Cache com menos de 15 min | Vale a cache |
+| Cache mais velha | Busca ao vivo e guarda |
+| Rota dados fora | Vale a última resposta boa até 24 h |
+| Cron | Renova a cache a cada 5 min, para quem lê quase sempre acertar |
+
+### Os crons
+
+| Rota | Agenda |
+|---|---|
+| `POST /api/v1/interno/lote` (a fila) | `*/20 * * * *` |
+| `POST /api/interno/rota-dados` (a cache) | `*/5 * * * *` |
+| `POST /api/backoffice/interno/lote` (o backoffice) | `*/10 * * * *` |
+
+O GoDeploy não confere a assinatura do cron, então vale a trava de 30 s. Ela é **uma por rota**, porque os horários
+coincidem. Criar ou mudar cron é mudar o GoDeploy: só quando o usuário pedir.
+
 ### Autenticação
 
 O app é `authenticated`: o gateway do GoDeploy confere a chave `gdk_` (emitida **para este app**; a de outro app leva
@@ -125,7 +193,9 @@ Publicar é mexer em produção: só quando o usuário pedir.
 1. Os três checks passaram.
 2. Ninguém publicou desde a última versão: confira `version` e `updatedAt` no `getApp`. O código no ar é o do disco:
    confira com o `getApp` com `include: ["manifest"]` (caminho e tamanho de cada arquivo).
-3. Envie para o upload: `worker.ts`, `servidor/`, `api/` e `cxhub/**/*.ts` sem `cxhub/__tests__` (156 arquivos na v8).
+3. Envie para o upload: `worker.ts`, `servidor/`, `api/`, `cxhub/**/*.ts` sem `cxhub/__tests__`, e
+   `backoffice/servidor/` e `backoffice/shared/` (156 arquivos na v8, antes do backoffice; confira a lista contra o
+   manifesto no ar).
    Use `getUploadToken` e depois `curl -F "<caminho>=@./<caminho>"` para cada arquivo, com
    `-H "Authorization: Bearer <uploadToken>"`. Os 4 caminhos com `[id]` passam como estão. Um `internal_error` avulso
    do upload foi passageiro: tente de novo com um token novo.
@@ -133,7 +203,7 @@ Publicar é mexer em produção: só quando o usuário pedir.
 5. Confira: a `version` nova no `getApp`, e no `getAppLogs` a fila com 200 e a rodada seguinte do cron sem erro.
 
 **Não sobem:** `docs/`, `testes/`, `ferramentas/`, `tipos-do-worker/`, `.env*`, `package.json`, os `tsconfig*`,
-`vitest.config.ts`, `cxhub/__tests__`, `cxhub/ORIGEM.md` e este arquivo. O que a página `/docs` precisa mostrar mora em
+`vitest.config.ts`, `cxhub/__tests__`, `cxhub/ORIGEM.md`, `backoffice/testes/`, `backoffice/ORIGEM.md` e este arquivo. O que a página `/docs` precisa mostrar mora em
 `api/`, por isso.
 
 ## Git

@@ -4,6 +4,6 @@
     "lib": ["ES2022", "WebWorker"],
     "types": []
   },
-  "include": ["worker.ts", "servidor", "api", "cxhub", "tipos-do-worker"],
+  "include": ["worker.ts", "servidor", "api", "cxhub", "backoffice/servidor", "backoffice/shared", "tipos-do-worker"],
   "exclude": ["cxhub/__tests__"]
 }

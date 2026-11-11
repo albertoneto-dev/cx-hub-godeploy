@@ -82,6 +82,52 @@ quer dizer "registrado, não repita", e o chamador depende disso.
 - Log: cada requisição às rotas deixa uma linha `MÉTODO caminho → status em N ms` (sem a query string) no
   `getAppLogs` do GoDeploy, além do que as rotas já logavam.
 
+## Backoffice (`/api/backoffice/*`)
+
+O backend do app `backoffice-hub`, que vai virar uma página da Central de Tickets, está portado em `backoffice/`. A
+origem e as adaptações estão em `backoffice/ORIGEM.md`; as regras de negócio, no `CLAUDE.md` deste repositório.
+
+| Método | Caminho | O que faz |
+|---|---|---|
+| GET | `/api/backoffice/eu` | Quem chama, a janela de edição (30 dias) e o tamanho da página (50) |
+| GET | `/api/backoffice/solicitacoes?tipo=REENVIO\|REEMBOLSO[&marca=<sigla>][&status=][&busca=][&cursor=][&contar=1]` | Uma página da gold + raw, por cursor (`proximo` leva à seguinte; `contar=1` traz o `total`) |
+| GET | `/api/backoffice/solicitacoes/{chave}` | A linha com as edições por cima, as edições guardadas, os dados do cliente e, se ela se edita, os motivos, o pedido e o catálogo do mimo |
+| POST | `/api/backoffice/solicitacoes/{chave}/edicoes` | `{ campos?, cliente?, itens? }`: guarda a edição (vai à DAG no próximo lote) e/ou os dados do cliente |
+| DELETE | `/api/backoffice/edicoes/{id}` | Desfaz uma edição pendente ou dispensa uma recusada (a enviada não volta: 409) |
+| GET | `/api/backoffice/estado` | Diagnóstico: edições por situação, o lote em andamento, os últimos lotes e a última rodada |
+| POST | `/api/backoffice/interno/lote` | A rodada: o cron (`X-Godeploy-Cron`), ou alguém identificado, à mão |
+
+- **Quem chama:** o autor de cada edição vem do `x-usuario-email`, a pessoa na tela de quem chama, como na Central.
+  Sem ele, vale o e-mail que o gateway põe no login do navegador. Sem nenhum dos dois, a chamada leva 401; com um
+  `x-usuario-email` fora do formato, 400.
+- **Escrita pelo navegador** (chamada com `Origin`): exige `x-backoffice: 1` e a origem do app. A chamada de servidor,
+  sem `Origin`, não exige.
+- **Lote:** `dag_run_id` = `cxhub_backoffice__<aaaammddThhmmss>`, na mesma DAG da fila. As tabelas no `env.DB` têm o
+  prefixo `bo_`.
+
+## Cache da rota dados (`POST /api/interno/rota-dados`)
+
+As listas do app `rota-dados-cxhub` ficam guardadas no `env.DB` (tabela `cache_rota_dados`). Quem lê por ela: o
+`/api/resend/data`, as marcas que o bot aceita e os motivos do backoffice.
+
+| Situação | O que acontece |
+|---|---|
+| Cache com menos de 15 min | Serve a cache, sem chamar a rota dados |
+| Cache mais velha | Busca ao vivo e guarda a resposta |
+| Rota dados fora | Serve a última resposta boa até 24 h, com aviso no log |
+| Rota `POST /api/interno/rota-dados` | Renova as três origens. Chamada pelo cron ou à mão, com o `x-cxhub-fila-token`. Responde 200, ou 502 quando nenhuma origem renovou |
+
+## Crons
+
+| Rota | Agenda | Situação |
+|---|---|---|
+| `POST /api/v1/interno/lote` | `*/20 * * * *` | Existe |
+| `POST /api/interno/rota-dados` | `*/5 * * * *` | **A criar** |
+| `POST /api/backoffice/interno/lote` | `*/10 * * * *`, a mesma do app de origem | **A criar** |
+
+Sem assinatura conferida, cada rota aceita no máximo uma chamada a cada 30 s. A trava é uma por rota, então os crons
+podem disparar no mesmo minuto.
+
 ## Segredos
 
 Todos estão em `.env.example`, com o motivo de cada um e o que acontece sem ele.
@@ -94,5 +140,6 @@ npm test         # a fila, a cola (testes/api.test.ts) e os testes do CX Hub (cx
 npm run workerd  # o worker.ts empacotado rodando no workerd, sem nodejs_compat (ferramentas/workerd/)
 ```
 
-Sobem para o GoDeploy `worker.ts`, `servidor/`, `api/` (inclusive a página `api/docs.ts`) e `cxhub/` (sem
-`cxhub/__tests__` e sem o `ORIGEM.md`).
+Sobem para o GoDeploy `worker.ts`, `servidor/`, `api/` (inclusive a página `api/docs.ts`), `cxhub/` (sem
+`cxhub/__tests__` e sem o `ORIGEM.md`) e `backoffice/servidor/` e `backoffice/shared/` (sem `backoffice/testes/` e sem o
+`ORIGEM.md`).

@@ -119,7 +119,9 @@ export async function autorizarCron(c: Contexto): Promise<"ok" | "negado" | "ced
     if (!travas.ok) caminho = `recusado (${r.motivo}; travas: ${travas.motivo})`;
     else {
       await garantirEsquema(c.db);
-      resultado = (await pegarVez(c.db, "cron_sem_assinatura", c.agora, INTERVALO_SEM_ASSINATURA_MS)) ? "ok" : "cedo";
+      // Uma trava por rota: os crons deste app (o lote a cada 20 min, a cache da rota dados a cada 5) disparam no
+      // mesmo minuto, e uma trava só deixaria o segundo de fora com 429.
+      resultado = (await pegarVez(c.db, `cron_sem_assinatura:${c.url.pathname}`, c.agora, INTERVALO_SEM_ASSINATURA_MS)) ? "ok" : "cedo";
       caminho = resultado === "ok" ? `aceito pelas travas (${r.motivo})` : "recusado (rodada sem assinatura há menos de 30 s)";
     }
   }

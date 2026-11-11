@@ -8,6 +8,7 @@
     "workerd": "node ferramentas/workerd/conferir.mjs"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
     "@types/node": "^20.19.0",
     "typescript": "5.9.3",
     "vitest": "4.1.12"
