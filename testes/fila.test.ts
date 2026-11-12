@@ -344,3 +344,33 @@ describe("gobeaute, o site multimarca", () => {
     expect(a.airflow.ultimo()[1].conf.casos).toEqual([site, loja]);
   });
 });
+
+// A etapa extra da rodada é a parte do backoffice (fila única: backoffice/ORIGEM.md). Aqui, um falso no lugar dela; o
+// ciclo inteiro com a de verdade está em backoffice/testes/lote.test.ts.
+describe("a etapa extra da rodada (posRodada: no app, a do backoffice)", () => {
+  it("roda depois das da fila, com o prazo da rodada; o resumo entra com o nome dela, e os avisos vão no mesmo Slack", async () => {
+    const a = await criarAmbiente();
+    const prazos: number[] = [];
+    a.deps.posRodada = async (_c, prazo) => {
+      prazos.push(prazo);
+      return { nome: "extra", resumo: { feito: true }, avisos: ["aviso da etapa extra"] };
+    };
+    const r = await a.lote();
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ code: "OK", disparo: { estado: "vazio" }, extra: { feito: true }, avisos: 1 });
+    expect(prazos).toEqual([INICIO + 25_000]);
+    expect(a.avisos().join("\n")).toContain("aviso da etapa extra");
+  });
+
+  it("a falha dela não derruba as outras: 500 com pos_rodada em falhas, e a vez da rodada é devolvida", async () => {
+    const a = await criarAmbiente();
+    a.deps.posRodada = async () => {
+      throw new Error("falha simulada");
+    };
+    const r = await a.lote();
+    expect(r.status).toBe(500);
+    expect(r.json).toMatchObject({ code: "INTERNAL_ERROR", disparo: { estado: "vazio" }, falhas: ["pos_rodada"] });
+    a.deps.posRodada = undefined;
+    expect((await a.lote()).json.code).toBe("OK");
+  });
+});

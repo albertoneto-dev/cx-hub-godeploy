@@ -12,7 +12,7 @@ export type Dependencias = {
   db: Banco;
   cfg: Config;
   relogio: Relogio;
-  fetch: Busca; // saídas: Metabase, Airflow e Slack
+  fetch: Busca; // saídas: Metabase e rota dados (o Airflow e o Slack são da fila do app)
   ativos?: Ativos; // env.ASSETS: a tela (index.html e o JS/CSS do dist/)
   novoId?: () => string; // o id_atualizacao de cada edição (os testes passam um previsível)
 };

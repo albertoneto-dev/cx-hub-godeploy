@@ -50,8 +50,8 @@ export const GRUPOS: ReadonlyArray<{ tag: string; descricao: string }> = [
   { tag: "Cancelamento", descricao: "O registro do cancelamento junto do reenvio ou do reembolso." },
   { tag: "Logística", descricao: "A abertura do ticket de logística." },
   { tag: "Consultas", descricao: "A lista de solicitações e a situação do registro de cada caso." },
-  { tag: "Fila", descricao: "A fila de registro (`/api/v1`), que manda os casos em lote ao Airflow a cada 20 min. Não mudou na migração." },
-  { tag: "Backoffice", descricao: "O backoffice de reenvio e reembolso, que era o app `backoffice-hub`: a lista da gold + raw por cursor, o caso, as edições com as regras de lá e o lote delas para a mesma DAG. Rotas novas, só no GoDeploy. Toda chamada leva o `x-usuario-email` de quem está na tela." },
+  { tag: "Fila", descricao: "A fila de registro (`/api/v1`), que manda os casos e as atualizações em lote ao Airflow a cada 10 min (as edições do backoffice vão no mesmo lote). O contrato não mudou na migração." },
+  { tag: "Backoffice", descricao: "O backoffice de reenvio e reembolso, que era o app `backoffice-hub`: a lista da gold + raw (+ os casos ainda na fila) por cursor, o caso e as edições com as regras de lá. A edição entra na fila do app e sobe no lote dela, a cada 10 min. Rotas novas, só no GoDeploy. Toda chamada leva o `x-usuario-email` de quem está na tela." },
   { tag: "Cache da rota dados", descricao: "A rodada do cron que renova as listas da rota dados guardadas no `env.DB`. Rota nova, só no GoDeploy." },
 ];
 
@@ -4298,7 +4298,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/refund/submit",
     "tag": "Reembolso",
     "summary": "Registra uma solicitação de reembolso",
-    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à gold em até 20 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. Não existe modo de teste: toda chamada válida registra de verdade.",
+    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. Não existe modo de teste: toda chamada válida registra de verdade.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -6556,7 +6556,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/cancellation/submit",
     "tag": "Cancelamento",
     "summary": "Registra uma solicitação de cancelamento",
-    "description": "Entrega o caso CANCELAMENTO à fila do Metabase (o lote o leva à gold em até 20 min) e, só depois, grava a linha na planilha de cancelamento da marca. Sem dedup: cada chamada aceita cria um caso e uma linha novos.",
+    "description": "Entrega o caso CANCELAMENTO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha de cancelamento da marca. Sem dedup: cada chamada aceita cria um caso e uma linha novos.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -7832,7 +7832,7 @@ export const ENDPOINTS: Endpoint[] = [
       "Ordem das conferências: token presente (401), ids (400), token no Cosmos (401/403/502/504), configuração do Metabase (503), leitura (502/504).",
       "A fila nunca causa erro aqui: fora do ar ou sem configuração, o caso que a raw não tem fica aguardando.",
       "Um id que nunca existiu também volta aguardando; e um caso recusado sai da fila 7 dias depois, e a partir daí volta aguardando.",
-      "O CX Hub pergunta isto a cada 10 min para a tag \"Gravado no Metabase\"; o lote leva o caso à raw em até 20 min, mais o atraso da réplica.",
+      "O CX Hub pergunta isto a cada 10 min para a tag \"Gravado no Metabase\"; o lote leva o caso à raw em até 10 min, mais o atraso da réplica.",
       "Outro método no mesmo caminho: 405 {code: \"METHOD_NOT_ALLOWED\", message: \"Use GET nesta rota.\"} com o header Allow.",
       "Exceção não tratada vira 500 {code: \"UNKNOWN_ERROR\", message: \"Erro interno. Veja o log do app.\"} no roteador; pelo código, esta rota não deixa exceção escapar."
     ],
@@ -7853,7 +7853,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/v1/casos",
     "tag": "Fila",
     "summary": "Entrega à fila de 1 a 10 casos novos (criação).",
-    "description": "Guarda os casos no banco do app como pendente; o lote do cron os leva à DAG gobeaute_reenvio_reembolso_etl a cada 20 min. Idempotente por id_solicitacao: repetir um id não duplica nem sobrescreve. Um item inválido recusa a chamada inteira e nada é guardado.",
+    "description": "Guarda os casos no banco do app como pendente; o lote do cron os leva à DAG gobeaute_reenvio_reembolso_etl a cada 10 min. Idempotente por id_solicitacao: repetir um id não duplica nem sobrescreve. Um item inválido recusa a chamada inteira e nada é guardado.",
     "routeHeader": "x-cxhub-fila-token",
     "params": [],
     "requestBody": {
@@ -8771,6 +8771,7 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Os ids são de caso (id_solicitacao), não de alteração; espaços nas pontas e repetidos são ignorados antes de contar os 20.",
       "Inclui as recusadas: quem calcula o status atual deve ignorá-las, como o CX Hub faz.",
+      "Inclui as edições do backoffice (`/api/backoffice`), que entram nesta fila como alterações do caso, ao lado das do CX Hub (fila única).",
       "Alterações gravadas e recusadas ficam 7 dias e depois são apagadas.",
       "Outro método que não GET ou POST: 405 METHOD_NOT_ALLOWED com Allow: GET, POST."
     ],
@@ -9104,7 +9105,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/v1/interno/lote",
     "tag": "Fila",
     "summary": "Roda uma rodada do lote: acompanha o run em andamento e dispara o próximo.",
-    "description": "Acompanha o lote em andamento no Airflow e aplica o resultado por item (gravado ou recusado), monta e dispara o próximo lote com os pendentes (até LOTE_MAX), apaga uma vez por hora o que terminou há mais de 7 dias e avisa no Slack o que achou. Chamada pelo cron do GoDeploy a cada 20 min ou à mão; só uma rodada por vez.",
+    "description": "Acompanha o lote em andamento no Airflow e aplica o resultado por item (gravado ou recusado), monta e dispara o próximo lote com os pendentes (até LOTE_MAX), apaga uma vez por hora o que terminou há mais de 7 dias, roda a etapa do backoffice (confere na raw as edições gravadas) e avisa no Slack o que achou. As edições do backoffice são atualizações desta fila e sobem no mesmo lote que as do CX Hub. Chamada pelo cron do GoDeploy a cada 10 min ou à mão; só uma rodada por vez.",
     "routeHeader": "x-cxhub-fila-token",
     "params": [
       {
@@ -9186,6 +9187,12 @@ export const ENDPOINTS: Endpoint[] = [
             "description": "Se a limpeza de hora em hora rodou nesta rodada; ausente no OUTRA_RODADA."
           },
           {
+            "name": "backoffice",
+            "type": "object",
+            "required": "condicional",
+            "description": "A etapa do backoffice: `conferencia` das edições gravadas na raw que o Metabase lê, com `estado` (nada, conferido, sem_metabase, sem_tempo, sem_resposta), `naRaw`, `atrasadas` (não apareceram em 6 h: saem da tela com aviso) e `esperando`; e `limpeza` (a autoria das edições que a fila já apagou, de hora em hora). Ausente no OUTRA_RODADA e quando a etapa falhou."
+          },
+          {
             "name": "avisos",
             "type": "integer",
             "required": "condicional",
@@ -9207,6 +9214,12 @@ export const ENDPOINTS: Endpoint[] = [
             "atualizacoes": 1
           },
           "limpeza": true,
+          "backoffice": {
+            "conferencia": {
+              "estado": "nada"
+            },
+            "limpeza": true
+          },
           "avisos": 0
         }
       },
@@ -9236,7 +9249,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 500,
-        "description": "Alguma etapa da rodada falhou (andamento, disparo ou limpeza): o corpo traz o mesmo resumo do 200 e a lista falhas; as outras etapas rodaram.",
+        "description": "Alguma etapa da rodada falhou (andamento, disparo, limpeza ou a do backoffice, pos_rodada): o corpo traz o mesmo resumo do 200 e a lista falhas; as outras etapas rodaram.",
         "fields": [
           {
             "name": "code",
@@ -9261,7 +9274,8 @@ export const ENDPOINTS: Endpoint[] = [
             "enum": [
               "andamento",
               "disparo",
-              "limpeza"
+              "limpeza",
+              "pos_rodada"
             ]
           }
         ],
@@ -9294,7 +9308,8 @@ export const ENDPOINTS: Endpoint[] = [
       }
     ],
     "notes": [
-      "Duas formas de entrar: o x-cxhub-fila-token (chamada à mão) ou o X-Godeploy-Cron do cron do GoDeploy (agendado */20 * * * *, conforme docs/fila-cxhub.md).",
+      "Duas formas de entrar: o x-cxhub-fila-token (chamada à mão) ou o X-Godeploy-Cron do cron do GoDeploy (agendado */10 * * * *; o docs/fila-cxhub.md do CX Hub ainda diz 20 min).",
+      "É também a rodada do backoffice (fila única): as edições dele sobem neste lote, ao lado das atualizações do CX Hub e depois do caso, e a etapa `backoffice` confere na raw as gravadas. O backoffice não tem lote próprio.",
       "A assinatura do X-Godeploy-Cron é conferida com a GODEPLOY_CRON_KEY contra vários esquemas candidatos, porque a plataforma não documenta o dela; sem conferir, o cabeçalho passa só pelo formato, pela janela de 5 min e pelo limite de uma rodada a cada 30 s.",
       "O corpo é ignorado (só é lido, até 64 KB, para a conferência da assinatura do cron).",
       "Só uma rodada por vez: a vez dura até 2 min e é devolvida no fim; a rodada não começa a montar nem a disparar depois de 25 s.",
@@ -9307,6 +9322,7 @@ export const ENDPOINTS: Endpoint[] = [
       "servidor/app.ts",
       "servidor/cron.ts",
       "servidor/lote.ts",
+      "backoffice/servidor/conferencia.ts",
       "servidor/airflow.ts",
       "servidor/aviso.ts",
       "servidor/banco.ts",
@@ -9393,7 +9409,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/backoffice/solicitacoes",
     "tag": "Backoffice",
     "summary": "Uma página da lista de reenvios ou reembolsos (gold + raw), por cursor",
-    "description": "Lê pelo Metabase a `gold.fct_reenvio_reembolso_gobeaute`, com os casos do CX Hub que a raw já mudou e a gold ainda não mostra remontados da raw com as mesmas regras do dbt. A ordem é `data_solicitacao` desc, `chave_unica` desc, 50 por página. As edições guardadas no app que o Metabase ainda não mostra vêm aplicadas por cima, com `aguardando`. Histórico e CX Hub juntos.",
+    "description": "Lê pelo Metabase a `gold.fct_reenvio_reembolso_gobeaute`, com os casos do CX Hub que a raw já mudou e a gold ainda não mostra remontados da raw com as mesmas regras do dbt. Os casos que o CX Hub acabou de registrar e ainda estão na fila do app (antes da raw) entram do mesmo jeito, como se já estivessem na raw: aparecem, filtram, contam e se editam. A ordem é `data_solicitacao` desc, `chave_unica` desc, 50 por página. O que a fila do app ainda guarda e o Metabase ainda não mostra vem aplicado por cima, com `aguardando`: as edições do backoffice e as atualizações do CX Hub. Histórico e CX Hub juntos.",
     "routeHeader": "x-usuario-email",
     "params": [
       {
@@ -9504,13 +9520,13 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "itens[].aguardando",
             "type": "object | null",
             "required": true,
-            "description": "As edições guardadas que o Metabase ainda não mostra: `situacao` (pendente, enviado, gravado), `autor`, `atualizadoEm` e `campos`."
+            "description": "O que a fila do app ainda guarda e o Metabase ainda não mostra (edições do backoffice e atualizações do CX Hub): `situacao` (a mais atrasada: pendente, enviado ou gravado), `autor` (o e-mail, ou `CX Hub`) e `atualizadoEm` da mais nova, e `campos`."
           },
           {
             "name": "itens[].recusada",
             "type": "object | null",
             "required": true,
-            "description": "A última edição que a DAG recusou, sem outra mais nova por cima: `id`, `erro`, `autor`, `atualizadoEm`."
+            "description": "A última edição do backoffice que a DAG recusou, sem outra mais nova por cima: `id`, `erro`, `autor`, `atualizadoEm`."
           },
           {
             "name": "itens[].reenvio_no_cosmos",
@@ -9605,10 +9621,12 @@ export const ENDPOINTS: Endpoint[] = [
       "As colunas de cada linha: chave_unica, sistema_origem, tipo, marca, sigla, data_solicitacao, numero_pedido, cod_nf_original, chave_nf, valor_nf_tratado, sku_produto_problema, produtos_reenvio, escopo_reembolso, motivo, area, uf_origem, uf_destino, status_ocorrencia, transportadora, transportadora_reenvio, ticket_transportadora, lote, erp, parcial_completo, pedido_devolvido_operacao, responsavel_atendimento, origem_solicitacao, id_atendimento, tipo_solicitacao, excecao_politica, status_execucao, data_execucao, responsavel_execucao, cod_nfd, chave_nfd, prazo_execucao, data_pedido, carregado_em.",
       "Datas vêm como texto: `data_solicitacao` em hora de São Paulo, sem fuso; `data_execucao`, `prazo_execucao` e `data_pedido` como aaaa-mm-dd; `carregado_em` em UTC.",
       "A paginação é por cursor porque o Metabase não pagina SQL nativo, e OFFSET num filtro que muda pula ou repete linha. Para o botão Anterior, guarde a pilha de cursores.",
-      "Um caso registrado no CX Hub há menos de ~20 min pode ainda não aparecer: ele está na fila, antes da raw."
+      "O caso que o CX Hub acabou de registrar aparece na hora: enquanto está na fila do app (até o lote o levar à raw, a cada 10 min), a consulta o soma à raw. Caso que a DAG recusou sai da lista.",
+      "A atualização do CX Hub entra por cima enquanto está na fila (pendente ou no lote); a edição do backoffice, até a raw que o Metabase lê mostrá-la (ou até 6 h depois de gravada)."
     ],
     "sources": [
       "backoffice/servidor/rotas.ts",
+      "backoffice/servidor/fila.ts",
       "backoffice/servidor/gold.ts",
       "backoffice/servidor/raw.ts",
       "backoffice/shared/tipos.ts",
@@ -9620,7 +9638,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/backoffice/solicitacoes/{chave}",
     "tag": "Backoffice",
     "summary": "Um caso: a linha, as edições guardadas, o cliente e o que a edição precisa",
-    "description": "Devolve a linha (com as edições por cima), todas as edições guardadas no app para ela e, no reenvio, os dados do cliente. Se a linha se edita, traz também os motivos (da rota dados), o pedido no Data Mart (os itens que viram checkbox) e, no reenvio, o catálogo da marca para o mimo. O que não veio traz o porquê em `motivosErro`, `pedidoErro` ou `catalogoErro`, sem impedir o resto.",
+    "description": "Devolve a linha (com as edições por cima), o que a fila do app ainda guarda para ela (as edições do backoffice e as atualizações do CX Hub que o Metabase ainda não mostra) e, no reenvio, os dados do cliente. O caso que ainda está na fila do app, antes da raw, também é achado. Se a linha se edita, traz também os motivos (da rota dados), o pedido no Data Mart (os itens que viram checkbox) e, no reenvio, o catálogo da marca para o mimo. O que não veio traz o porquê em `motivosErro`, `pedidoErro` ou `catalogoErro`, sem impedir o resto.",
     "routeHeader": "x-usuario-email",
     "params": [
       {
@@ -9647,7 +9665,13 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "edicoes[]",
             "type": "array",
             "required": true,
-            "description": "As edições guardadas, na ordem em que foram feitas: `id`, `campos`, `autor`, `atualizadoEm`, `situacao` (pendente, enviado, gravado, recusado) e `erro`."
+            "description": "O que a fila do app guarda para a linha, na ordem do lote (a da DAG): `id`, `campos`, `autor` (o e-mail, ou `CX Hub`), `atualizadoEm` (UTC), `situacao` (pendente, enviado, gravado, recusado), `erro` e `doBackoffice`. Vêm as atualizações do CX Hub ainda na fila e as edições do backoffice até a raw mostrá-las; a recusada do backoffice fica 7 dias."
+          },
+          {
+            "name": "edicoes[].doBackoffice",
+            "type": "boolean",
+            "required": true,
+            "description": "true na edição feita pelo backoffice (só ela se desfaz em `DELETE /api/backoffice/edicoes/{id}`); false na atualização do CX Hub."
           },
           {
             "name": "cliente",
@@ -9708,10 +9732,29 @@ export const ENDPOINTS: Endpoint[] = [
             "excecao_politica": false,
             "editavel": true,
             "bloqueio": null,
-            "aguardando": null,
+            "aguardando": {
+              "situacao": "pendente",
+              "autor": "CX Hub",
+              "atualizadoEm": "2026-11-11T13:20:00.000Z",
+              "campos": [
+                "responsavel_execucao"
+              ]
+            },
             "recusada": null
           },
-          "edicoes": [],
+          "edicoes": [
+            {
+              "id": "6b0d2f4e-1c3a-4e5f-8a7b-9c0d1e2f3a4b",
+              "campos": {
+                "responsavel_execucao": "Ana Silva"
+              },
+              "autor": "CX Hub",
+              "atualizadoEm": "2026-11-11T13:20:00.000Z",
+              "situacao": "pendente",
+              "erro": null,
+              "doBackoffice": false
+            }
+          ],
           "cliente": null,
           "motivos": [
             "Extravio",
@@ -9779,6 +9822,7 @@ export const ENDPOINTS: Endpoint[] = [
     "sources": [
       "backoffice/servidor/rotas.ts",
       "backoffice/servidor/edicoes.ts",
+      "backoffice/servidor/fila.ts",
       "backoffice/servidor/pedido.ts",
       "backoffice/servidor/catalogo.ts",
       "backoffice/shared/itens.ts"
@@ -9789,7 +9833,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/backoffice/solicitacoes/{chave}/edicoes",
     "tag": "Backoffice",
     "summary": "Guarda uma edição (vai à DAG no próximo lote) e/ou os dados do cliente",
-    "description": "O servidor confere tudo de novo e guarda como edição pendente só o que mudou em relação ao que a linha mostra (Metabase + edições guardadas). O cron leva a edição à DAG `gobeaute_reenvio_reembolso_etl` em até 10 min; até o Metabase mostrá-la, a lista a aplica por cima (`aguardando`). Os dados do cliente, só no reenvio, ficam no app e nunca vão à DAG.",
+    "description": "O servidor confere tudo de novo e guarda só o que mudou em relação ao que a linha mostra (Metabase + o que a fila guarda). A edição entra na fila do app como uma atualização do caso, pendente, ao lado das que o CX Hub manda, e o lote da fila a leva à DAG `gobeaute_reenvio_reembolso_etl` em até 10 min. Se o caso ainda está na fila, os dois sobem juntos, a criação antes; se ele está num lote em andamento, a edição espera o resultado dele. Até o Metabase mostrá-la, a lista a aplica por cima (`aguardando`). Os dados do cliente, só no reenvio, ficam no app e nunca vão à DAG.",
     "routeHeader": "x-usuario-email",
     "params": [
       {
@@ -9974,7 +10018,8 @@ export const ENDPOINTS: Endpoint[] = [
               "autor": "ana.silva@exemplo.com",
               "atualizadoEm": "2026-11-11T13:20:00.000Z",
               "situacao": "pendente",
-              "erro": null
+              "erro": null,
+              "doBackoffice": true
             }
           ]
         }
@@ -10032,10 +10077,12 @@ export const ENDPOINTS: Endpoint[] = [
       "Mande só o que mudou: o que é igual ao que a linha já mostra é ignorado. A mesma seleção de itens que o texto registrado já representa também não muda nada.",
       "O que trava a edição: caso do histórico; não reenvio nem reembolso; mais de 30 dias; status Cancelado; no reembolso, status Realizado; no reenvio, o Cosmos já registrou. Marcar Cancelado (ou Realizado no reembolso) trava a linha na hora; a edição ainda pendente se desfaz com `DELETE /api/backoffice/edicoes/{id}`.",
       "Reembolso: os itens marcados no escopo dão o valor (preço × quantidade menos a parte no desconto do pedido, mais o frete), nunca acima do total do pedido. Com exceção à política, o valor é digitado e os itens mudam só o escopo.",
-      "Reenvio das marcas com Cosmos: quando há o pedido `-R-n` no Cosmos, o dbt tira dele o status e a data de execução, e isso prevalece sobre a edição."
+      "Reenvio das marcas com Cosmos: quando há o pedido `-R-n` no Cosmos, o dbt tira dele o status e a data de execução, e isso prevalece sobre a edição.",
+      "A edição e as atualizações do CX Hub sobem na ordem do `atualizado_em` (a da edição é a hora em que foi salva): para o mesmo campo, a mais nova vence, na DAG e na tela."
     ],
     "sources": [
       "backoffice/servidor/edicoes.ts",
+      "backoffice/servidor/fila.ts",
       "backoffice/shared/campos.ts",
       "backoffice/shared/itens.ts",
       "backoffice/servidor/acesso.ts"
@@ -10046,7 +10093,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/backoffice/edicoes/{id}",
     "tag": "Backoffice",
     "summary": "Desfaz uma edição pendente ou dispensa uma recusada",
-    "description": "Apaga do app a edição que ainda não foi a um lote (pendente) ou a que a DAG recusou. A enviada ou gravada não volta, porque já está a caminho do Metabase: para mudar, faça outra edição por cima.",
+    "description": "Tira da fila do app a edição do backoffice que ainda não foi a um lote (pendente) ou a que a DAG recusou. A enviada ou gravada não volta, porque já está a caminho do Metabase: para mudar, faça outra edição por cima. A atualização que o CX Hub mandou à fila não se desfaz por aqui.",
     "routeHeader": "x-usuario-email",
     "params": [
       {
@@ -10077,7 +10124,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 403,
-        "description": "Chamada de navegador sem a proteção de escrita.",
+        "description": "Chamada de navegador sem a proteção de escrita, ou o `id` é de uma atualização do CX Hub (`doBackoffice: false`): `Esta atualização veio do CX Hub: aqui só se desfaz edição feita pelo backoffice.`",
         "example": {
           "code": "FORBIDDEN",
           "message": "Origem da requisição não permitida."
@@ -10085,7 +10132,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 404,
-        "description": "A edição não existe mais (talvez já tenha chegado ao Metabase e saído do app).",
+        "description": "A edição não está mais na fila do app (a fila apaga o que terminou há mais de 7 dias).",
         "example": {
           "code": "NOT_FOUND",
           "message": "Edição não encontrada (talvez já tenha chegado ao Metabase)."
@@ -10100,7 +10147,9 @@ export const ENDPOINTS: Endpoint[] = [
         }
       }
     ],
-    "notes": [],
+    "notes": [
+      "Desfazer a pendente é uma instrução só no banco: ou ela sai antes do lote pegá-la, ou o lote a pegou e a resposta é 409."
+    ],
     "sources": [
       "backoffice/servidor/edicoes.ts"
     ]
@@ -10109,8 +10158,8 @@ export const ENDPOINTS: Endpoint[] = [
     "method": "GET",
     "path": "/api/backoffice/estado",
     "tag": "Backoffice",
-    "summary": "Diagnóstico das edições e dos lotes",
-    "description": "Quantas edições há em cada situação, o lote em andamento, os 5 últimos lotes terminados, o resumo da última rodada do cron e a configuração (sem valor de segredo).",
+    "summary": "Diagnóstico das edições, da fila e dos lotes",
+    "description": "As edições do backoffice em cada situação da fila do app (e a conferência das gravadas na raw), a fila inteira (casos e atualizações, as do CX Hub também), o lote em andamento, os 5 últimos lotes terminados, o resumo da última rodada do cron e a configuração do backoffice (sem valor de segredo). O lote e a rodada são os da fila (`POST /api/v1/interno/lote`): o backoffice não tem lote próprio.",
     "routeHeader": "x-usuario-email",
     "params": [],
     "requestBody": null,
@@ -10123,31 +10172,37 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "edicoes",
             "type": "object",
             "required": true,
-            "description": "Contagem por situação: `pendente`, `enviado`, `gravado`, `recusado`."
+            "description": "As edições do backoffice por situação na fila (`pendente`, `enviado`, `gravado`, `recusado`) e, em `conferencia`, as gravadas por estado da conferência na raw: `esperando`, `na_raw` e `atrasada` (não apareceu em 6 h)."
+          },
+          {
+            "name": "fila",
+            "type": "object",
+            "required": true,
+            "description": "A fila do app inteira, por situação: `casos` e `atualizacoes` (do CX Hub e do backoffice)."
           },
           {
             "name": "loteEmAndamento",
             "type": "object | null",
             "required": true,
-            "description": "O lote montando ou disparado: `id`, `situacao`, `itens`, `clears`, `disparado_em`, `criado_em`."
+            "description": "O lote da fila montando ou disparado: `id`, `situacao`, `casos`, `atualizacoes`, `clears`, `disparado_em`, `criado_em`."
           },
           {
             "name": "ultimosLotes[]",
             "type": "array",
             "required": true,
-            "description": "Os 5 últimos terminados: `id`, `desfecho`, `itens`, `gravados`, `recusados`, `erro`, `terminado_em`."
+            "description": "Os 5 últimos terminados: `id`, `desfecho`, `casos`, `atualizacoes`, `gravados`, `recusados`, `erro`, `terminado_em`."
           },
           {
             "name": "ultimaRodada",
             "type": "object | null",
             "required": true,
-            "description": "O resumo da última rodada (o mesmo corpo do `POST /api/backoffice/interno/lote`)."
+            "description": "O resumo da última rodada (o mesmo corpo do `POST /api/v1/interno/lote`, com a etapa do backoffice em `backoffice`)."
           },
           {
             "name": "configuracao",
             "type": "object",
             "required": true,
-            "description": "`metabase`, `airflow` e `slack` (configurados ou não) e `problemas` (o que falta, sem valor)."
+            "description": "`metabase` e `rotaDados` (configurados ou não) e `problemas` (o que falta, sem valor). O Airflow e o Slack são da fila: estão no `GET /api/v1/estado`."
           }
         ],
         "example": {
@@ -10155,15 +10210,35 @@ export const ENDPOINTS: Endpoint[] = [
             "pendente": 1,
             "enviado": 0,
             "gravado": 2,
-            "recusado": 0
+            "recusado": 0,
+            "conferencia": {
+              "esperando": 1,
+              "na_raw": 1,
+              "atrasada": 0
+            }
+          },
+          "fila": {
+            "casos": {
+              "pendente": 3,
+              "enviado": 0,
+              "gravado": 412,
+              "recusado": 1
+            },
+            "atualizacoes": {
+              "pendente": 2,
+              "enviado": 0,
+              "gravado": 87,
+              "recusado": 0
+            }
           },
           "loteEmAndamento": null,
           "ultimosLotes": [
             {
-              "id": "cxhub_backoffice__20261111T221000",
+              "id": "cxhub_lote__20261111T221000",
               "desfecho": "concluido",
-              "itens": 2,
-              "gravados": 2,
+              "casos": 4,
+              "atualizacoes": 2,
+              "gravados": 6,
               "recusados": 0,
               "erro": null,
               "terminado_em": "2026-11-11T22:20:01.512Z"
@@ -10172,33 +10247,34 @@ export const ENDPOINTS: Endpoint[] = [
           "ultimaRodada": {
             "em": "2026-11-11T22:20:00.401Z",
             "andamento": {
-              "lote": "cxhub_backoffice__20261111T221000",
+              "lote": "cxhub_lote__20261111T221000",
               "livre": true,
               "estado": "success",
-              "gravados": 2,
+              "gravados": 6,
               "recusados": 0
-            },
-            "conferencia": {
-              "estado": "conferido",
-              "naRaw": 0,
-              "atrasadas": 0,
-              "esperando": 2
             },
             "disparo": {
               "estado": "disparado",
-              "lote": "cxhub_backoffice__20261111T222000",
-              "edicoes": 1
+              "lote": "cxhub_lote__20261111T222000",
+              "casos": 3,
+              "atualizacoes": 3
             },
             "limpeza": false,
+            "backoffice": {
+              "conferencia": {
+                "estado": "conferido",
+                "naRaw": 1,
+                "atrasadas": 0,
+                "esperando": 1
+              },
+              "limpeza": false
+            },
             "avisos": 0
           },
           "configuracao": {
             "metabase": true,
-            "airflow": true,
-            "slack": false,
-            "problemas": [
-              "SLACK_ALERT_WEBHOOK_URL vazio: os avisos só vão para o log"
-            ]
+            "rotaDados": true,
+            "problemas": []
           }
         }
       },
@@ -10214,134 +10290,8 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [],
     "sources": [
       "backoffice/servidor/rotas.ts",
-      "backoffice/servidor/lote.ts"
-    ]
-  },
-  {
-    "method": "POST",
-    "path": "/api/backoffice/interno/lote",
-    "tag": "Backoffice",
-    "summary": "A rodada do lote das edições (o cron, a cada 10 min)",
-    "description": "Acompanha o lote em andamento (um por vez) e aplica o resultado por edição (o XCom da task `gravar`). Confere na raw as gravadas e as tira do app quando a raw as mostra (ou depois de 6 h, com aviso). Dispara o próximo lote com as pendentes (até `LOTE_MAX`, `dag_run_id` = `cxhub_backoffice__<aaaammddThhmmss>`). Uma vez por hora, limpa as recusadas e os lotes terminados há mais de 7 dias. Avisa no Slack o que a rodada achou.",
-    "routeHeader": "x-usuario-email",
-    "params": [],
-    "requestBody": null,
-    "responses": [
-      {
-        "status": 200,
-        "description": "A rodada rodou (`code: OK`), com o resumo de cada etapa. Com outra rodada em andamento, `code: OUTRA_RODADA`, sem fazer nada.",
-        "fields": [
-          {
-            "name": "code",
-            "type": "string",
-            "required": true,
-            "description": "`OK` ou `OUTRA_RODADA`.",
-            "enum": [
-              "OK",
-              "OUTRA_RODADA"
-            ]
-          },
-          {
-            "name": "andamento",
-            "type": "object",
-            "required": false,
-            "description": "O lote em andamento: `lote`, `livre` (se outro pode ser disparado) e `estado` (nenhum, queued, running, success, failed, sem_resultado…)."
-          },
-          {
-            "name": "conferencia",
-            "type": "object",
-            "required": false,
-            "description": "A conferência na raw: `estado` (nada, conferido, sem_metabase, sem_tempo, sem_resposta), `naRaw`, `atrasadas`, `esperando`."
-          },
-          {
-            "name": "disparo",
-            "type": "object | null",
-            "required": false,
-            "description": "O próximo lote: `estado` (disparado, vazio, dag_pausada, sem_airflow, sem_tempo, falha_no_disparo…), `lote` e `edicoes`."
-          },
-          {
-            "name": "limpeza",
-            "type": "boolean",
-            "required": false,
-            "description": "Se a limpeza de hora em hora rodou nesta rodada."
-          },
-          {
-            "name": "avisos",
-            "type": "number",
-            "required": false,
-            "description": "Quantas linhas foram ao aviso do Slack."
-          }
-        ],
-        "example": {
-          "code": "OK",
-          "em": "2026-11-11T22:20:00.401Z",
-          "andamento": {
-            "lote": null,
-            "livre": true,
-            "estado": "nenhum"
-          },
-          "conferencia": {
-            "estado": "nada"
-          },
-          "disparo": {
-            "estado": "disparado",
-            "lote": "cxhub_backoffice__20261111T222000",
-            "edicoes": 1
-          },
-          "limpeza": false,
-          "avisos": 0
-        }
-      },
-      {
-        "status": 401,
-        "description": "Sem cron nem quem chama, ou o `X-Godeploy-Cron` fora do formato ou da janela de 5 min.",
-        "example": {
-          "code": "UNAUTHORIZED",
-          "message": "Assinatura do cron não conferiu."
-        }
-      },
-      {
-        "status": 403,
-        "description": "Chamada de navegador sem a proteção de escrita.",
-        "example": {
-          "code": "FORBIDDEN",
-          "message": "Cabeçalho x-backoffice ausente."
-        }
-      },
-      {
-        "status": 405,
-        "description": "Método que não é POST.",
-        "example": {
-          "code": "METHOD_NOT_ALLOWED",
-          "message": "Use POST nesta rota."
-        }
-      },
-      {
-        "status": 429,
-        "description": "Cron sem assinatura conferida a menos de 30 s do anterior nesta rota.",
-        "example": {
-          "code": "TOO_MANY_REQUESTS",
-          "message": "Rodada recente: sem a assinatura conferida, o cron roda no máximo uma vez a cada 30 s."
-        }
-      },
-      {
-        "status": 500,
-        "description": "Uma etapa falhou (fica no log); o resumo das outras vem junto e a próxima rodada tenta de novo.",
-        "example": {
-          "code": "INTERNAL_ERROR",
-          "message": "A rodada falhou em: disparo.",
-          "em": "2026-11-11T22:20:00.401Z"
-        }
-      }
-    ],
-    "notes": [
-      "Quem chama: o cron do GoDeploy, com o `X-Godeploy-Cron`, ou alguém identificado, à mão.",
-      "O lote vai à mesma DAG da fila, só com atualizações. Run que falhou sem XCom é recolocado uma vez; falhou de novo, as edições voltam à fila, e na segunda vez de uma edição ela é recusada."
-    ],
-    "sources": [
-      "backoffice/servidor/app.ts",
-      "backoffice/servidor/lote.ts",
-      "backoffice/servidor/cron.ts"
+      "backoffice/servidor/conferencia.ts",
+      "servidor/lote.ts"
     ]
   },
   {

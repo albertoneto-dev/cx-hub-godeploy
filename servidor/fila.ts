@@ -2,11 +2,11 @@
 // escritas são idempotentes (INSERT ... ON CONFLICT DO NOTHING, uma instrução para a chamada inteira): repetir o
 // mesmo id não duplica nem sobrescreve, e a falha do banco no meio não deixa metade gravada.
 
-import type { Linha } from "./banco";
+import type { Banco, Linha } from "./banco";
 import type { Contexto } from "./contexto";
 import { erro, json, lerObjeto } from "./http";
 import { isoUtc } from "./tempo";
-import { ID_SOLICITACAO, MARCAS, TIPOS, validarAtualizacoes, validarCasos } from "./validacao";
+import { type AtualizacaoNova, ID_SOLICITACAO, MARCAS, TIPOS, validarAtualizacoes, validarCasos } from "./validacao";
 
 const LIMITE_CORPO = 256 * 1024;
 const MAX_CASOS_NA_LISTA = 20;
@@ -43,20 +43,29 @@ export async function postAtualizacoes(c: Contexto): Promise<Response> {
   if (corpo instanceof Response) return corpo;
   const v = validarAtualizacoes(corpo);
   if (!v.ok) return erro(400, "INVALID_REQUEST", v.message);
-  const agora = isoUtc(c.agora);
-  const linhas = v.itens.map(x => ({
+  await enfileirarAtualizacoes(c.db, v.itens, c.agora);
+  return json({ code: "ENFILEIRADO", ids: [...new Set(v.itens.map(x => x.id))] });
+}
+
+/**
+ * Guarda atualizações já validadas como pendentes, numa instrução só e sem sobrescrever (repetir o id não duplica).
+ * Usada pelo POST /api/v1/atualizacoes e pelas edições do backoffice (backoffice/servidor/edicoes.ts), que entram na
+ * mesma fila: o lote manda a criação do caso antes, e a atualização de um caso ainda na fila espera ele subir.
+ */
+export async function enfileirarAtualizacoes(db: Banco, itens: AtualizacaoNova[], agora: number): Promise<void> {
+  const quando = isoUtc(agora);
+  const linhas = itens.map(x => ({
     id: x.id, id_solicitacao: x.idSolicitacao, atualizado_em: x.atualizadoEm, atualizado_em_utc: x.atualizadoEmUtc, campos: x.campos,
   }));
-  await c.db.exec(
+  await db.exec(
     `INSERT INTO atualizacoes (id_atualizacao, id_solicitacao, atualizado_em, atualizado_em_utc, campos, situacao,
        enfileirado_em, mudou_em)
      SELECT json_extract(value, '$.id'), json_extract(value, '$.id_solicitacao'), json_extract(value, '$.atualizado_em'),
        json_extract(value, '$.atualizado_em_utc'), json_extract(value, '$.campos'), 'pendente', ?, ?
      FROM json_each(?) WHERE true
      ON CONFLICT(id_atualizacao) DO NOTHING`,
-    [agora, agora, JSON.stringify(linhas)],
+    [quando, quando, JSON.stringify(linhas)],
   );
-  return json({ code: "ENFILEIRADO", ids: [...new Set(v.itens.map(x => x.id))] });
 }
 
 const casoDaLinha = (l: Linha) => ({

@@ -81,6 +81,11 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `app/api/shopify/orders/route.ts` usa no lugar do `ehMarcaSemCosmos`, e a Rituária saiu do `SHOPIFY_STORES`. O
   `buscarPedidoNoGateway.ts` e o `nomeDoPedido.ts` aceitam a `MarcaNoGateway`; na Rituária, a busca é só pelos dígitos.
   Ela continua marca do Cosmos em todo o resto, inclusive no `adaptShopifyOrder` e no bot.
+- O lote da fila roda a cada 10 min (2026-11-11), e não a cada 20 como diz o `docs/fila-cxhub.md` de lá. As mensagens
+  do CX Hub que prometem "até 20 min" (`NO_PROXIMO_LOTE` e as de sucesso do registro) ficaram como estão: são resposta
+  de sucesso, que o contrato manda manter igual à da Vercel, e continuam verdadeiras. Nenhum arquivo daqui mudou por isso.
+- A fila também recebe as edições do backoffice (`backoffice/ORIGEM.md`, fila única). Quem lê as atualizações de um caso
+  pela fila (`GET /api/v1/atualizacoes`, o `shared/lib/fila/estado.ts`) passa a ver as do backoffice junto das do CX Hub.
 
 ## Testes
 

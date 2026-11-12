@@ -1,25 +1,24 @@
 // Roteamento do backoffice. Quem chama precisa de um autor (x-usuario-email de quem chama de servidor, ou o e-mail que
-// o gateway do GoDeploy põe no login: servidor/acesso.ts) em toda rota, menos a do lote, que aceita o X-Godeploy-Cron do
-// cron da plataforma (ou alguém identificado, à mão). O worker.ts passa as dependências reais; os testes passam falsos.
+// o gateway do GoDeploy põe no login: servidor/acesso.ts) em toda rota. O worker.ts passa as dependências reais; os
+// testes passam falsos.
 //
-// Adaptação do app cx-hub (backoffice/ORIGEM.md): as rotas moram em /api/backoffice (o /api/solicitacoes já é uma rota
-// do CX Hub neste app) e não há tela: só o backend. Por dentro, o caminho continua o do app de origem (/api/...).
+// Adaptações do app cx-hub (backoffice/ORIGEM.md): as rotas moram em /api/backoffice (o /api/solicitacoes já é uma rota
+// do CX Hub neste app) e não há tela: só o backend. Por dentro, o caminho continua o do app de origem (/api/...). Não há
+// lote próprio (fila única): a edição sobe no lote da fila do app, e a conferência dela roda na rodada do cron da fila
+// (conferencia.ts).
 //
 //   GET    /api/backoffice/eu                           quem chama, a janela de edição e o tamanho da página
 //   GET    /api/backoffice/solicitacoes?tipo=&marca=&status=&busca=&cursor=&contar=1    uma página da gold (por cursor)
 //   GET    /api/backoffice/solicitacoes/:chave          a linha, as edições guardadas e os dados do cliente
 //   POST   /api/backoffice/solicitacoes/:chave/edicoes  salva uma edição (vai à DAG no próximo lote) e/ou o cliente
 //   DELETE /api/backoffice/edicoes/:id                  desfaz uma edição pendente ou dispensa uma recusada
-//   GET    /api/backoffice/estado                       diagnóstico da fila de edições e dos lotes
-//   POST   /api/backoffice/interno/lote                 a rodada do cron (servidor/lote.ts)
+//   GET    /api/backoffice/estado                       diagnóstico das edições, da fila e dos lotes
 
-import { conferirAcesso, problemaNaEscrita, usuarioDaChamada } from "./acesso";
+import { conferirAcesso, usuarioDaChamada } from "./acesso";
 import { garantirEsquema } from "./banco";
 import type { Contexto, Dependencias } from "./contexto";
-import { autorizarCron } from "./cron";
 import { descartarEdicao, registrarEdicao } from "./edicoes";
 import { decodificar, erro } from "./http";
-import { rodada } from "./lote";
 import { MetabaseErro } from "./metabase";
 import { estado, eu, listar, verCaso } from "./rotas";
 
@@ -51,7 +50,6 @@ export async function tratar(req: Request, deps: Dependencias): Promise<Response
 async function rotear(c: Contexto, caminho: string): Promise<Response> {
   const metodo = c.req.method;
   try {
-    if (caminho === "/api/interno/lote") return await rotaDoLote(c);
     const negado = conferirAcesso(c);
     if (negado) return negado;
     await garantirEsquema(c.db);
@@ -78,22 +76,4 @@ async function rotear(c: Contexto, caminho: string): Promise<Response> {
     console.error(`falha em ${metodo} ${caminho}:`, (err as Error)?.stack || err);
     return erro(503, "UNAVAILABLE", "O app não conseguiu ler ou gravar agora. Repetir é seguro.");
   }
-}
-
-// O cron do GoDeploy (X-Godeploy-Cron), ou alguém logado, à mão (com a proteção de escrita do navegador).
-async function rotaDoLote(c: Contexto): Promise<Response> {
-  if (c.req.method !== "POST") return metodoErrado("POST");
-  if (c.req.headers.get("x-godeploy-cron")) {
-    const cron = await autorizarCron(c);
-    if (cron === "negado") return erro(401, "UNAUTHORIZED", "Assinatura do cron não conferiu.");
-    if (cron === "cedo")
-      return erro(429, "TOO_MANY_REQUESTS", "Rodada recente: sem a assinatura conferida, o cron roda no máximo uma vez a cada 30 s.", { "retry-after": "30" });
-  } else {
-    const negado = conferirAcesso(c);
-    if (negado) return negado;
-    const problema = problemaNaEscrita(c);
-    if (problema) return erro(403, "FORBIDDEN", problema);
-  }
-  await garantirEsquema(c.db);
-  return rodada(c);
 }

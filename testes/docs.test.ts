@@ -22,7 +22,7 @@ const ROTAS_DA_FILA = [
 const ROTAS_NOVAS = [
   "GET /api/backoffice/eu", "GET /api/backoffice/solicitacoes", "GET /api/backoffice/solicitacoes/{chave}",
   "POST /api/backoffice/solicitacoes/{chave}/edicoes", "DELETE /api/backoffice/edicoes/{id}", "GET /api/backoffice/estado",
-  "POST /api/backoffice/interno/lote", "POST /api/interno/rota-dados",
+  "POST /api/interno/rota-dados",
 ];
 const ehDoHub = (d: string) => !/ \/api\/(v1|backoffice|interno)\//.test(d);
 

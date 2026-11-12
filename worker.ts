@@ -2,7 +2,8 @@
 //   - /api/v1/*: a fila que acumula as solicitações do CX Hub e dispara a DAG do Airflow em lote (servidor/;
 //     docs/fila-cxhub.md no repositório do CX Hub), com o cron do GoDeploy.
 //   - /api/backoffice/*: o backoffice de reenvio e reembolso (backoffice/, portado do app backoffice-hub): a lista da
-//     gold + raw por cursor, as edições com as regras de lá e o lote delas para a mesma DAG.
+//     gold + raw (+ os casos ainda na fila) por cursor e as edições com as regras de lá. A edição é uma atualização da
+//     fila acima e sobe no lote dela; a rodada do cron da fila confere as edições gravadas (posRodada).
 //   - /api/interno/rota-dados: a rodada do cron que renova a cache da rota dados no env.DB (api/cacheDaRotaDados.ts).
 //   - o resto: as 23 rotas que o CX Hub tem na Vercel (cxhub/, portadas; api/ é a cola com o Worker). Elas entregam
 //     casos e atualizações à fila sem rede (api/filaNoWorker.ts) e leem a rota dados pela cache.
@@ -17,7 +18,9 @@ import { transporteDaFilaNoWorker } from "./api/filaNoWorker";
 import { type ContextoDoWorker, tratarNaApi } from "./api/roteador";
 import { ehCaminhoDoBackoffice, tratar as tratarNoBackoffice } from "./backoffice/servidor/app";
 import { banco as bancoDoBackoffice } from "./backoffice/servidor/banco";
+import { rodadaDoBackoffice } from "./backoffice/servidor/conferencia";
 import { lerConfig as lerConfigDoBackoffice, type Segredos as SegredosDoBackoffice } from "./backoffice/servidor/config";
+import type { Dependencias as DependenciasDoBackoffice } from "./backoffice/servidor/contexto";
 import { usarFonteDaRotaDados } from "./backoffice/servidor/rotaDados";
 import { usarTransporteDaFila } from "./cxhub/shared/lib/fila/client";
 import { buscarDadosDoFormulario, buscarDadosDoFormularioAoVivo, usarLeitorDaRotaDados } from "./cxhub/shared/lib/formDataApi";
@@ -44,10 +47,20 @@ const avisar = (problemas: string[], parte: string) => {
 // O fetch global chamado solto: no Workers, guardá-lo como método de outro objeto dá "Illegal invocation".
 const busca: Busca = (entrada, init) => fetch(entrada, init);
 
+function dependenciasDoBackoffice(env: Env): DependenciasDoBackoffice {
+  const cfg = lerConfigDoBackoffice(env);
+  avisar(cfg.problemas, " do backoffice");
+  return { db: bancoDoBackoffice(env.DB), cfg, relogio: relogioDoSistema, fetch: busca };
+}
+
 function dependenciasDaFila(env: Env): Dependencias {
   const cfg = lerConfig(env);
   avisar(cfg.problemas, "");
-  return { db: banco(env.DB), cfg, relogio: relogioDoSistema, fetch: busca };
+  return {
+    db: banco(env.DB), cfg, relogio: relogioDoSistema, fetch: busca,
+    // Fila única: as edições do backoffice sobem no lote da fila, e a rodada do cron confere as gravadas.
+    posRodada: (_c, prazo) => rodadaDoBackoffice(dependenciasDoBackoffice(env), prazo),
+  };
 }
 
 // As da última requisição: o env é o mesmo para todas as do isolate (um segredo trocado chega na próxima).
@@ -72,11 +85,7 @@ const worker = {
     const deps = dependenciasDaFila(env);
     depsAtuais = deps;
     if (caminho.startsWith("/api/v1/")) return tratar(request, deps);
-    if (ehCaminhoDoBackoffice(caminho.replace(/\/+$/, ""))) {
-      const cfg = lerConfigDoBackoffice(env);
-      avisar(cfg.problemas, " do backoffice");
-      return tratarNoBackoffice(request, { db: bancoDoBackoffice(env.DB), cfg, relogio: relogioDoSistema, fetch: busca });
-    }
+    if (ehCaminhoDoBackoffice(caminho.replace(/\/+$/, ""))) return tratarNoBackoffice(request, dependenciasDoBackoffice(env));
     if (caminho.replace(/\/+$/, "") === CAMINHO_DA_CACHE) {
       return rotaDaCacheDaRotaDados(request, deps, origem => buscarDadosDoFormularioAoVivo(origem, TEMPO_DA_ROTA_DADOS_NO_CRON_MS));
     }

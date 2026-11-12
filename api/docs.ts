@@ -94,7 +94,7 @@ const DESCRICAO_DO_HEADER: Record<string, string> = {
 };
 
 // As rotas de rodada, que o cron do GoDeploy chama com o X-Godeploy-Cron no lugar do header da rota.
-const ROTAS_DE_CRON = new Set(["/api/v1/interno/lote", "/api/backoffice/interno/lote", "/api/interno/rota-dados"]);
+const ROTAS_DE_CRON = new Set(["/api/v1/interno/lote", "/api/interno/rota-dados"]);
 
 function marcaObrigatorio(r: CampoDoCorpo["required"]): string {
   if (r === true) return `<span class="obrig">obrigatório</span>`;
@@ -419,19 +419,22 @@ const GUIA_HTML = `
   <ol class="passos">
     <li><strong>Liste</strong>
       <span><code>GET /api/backoffice/solicitacoes?tipo=REEMBOLSO&amp;contar=1</code> traz a primeira página (50 linhas) e o
-      total. O <code>proximo</code> leva à página seguinte: guarde a pilha de cursores para voltar.</span></li>
+      total. O <code>proximo</code> leva à página seguinte: guarde a pilha de cursores para voltar. O caso que o CX Hub
+      acabou de registrar já aparece, mesmo antes de o lote levá-lo à raw.</span></li>
     <li><strong>Abra o caso</strong>
-      <span><code>GET /api/backoffice/solicitacoes/{chave}</code> traz a linha, as edições guardadas, o cliente e, se a linha se
-      edita, os motivos, o pedido (os itens que viram checkbox) e o catálogo do mimo.</span></li>
+      <span><code>GET /api/backoffice/solicitacoes/{chave}</code> traz a linha, o que a fila ainda guarda para ela (as edições
+      e as atualizações do CX Hub), o cliente e, se a linha se edita, os motivos, o pedido (os itens que viram checkbox) e o
+      catálogo do mimo.</span></li>
     <li><strong>Edite</strong>
       <span><code>POST /api/backoffice/solicitacoes/{chave}/edicoes</code>, só com o que mudou: os campos digitados, os itens
       marcados do pedido e, no reenvio, os dados do cliente.</span></li>
     <li><strong>Espere o lote</strong>
-      <span>O cron leva a edição à DAG em até 10 min. Até o Metabase mostrá-la, a lista a aplica por cima, com
+      <span>A edição entra na fila do app como uma atualização do caso, ao lado das do CX Hub, e o cron da fila a leva à DAG
+      em até 10 min (depois do caso, se ele ainda estiver na fila). Até o Metabase mostrá-la, a lista a aplica por cima, com
       <code>aguardando</code>.</span></li>
     <li><strong>Desfaça, se precisar</strong>
       <span><code>DELETE /api/backoffice/edicoes/{id}</code> enquanto a edição estiver pendente, ou para dispensar uma
-      recusada.</span></li>
+      recusada. Só a edição do backoffice (<code>doBackoffice</code>); a atualização do CX Hub não se desfaz aqui.</span></li>
   </ol>
 
   <h3>Quem chama</h3>
@@ -482,14 +485,15 @@ const GUIA_HTML = `
   <div class="tabela-rolavel"><table class="marca">
     <thead><tr><th>Rota</th><th>Agenda</th><th>O que faz</th></tr></thead>
     <tbody>
-      <tr><td><code>POST /api/v1/interno/lote</code></td><td>A cada 20 min</td><td>Manda os casos e as atualizações da fila à DAG</td></tr>
-      <tr><td><code>POST /api/backoffice/interno/lote</code></td><td>A cada 10 min</td><td>Manda as edições do backoffice à DAG</td></tr>
+      <tr><td><code>POST /api/v1/interno/lote</code></td><td>A cada 10 min</td><td>Manda à DAG os casos e as atualizações da
+        fila (as do CX Hub e as edições do backoffice) e confere na raw as edições gravadas</td></tr>
       <tr><td><code>POST /api/interno/rota-dados</code></td><td>A cada 5 min</td><td>Renova a cache das listas da rota dados</td></tr>
     </tbody>
   </table></div>
   <p class="aviso">A cache da rota dados vale por 15 min: nesse tempo, o formulário, o bot e o backoffice nem chamam a rota
   dados. Mais velha, a leitura busca ao vivo e guarda; com a rota dados fora, serve a última resposta boa por até 24 h. Cada
-  rota de cron aceita no máximo uma chamada sem assinatura a cada 30 s, com uma trava por rota.</p>
+  rota de cron aceita no máximo uma chamada sem assinatura a cada 30 s, com uma trava por rota. O backoffice não tem cron
+  próprio: as edições dele sobem no lote da fila.</p>
 </section>
 
 <section class="bloco" id="problemas">

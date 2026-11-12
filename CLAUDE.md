@@ -6,7 +6,7 @@ Este repositório é o código do app GoDeploy `cx-hub` (id `66edd698`, https://
 | Caminho | O que é | Código |
 |---|---|---|
 | `/api/v1/*` | A fila de registro. Guarda casos e atualizações do CX Hub no `env.DB` e manda tudo em lote ao Airflow. | `servidor/` (código deste app) |
-| `/api/backoffice/*` | O backoffice de reenvio e reembolso: a lista da gold + raw, as edições e o lote delas para a mesma DAG | `backoffice/` (cópia do app `backoffice-hub`) |
+| `/api/backoffice/*` | O backoffice de reenvio e reembolso: a lista da gold + raw (+ os casos ainda na fila) e as edições, que sobem no lote da fila | `backoffice/` (cópia do app `backoffice-hub`) |
 | `/api/interno/rota-dados` | A rodada do cron que renova a cache da rota dados no `env.DB` | `api/cacheDaRotaDados.ts` |
 | `/api/*` (o resto) | As 23 rotas que o CX Hub tinha na Vercel, nos mesmos caminhos, métodos e corpos | `cxhub/` (cópia do CX Hub) + `api/` (cola com o Worker) |
 | `/docs` | A página da API para quem integra | `api/docs.ts` + `api/docsRotas.ts` |
@@ -23,8 +23,9 @@ O CX Hub (o site, a tela) continua no repositório `rpaiagogroup/cx-hub`. Lá es
 - `cxhub/`: a cópia do backend do CX Hub. A origem está em `cxhub/ORIGEM.md` (o commit, o que foi adaptado à mão e por
   quê, e o roteiro para atualizar).
 - `backoffice/`: a cópia do backend do app `backoffice-hub` (`servidor/`, `shared/`, `testes/`). A origem, as
-  adaptações e o que ainda falta estão em `backoffice/ORIGEM.md`. A infraestrutura dele (banco, Airflow, cron, Slack)
-  é a mesma da fila, em cópia própria, com as tabelas `bo_*`.
+  adaptações e o que ainda falta estão em `backoffice/ORIGEM.md`. Usa o mesmo `env.DB` da fila, com as tabelas `bo_*`
+  dele; o Airflow, o cron e o Slack são os da fila (fila única). `backoffice/servidor/fila.ts` é o que fala com a fila, e
+  `conferencia.ts` é a etapa dele na rodada do cron da fila.
 - `api/cacheDaRotaDados.ts`: a cache das listas da rota dados no `env.DB` e a rota do cron que a renova.
 - `api/`: a cola com o Worker. `roteador.ts` (as 23 rotas), `next-server.ts` (o pouco do Next que as rotas usam),
   `ambiente.ts` (o `process.env` montado dos segredos), `filaNoWorker.ts` (as rotas falam com a fila sem rede) e a
@@ -46,14 +47,18 @@ O CX Hub (o site, a tela) continua no repositório `rpaiagogroup/cx-hub`. Lá es
   segue `^[A-Za-z0-9-]{1,64}$`. Na atualização, o `id_atualizacao` é um UUID e o `atualizado_em` precisa ter fuso.
 - **Escrita idempotente:** um `INSERT … ON CONFLICT DO NOTHING` por chamada. Repetir o mesmo id não duplica nem
   sobrescreve, e uma falha no meio não deixa metade gravada. Por isso o 503 da fila diz "repetir é seguro".
-- **Lote:** o cron do GoDeploy chama `POST /api/v1/interno/lote` a cada 20 min. Cada rodada:
+- **Lote:** o cron do GoDeploy chama `POST /api/v1/interno/lote` a cada 10 min (era 20 até a v9). Cada rodada:
   1. trata **um** lote por vez, de até `LOTE_MAX` itens (padrão 200), com os casos pendentes antes das atualizações;
   2. dispara a DAG `gobeaute_reenvio_reembolso_etl` com `dag_run_id = cxhub_lote__<aaaammddThhmmss>`;
   3. lê o resultado de cada item no XCom da task `gravar`;
   4. se o run falhou sem XCom, recoloca-o uma vez;
   5. não dispara lote vazio nem com a DAG pausada;
   6. uma vez por hora, apaga o que foi gravado ou recusado há mais de 7 dias;
-  7. manda um único aviso no Slack com o que a rodada encontrou.
+  7. roda a etapa do backoffice (`posRodada`): a conferência das edições gravadas na raw;
+  8. manda um único aviso no Slack com o que a rodada encontrou.
+- **Fila única (decisão de 2026-11-11):** as edições do backoffice são atualizações desta fila, na mesma tabela das do
+  CX Hub. O caso recém-chegado já se edita, e o lote leva a criação antes da alteração (a atualização de um caso que
+  está num lote em andamento espera o resultado dele; a de um caso recusado é recusada).
 - **Por que os passos são gravados um a um:** o lote passa por montando → disparado → terminado, cada passo gravado. Se
   uma rodada cair no meio, a seguinte retoma com o mesmo `dag_run_id` (o 409 do Airflow vale como "disparado").
 - **Quem pode chamar o lote:** o cron do GoDeploy assina com `X-Godeploy-Cron`, mas a plataforma não documenta o
@@ -97,6 +102,11 @@ infraestrutura e de acesso, não de negócio).
   mude lá.
 - **A paginação é por cursor** (`data_solicitacao desc, chave_unica desc`), porque o Metabase não pagina SQL nativo, e
   OFFSET num filtro que muda pula ou repete linha.
+- **O caso que ainda está na fila** (pendente, enviado, ou gravado há menos de 1 h e fora da réplica) entra na consulta
+  como uma "raw virtual" (`backoffice/servidor/gold.ts`), montado pelo mesmo SQL do dbt: aparece, filtra, conta e se
+  edita antes de o lote levá-lo à raw.
+- **Por cima da linha** vem o que a fila ainda guarda: as atualizações do CX Hub pendentes ou no lote (autor `CX Hub`) e
+  as edições do backoffice até a raw mostrá-las.
 
 **O que se edita** (`editabilidade`, em `backoffice/servidor/edicoes.ts`). Uma linha só se edita quando **todas** as
 regras abaixo valem; senão, `422 NOT_EDITABLE`:
@@ -117,11 +127,14 @@ As regras 4 e 5 olham o caso **com as edições guardadas por cima**: marcar Can
 - **Mimo:** só do catálogo da marca, de 1 a 10 unidades.
 - **Dados do cliente** do reenvio: ficam **só** no `env.DB` (`bo_clientes`), porque o Metabase não guarda dado pessoal.
 
-**O lote** (`backoffice/servidor/lote.ts`) é o mesmo desenho da fila, com estas diferenças:
-- a edição gravada sai do `env.DB` quando a raw já a mostra; se não aparecer em 6 h, sai com aviso;
-- na segunda falha sem resultado, a edição é recusada;
-- a recusada fica 7 dias, para quem editou ver o motivo;
-- o `dag_run_id` é `cxhub_backoffice__…`.
+**A edição na fila** (`backoffice/servidor/edicoes.ts`, `fila.ts` e `conferencia.ts`):
+- salvar grava quem editou em `bo_autoria` e enfileira a atualização na fila; o lote dela a leva à DAG, com as do CX Hub,
+  na ordem do `atualizado_em` (a mais nova vence);
+- a gravada deixa de ser aplicada por cima quando a conferência (na rodada da fila) a vê na raw; se não aparecer em
+  6 h, sai da tela com aviso;
+- na segunda falha sem resultado, a edição é recusada (regra da fila); a recusada fica 7 dias, para quem editou ver
+  o motivo;
+- desfazer só vale para a edição do backoffice, pendente ou recusada: a atualização do CX Hub responde 403.
 
 **Quem chama:** o autor é o `x-usuario-email` (a pessoa na tela de quem chama). Sem ele, vale o e-mail do gateway.
 
@@ -141,9 +154,11 @@ a outro app do GoDeploy paga o gateway de novo, cerca de 0,8 s medidos em 2026-1
 
 | Rota | Agenda |
 |---|---|
-| `POST /api/v1/interno/lote` (a fila) | `*/20 * * * *` |
+| `POST /api/v1/interno/lote` (a fila e as edições do backoffice) | `*/10 * * * *` |
 | `POST /api/interno/rota-dados` (a cache) | `*/5 * * * *` |
-| `POST /api/backoffice/interno/lote` (o backoffice) | `*/10 * * * *` |
+
+O backoffice não tem cron próprio (fila única). A cada 10 min, o Airflow recebe no máximo 6 runs por hora, e só quando há
+o que mandar: o lote vazio não dispara, e nunca há dois ao mesmo tempo.
 
 O GoDeploy não confere a assinatura do cron, então vale a trava de 30 s. Ela é **uma por rota**, porque os horários
 coincidem. Criar ou mudar cron é mudar o GoDeploy: só quando o usuário pedir.

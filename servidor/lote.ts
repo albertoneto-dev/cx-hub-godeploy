@@ -1,12 +1,14 @@
 // A rodada do lote (docs/fila-cxhub.md, "O lote"): POST /api/v1/interno/lote, chamado pelo cron do GoDeploy a cada
-// 20 min ou à mão. Cada rodada:
+// 10 min ou à mão. Cada rodada:
 // 1. acompanha o lote em andamento (um por vez): ainda rodando ⇒ termina ali; terminado ⇒ aplica o resultado por
 //    item (o XCom da task gravar), ou recoloca o run uma vez (clear) quando ele falhou sem XCom;
 // 2. monta o próximo: os casos pendentes primeiro, depois as atualizações cujo caso não está pendente fora do lote.
 //    Lote vazio nunca é disparado (a DAG falha sem XCom com o conf vazio), nem com a DAG pausada;
 // 3. dispara um run com tudo (dag_run_id = cxhub_lote__<aaaammddThhmmss>);
 // 4. uma vez por hora, apaga gravado e recusado com mais de 7 dias;
-// 5. manda um aviso no Slack com o que a rodada achou.
+// 5. roda a etapa extra, quando há (no app, a do backoffice: backoffice/servidor/conferencia.ts);
+// 6. manda um aviso no Slack com o que a rodada achou.
+// As edições do backoffice são atualizações desta fila, ao lado das do CX Hub: sobem no mesmo lote, depois do caso.
 // Sem transação, o lote fica gravado a cada passo (montando → disparado → terminado) e os itens levam o lote_id e a
 // posicao: uma rodada que cair no meio é retomada pela seguinte, com o mesmo dag_run_id (o 409 vale como disparado).
 
@@ -65,15 +67,27 @@ export async function rodada(c: Contexto): Promise<Response> {
   let andamento: Andamento = { lote: null, livre: false, estado: "erro" };
   let disparo: Disparo | null = null;
   let limpeza = false;
+  let extra: { nome: string; resumo: unknown } | null = null;
   try {
     andamento = await etapa("andamento", () => acompanhar(r), andamento);
     if (andamento.livre) disparo = await etapa("disparo", () => montar(r), { estado: "erro" });
     limpeza = await etapa("limpeza", () => limpar(c), false);
+    // A etapa extra (no app, a do backoffice): falha dela fica em "falhas", como a das outras.
+    if (c.posRodada) {
+      const pos = await etapa("pos_rodada", () => c.posRodada!(c, r.prazo), null);
+      if (pos) {
+        r.avisos.push(...pos.avisos);
+        extra = { nome: pos.nome, resumo: pos.resumo };
+      }
+    }
   } finally {
     await soltarVez(c.db, "rodada", inicio).catch(err => console.error("lote: a vez da rodada não foi devolvida:", (err as Error)?.message || err));
   }
   await avisar(c, r.avisos);
-  const resumo = { em: isoUtc(inicio), andamento, disparo, limpeza, avisos: r.avisos.length, ...(falhas.length ? { falhas } : {}) };
+  const resumo = {
+    em: isoUtc(inicio), andamento, disparo, limpeza, ...(extra ? { [extra.nome]: extra.resumo } : {}), avisos: r.avisos.length,
+    ...(falhas.length ? { falhas } : {}),
+  };
   console.log(`lote: ${JSON.stringify(resumo)}`);
   await c.db.exec(
     "INSERT INTO controle (chave, valor) VALUES ('ultima_rodada', ?) ON CONFLICT(chave) DO UPDATE SET valor = excluded.valor",

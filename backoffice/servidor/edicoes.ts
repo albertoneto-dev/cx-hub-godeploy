@@ -1,7 +1,12 @@
-// As edições do drawer. Salvar NÃO escreve no Metabase: a edição entra na tabela `edicoes` do env.DB (pendente), e o
-// cron a leva à DAG no próximo lote (servidor/lote.ts). Até a raw que o Metabase lê mostrá-la, a lista e o drawer
-// aplicam a edição por cima da linha (gold + raw, servidor/gold.ts), com a tag "Aguardando Metabase". Os dados do
-// cliente vão para a tabela `clientes` e ficam lá: o Metabase não guarda dado pessoal.
+// As edições do drawer. Salvar NÃO escreve no Metabase: a edição entra na fila do app como uma atualização do caso
+// (pendente, na tabela `atualizacoes`, a mesma das atualizações do CX Hub; quem a fez fica em `bo_autoria`), e o cron
+// da fila a leva à DAG no próximo lote (servidor/lote.ts da raiz), depois do caso, se ele ainda estiver na fila. Até a
+// raw que o Metabase lê mostrá-la, a lista e o drawer aplicam por cima da linha (gold + raw, servidor/gold.ts) a edição
+// e as atualizações do CX Hub ainda na fila, com a tag "Aguardando Metabase". Os dados do cliente vão para a tabela
+// `bo_clientes` e ficam lá: o Metabase não guarda dado pessoal.
+//
+// Adaptação do app cx-hub (fila única, backoffice/ORIGEM.md): no app de origem, a edição ia para uma fila e um lote
+// próprios do backoffice.
 //
 // Só se edita caso do CX Hub (chave cxhub|<id_solicitacao>) com a solicitação feita há até 30 dias. A linha do
 // histórico (planilhas e Supabase) não tem evento de criação na raw, e a DAG recusaria a atualização ("caso
@@ -21,6 +26,7 @@ import type { Banco, Linha } from "./banco";
 import type { ConfigMetabase } from "./config";
 import type { Contexto } from "./contexto";
 import { catalogoDaMarca, CatalogoErro } from "./catalogo";
+import { casosDaFila, enfileirarEdicao, idDoCaso } from "./fila";
 import { casoDaLinha, sqlDoCaso } from "./gold";
 import { erro, json, lerObjeto } from "./http";
 import { comoMetabaseErro, consultar } from "./metabase";
@@ -39,34 +45,50 @@ export type EdicaoGuardada = {
   atualizadoEm: string;
   situacao: SituacaoEdicao;
   erro: string | null;
+  doBackoffice: boolean;
 };
+
+// O autor da atualização que o CX Hub mandou à fila (não tem linha em bo_autoria).
+export const AUTOR_CXHUB = "CX Hub";
 
 function daLinha(l: Linha): EdicaoGuardada {
   let campos: Record<string, string | number> = {};
   try {
     campos = JSON.parse(String(l.campos)) as Record<string, string | number>;
   } catch {
-    // campos ilegíveis não deveriam existir (o app grava JSON.stringify); a edição fica sem efeito na tela
+    // campos ilegíveis não deveriam existir (a fila só aceita objeto); a atualização fica sem efeito na tela
   }
+  const doBackoffice = l.autor !== null && l.autor !== undefined;
   return {
     id: String(l.id_atualizacao),
-    chave: String(l.chave_unica),
+    chave: `${PREFIXO_CXHUB}${String(l.id)}`,
     campos,
-    autor: String(l.autor),
-    atualizadoEm: String(l.atualizado_em),
+    autor: doBackoffice ? String(l.autor) : AUTOR_CXHUB,
+    atualizadoEm: String(l.atualizado_em_utc),
     situacao: String(l.situacao) as SituacaoEdicao,
     erro: l.erro === null || l.erro === undefined ? null : String(l.erro),
+    doBackoffice,
   };
 }
 
-// As edições ainda guardadas para estas linhas, na ordem em que foram feitas.
+// O que a fila ainda guarda para estas linhas e que o Metabase talvez não mostre, na ordem do lote (a da DAG):
+//   - pendente e enviado, do backoffice e do CX Hub: ainda não chegaram à raw;
+//   - gravado do backoffice, até a conferência vê-lo na raw (ou desistir em 6 h). O do CX Hub não é conferido: a
+//     réplica atrasa minutos, e a linha mostra o valor novo logo depois;
+//   - recusado do backoffice, para quem editou ver o motivo (7 dias, até a limpeza da fila, ou até ser dispensado).
+// A chave da gold tem o id em minúsculas (raw.ts, chaveDoCaso); a fila, como o CX Hub o mandou.
 export async function edicoesDasChaves(db: Banco, chaves: string[]): Promise<Map<string, EdicaoGuardada[]>> {
   const mapa = new Map<string, EdicaoGuardada[]>();
-  if (!chaves.length) return mapa;
+  const ids = chaves.filter(k => k.startsWith(PREFIXO_CXHUB)).map(k => k.slice(PREFIXO_CXHUB.length));
+  if (!ids.length) return mapa;
   const linhas = await db.query(
-    `SELECT id_atualizacao, chave_unica, campos, autor, atualizado_em, situacao, erro FROM bo_edicoes
-     WHERE chave_unica IN (SELECT value FROM json_each(?)) ORDER BY atualizado_em, criado_em, id_atualizacao`,
-    [JSON.stringify(chaves)],
+    `SELECT a.id_atualizacao, lower(a.id_solicitacao) AS id, a.campos, a.atualizado_em_utc, a.situacao, a.erro, b.autor
+     FROM atualizacoes a LEFT JOIN bo_autoria b ON b.id_atualizacao = a.id_atualizacao
+     WHERE lower(a.id_solicitacao) IN (SELECT value FROM json_each(?))
+       AND (a.situacao IN ('pendente', 'enviado')
+         OR (b.id_atualizacao IS NOT NULL AND (a.situacao = 'recusado' OR (a.situacao = 'gravado' AND b.conferida IS NULL))))
+     ORDER BY a.atualizado_em_utc, a.enfileirado_em, a.id_atualizacao`,
+    [JSON.stringify(ids)],
   );
   for (const l of linhas) {
     const e = daLinha(l);
@@ -127,7 +149,7 @@ export function comEdicoes(caso: CasoGold, edicoes: EdicaoGuardada[], agora: num
 }
 
 const visivel = (e: EdicaoGuardada): EdicaoVisivel => ({
-  id: e.id, campos: e.campos, autor: e.autor, atualizadoEm: e.atualizadoEm, situacao: e.situacao, erro: e.erro,
+  id: e.id, campos: e.campos, autor: e.autor, atualizadoEm: e.atualizadoEm, situacao: e.situacao, erro: e.erro, doBackoffice: e.doBackoffice,
 });
 
 export async function lerCliente(db: Banco, chave: string): Promise<ClienteGuardado | null> {
@@ -146,9 +168,11 @@ async function salvarCliente(db: Banco, chave: string, dados: DadosCliente, agor
   );
 }
 
-// O caso como o Metabase o mostra agora: a gold, ou a raw quando ela já tem evento que a gold ainda não mostra.
+// O caso como o Metabase o mostra agora: a gold, ou a raw quando ela já tem evento que a gold ainda não mostra. O
+// caso que ainda está na fila do app (a raw ainda não o tem) entra como raw virtual.
 export async function casoNoMetabase(c: Contexto, m: ConfigMetabase, chave: string): Promise<CasoGold | null> {
-  const linhas = await consultar(m, c.fetch, sqlDoCaso(chave));
+  const fila = chave.startsWith(PREFIXO_CXHUB) ? await casosDaFila(c.db, { id: chave.slice(PREFIXO_CXHUB.length) }, c.agora) : [];
+  const linhas = await consultar(m, c.fetch, sqlDoCaso(chave, fila));
   return linhas.length ? casoDaLinha(linhas[0]) : null;
 }
 
@@ -354,13 +378,14 @@ export async function registrarEdicao(c: Contexto, m: ConfigMetabase, chave: str
   if (!mudouCampos && !cliente) return json({ code: "SEM_MUDANCA", message: "Nada mudou.", ...(await detalheDoCaso(c, m, caso, lidos)) });
 
   if (mudouCampos) {
-    const agoraIso = isoUtc(c.agora);
+    const id = (c.novoId ?? (() => crypto.randomUUID()))();
+    // A autoria antes da atualização: sem ela, a atualização apareceria como do CX Hub (e não se desfaria aqui). Se a
+    // gravação parar entre as duas, a autoria sozinha sai na limpeza (conferencia.ts), e repetir o salvar é seguro.
     await c.db.exec(
-      `INSERT INTO bo_edicoes (id_atualizacao, id_solicitacao, chave_unica, tipo, sigla, campos, atualizado_em, autor, situacao, criado_em, mudou_em)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendente', ?, ?)`,
-      [(c.novoId ?? (() => crypto.randomUUID()))(), chave.slice(PREFIXO_CXHUB.length), chave, tipo, caso.sigla, JSON.stringify(campos),
-        agoraIso, autor, agoraIso, agoraIso],
+      "INSERT INTO bo_autoria (id_atualizacao, chave_unica, tipo, sigla, autor, criado_em) VALUES (?, ?, ?, ?, ?, ?)",
+      [id, chave, tipo, caso.sigla, autor, isoUtc(c.agora)],
     );
+    await enfileirarEdicao(c.db, { id, idSolicitacao: await idDoCaso(c.db, chave.slice(PREFIXO_CXHUB.length)), campos }, c.agora);
   }
   if (cliente) await salvarCliente(c.db, chave, cliente, c.agora, autor);
 
@@ -372,13 +397,27 @@ export async function registrarEdicao(c: Contexto, m: ConfigMetabase, chave: str
 }
 
 // DELETE /api/edicoes/:id — desfaz uma edição que ainda não foi ao lote (pendente) ou dispensa uma recusada. Enviada
-// ou gravada não volta: já está a caminho do Metabase (para mudar, faça outra edição por cima).
+// ou gravada não volta: já está a caminho do Metabase (para mudar, faça outra edição por cima). Só a edição feita pelo
+// backoffice: a atualização que o CX Hub mandou à fila é dele.
 export async function descartarEdicao(c: Contexto, id: string): Promise<Response> {
   const problema = problemaNaEscrita(c);
   if (problema) return erro(403, "FORBIDDEN", problema);
-  const apagou = await c.db.exec("DELETE FROM bo_edicoes WHERE id_atualizacao = ? AND situacao IN ('pendente', 'recusado')", [id]);
-  if (apagou > 0) return json({ code: "OK", message: "Edição descartada." });
-  const existe = await c.db.um("SELECT situacao FROM bo_edicoes WHERE id_atualizacao = ?", [id]);
-  if (!existe) return erro(404, "NOT_FOUND", "Edição não encontrada (talvez já tenha chegado ao Metabase).");
+  // Uma instrução só: o lote que pega a edição (pendente → enviado) e este DELETE não se cruzam.
+  const apagou = await c.db.exec(
+    `DELETE FROM atualizacoes WHERE id_atualizacao = ? AND situacao IN ('pendente', 'recusado')
+       AND EXISTS (SELECT 1 FROM bo_autoria b WHERE b.id_atualizacao = atualizacoes.id_atualizacao)`,
+    [id],
+  );
+  if (apagou > 0) {
+    await c.db.exec("DELETE FROM bo_autoria WHERE id_atualizacao = ?", [id]);
+    return json({ code: "OK", message: "Edição descartada." });
+  }
+  const l = await c.db.um(
+    "SELECT a.situacao, b.autor FROM atualizacoes a LEFT JOIN bo_autoria b ON b.id_atualizacao = a.id_atualizacao WHERE a.id_atualizacao = ?",
+    [id],
+  );
+  if (!l) return erro(404, "NOT_FOUND", "Edição não encontrada (talvez já tenha chegado ao Metabase).");
+  if (l.autor === null || l.autor === undefined)
+    return erro(403, "FORBIDDEN", "Esta atualização veio do CX Hub: aqui só se desfaz edição feita pelo backoffice.");
   return erro(409, "CONFLICT", "A edição já foi enviada ao Metabase e não pode ser desfeita. Faça outra edição por cima.");
 }

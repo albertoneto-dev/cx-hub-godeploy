@@ -4,7 +4,8 @@ Backend do CX Hub em `https://cx-hub.devgogroup.com` (app `66edd698`, visibilida
 mesmo Worker:
 
 - `/api/v1/*`: a fila do Metabase, que guarda casos e atualizações e dispara a DAG `gobeaute_reenvio_reembolso_etl`
-  em lote a cada 20 min. O contrato está em `docs/fila-cxhub.md`, no repositório do CX Hub.
+  em lote a cada 10 min (era 20 até a v9). O contrato está em `docs/fila-cxhub.md`, no repositório do CX Hub. As
+  edições do backoffice (abaixo) são atualizações desta fila.
 - O resto: as 23 rotas que o CX Hub tem na Vercel, **nos mesmos caminhos, métodos, corpos e respostas**. O código é
   o do CX Hub (`cxhub/`, com origem em `cxhub/ORIGEM.md`); as regras de negócio estão no `CLAUDE.md` de lá.
 
@@ -90,20 +91,22 @@ origem e as adaptações estão em `backoffice/ORIGEM.md`; as regras de negócio
 | Método | Caminho | O que faz |
 |---|---|---|
 | GET | `/api/backoffice/eu` | Quem chama, a janela de edição (30 dias) e o tamanho da página (50) |
-| GET | `/api/backoffice/solicitacoes?tipo=REENVIO\|REEMBOLSO[&marca=<sigla>][&status=][&busca=][&cursor=][&contar=1]` | Uma página da gold + raw, por cursor (`proximo` leva à seguinte; `contar=1` traz o `total`) |
-| GET | `/api/backoffice/solicitacoes/{chave}` | A linha com as edições por cima, as edições guardadas, os dados do cliente e, se ela se edita, os motivos, o pedido e o catálogo do mimo |
-| POST | `/api/backoffice/solicitacoes/{chave}/edicoes` | `{ campos?, cliente?, itens? }`: guarda a edição (vai à DAG no próximo lote) e/ou os dados do cliente |
-| DELETE | `/api/backoffice/edicoes/{id}` | Desfaz uma edição pendente ou dispensa uma recusada (a enviada não volta: 409) |
-| GET | `/api/backoffice/estado` | Diagnóstico: edições por situação, o lote em andamento, os últimos lotes e a última rodada |
-| POST | `/api/backoffice/interno/lote` | A rodada: o cron (`X-Godeploy-Cron`), ou alguém identificado, à mão |
+| GET | `/api/backoffice/solicitacoes?tipo=REENVIO\|REEMBOLSO[&marca=<sigla>][&status=][&busca=][&cursor=][&contar=1]` | Uma página da gold + raw, com os casos ainda na fila, por cursor (`proximo` leva à seguinte; `contar=1` traz o `total`) |
+| GET | `/api/backoffice/solicitacoes/{chave}` | A linha com o que a fila guarda por cima, as edições (e as atualizações do CX Hub ainda na fila), os dados do cliente e, se ela se edita, os motivos, o pedido e o catálogo do mimo |
+| POST | `/api/backoffice/solicitacoes/{chave}/edicoes` | `{ campos?, cliente?, itens? }`: põe a edição na fila (vai à DAG no próximo lote) e/ou guarda os dados do cliente |
+| DELETE | `/api/backoffice/edicoes/{id}` | Desfaz uma edição pendente ou dispensa uma recusada (a enviada não volta: 409; a do CX Hub: 403) |
+| GET | `/api/backoffice/estado` | Diagnóstico: as edições por situação, a fila, o lote em andamento, os últimos lotes e a última rodada |
 
 - **Quem chama:** o autor de cada edição vem do `x-usuario-email`, a pessoa na tela de quem chama, como na Central.
   Sem ele, vale o e-mail que o gateway põe no login do navegador. Sem nenhum dos dois, a chamada leva 401; com um
   `x-usuario-email` fora do formato, 400.
 - **Escrita pelo navegador** (chamada com `Origin`): exige `x-backoffice: 1` e a origem do app. A chamada de servidor,
   sem `Origin`, não exige.
-- **Lote:** `dag_run_id` = `cxhub_backoffice__<aaaammddThhmmss>`, na mesma DAG da fila. As tabelas no `env.DB` têm o
-  prefixo `bo_`.
+- **Fila única:** a edição é uma atualização da fila do app (a tabela `atualizacoes`, a mesma das do CX Hub), e quem
+  editou fica em `bo_autoria`. Ela sobe no lote da fila (`cxhub_lote__…`), depois do caso, se ele ainda estiver lá. O
+  caso que ainda está na fila entra na lista como uma raw virtual, montado pelo mesmo SQL do dbt. A rodada da fila
+  confere na raw as edições gravadas (`backoffice/servidor/conferencia.ts`); o backoffice não tem lote nem cron
+  próprios. As outras tabelas dele no `env.DB` têm o prefixo `bo_`.
 
 ## Cache da rota dados (`POST /api/interno/rota-dados`)
 
@@ -121,9 +124,8 @@ As listas do app `rota-dados-cxhub` ficam guardadas no `env.DB` (tabela `cache_r
 
 | Rota | Agenda | Situação |
 |---|---|---|
-| `POST /api/v1/interno/lote` | `*/20 * * * *` | Existe |
-| `POST /api/interno/rota-dados` | `*/5 * * * *` | **A criar** |
-| `POST /api/backoffice/interno/lote` | `*/10 * * * *`, a mesma do app de origem | **A criar** |
+| `POST /api/v1/interno/lote` (a fila e as edições do backoffice) | `*/10 * * * *` | Existe em `*/20`; passa a `*/10` com a versão da fila única |
+| `POST /api/interno/rota-dados` | `*/5 * * * *` | Existe (v9) |
 
 Sem assinatura conferida, cada rota aceita no máximo uma chamada a cada 30 s. A trava é uma por rota, então os crons
 podem disparar no mesmo minuto.

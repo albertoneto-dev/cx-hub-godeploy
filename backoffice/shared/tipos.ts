@@ -27,17 +27,21 @@ export type CasoGold = Record<ColunaGold, ValorGold> & {
   reenvio_no_cosmos: boolean;
 };
 
-// pendente (no env.DB) → enviado (num lote disparado) → gravado (a DAG confirmou) → a linha sai do env.DB quando a raw
-// que o Metabase lê tem o evento. recusado: a DAG recusou (fica 7 dias para quem editou ver o motivo).
+// A situação na fila do app: pendente (no env.DB) → enviado (num lote disparado) → gravado (a DAG confirmou) → sai da
+// tela quando a raw que o Metabase lê tem o evento. recusado: a DAG recusou (fica 7 dias para quem editou ver o motivo).
 export type SituacaoEdicao = "pendente" | "enviado" | "gravado" | "recusado";
 
 export interface EdicaoVisivel {
   id: string;
   campos: Record<string, string | number>;
+  // Quem editou; "CX Hub" na atualização que o CX Hub mandou à fila.
   autor: string;
   atualizadoEm: string;
   situacao: SituacaoEdicao;
   erro: string | null;
+  // Feita pelo backoffice (só ela se desfaz aqui); false na atualização do CX Hub ainda na fila (adaptação do app
+  // cx-hub: fila única, backoffice/ORIGEM.md).
+  doBackoffice: boolean;
 }
 
 export interface Solicitacao extends CasoGold {

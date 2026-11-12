@@ -6,6 +6,7 @@ import { FILTROS_STATUS, type Eu, type FiltroStatus, type Pagina } from "../shar
 import type { ConfigMetabase } from "./config";
 import type { Contexto } from "./contexto";
 import { casoNoMetabase, comEdicoes, detalheDoCaso, edicoesDasChaves } from "./edicoes";
+import { casosDaFila } from "./fila";
 import { casoDaLinha, codificarCursor, cursorDoCaso, lerCursor, sqlDaContagem, sqlDaPagina, type Filtro } from "./gold";
 import { erro, json } from "./http";
 import { consultar } from "./metabase";
@@ -31,10 +32,13 @@ export async function listar(c: Contexto, m: ConfigMetabase): Promise<Response> 
   if (cursorTexto && !cursor) return erro(400, "INVALID_REQUEST", "Cursor inválido: volte para a primeira página.");
 
   const filtro: Filtro = { tipo, sigla: sigla || null, status: (status || null) as FiltroStatus | null, busca: busca || null };
+  // Os casos que ainda estão na fila do app entram na consulta como raw virtual (gold.ts): o caso que acabou de chegar
+  // já aparece, filtra e se edita.
+  const fila = await casosDaFila(c.db, { tipo }, c.agora);
   // A página e a contagem saem juntas na primeira página; nas seguintes, a tela já sabe o total.
   const [linhas, contagem] = await Promise.all([
-    consultar(m, c.fetch, sqlDaPagina(filtro, cursor, TAMANHO_PAGINA)),
-    p.get("contar") === "1" ? consultar(m, c.fetch, sqlDaContagem(filtro)) : Promise.resolve(null),
+    consultar(m, c.fetch, sqlDaPagina(filtro, cursor, TAMANHO_PAGINA, fila)),
+    p.get("contar") === "1" ? consultar(m, c.fetch, sqlDaContagem(filtro, fila)) : Promise.resolve(null),
   ]);
   const casos = linhas.map(casoDaLinha);
   const pagina = casos.slice(0, TAMANHO_PAGINA);
@@ -55,14 +59,25 @@ export async function verCaso(c: Contexto, m: ConfigMetabase, chave: string): Pr
   return json(await detalheDoCaso(c, m, caso));
 }
 
-// GET /api/estado — diagnóstico: as edições em cada situação, o lote em andamento e o resumo da última rodada.
+const porSituacao = async (c: Contexto, sql: string) => ({
+  pendente: 0, enviado: 0, gravado: 0, recusado: 0,
+  ...Object.fromEntries((await c.db.query(sql)).map(l => [String(l.situacao), Number(l.n)])),
+});
+
+// GET /api/estado — diagnóstico: as edições do backoffice em cada situação da fila (e a conferência das gravadas), a
+// fila inteira (casos e atualizações, do CX Hub também), o lote em andamento e o resumo da última rodada do cron.
+// Adaptação do app cx-hub (fila única, backoffice/ORIGEM.md): o lote e a rodada são os da fila do app.
 export async function estado(c: Contexto): Promise<Response> {
-  const porSituacao = Object.fromEntries(
-    (await c.db.query("SELECT situacao, COUNT(*) AS n FROM bo_edicoes GROUP BY situacao")).map(l => [String(l.situacao), Number(l.n)]),
-  );
-  const lote = await c.db.um("SELECT id, situacao, itens, clears, disparado_em, criado_em FROM bo_lotes WHERE situacao IN ('montando', 'disparado') ORDER BY criado_em LIMIT 1");
-  const ultimos = await c.db.query("SELECT id, desfecho, itens, gravados, recusados, erro, terminado_em FROM bo_lotes WHERE situacao = 'terminado' ORDER BY terminado_em DESC LIMIT 5");
-  const rodada = await c.db.um("SELECT valor FROM bo_controle WHERE chave = 'ultima_rodada'");
+  const edicoes = await porSituacao(c, "SELECT a.situacao, COUNT(*) AS n FROM bo_autoria b JOIN atualizacoes a ON a.id_atualizacao = b.id_atualizacao GROUP BY a.situacao");
+  const conferencia = Object.fromEntries((await c.db.query(
+    `SELECT coalesce(b.conferida, 'esperando') AS conferida, COUNT(*) AS n FROM bo_autoria b JOIN atualizacoes a ON a.id_atualizacao = b.id_atualizacao
+     WHERE a.situacao = 'gravado' GROUP BY 1`,
+  )).map(l => [String(l.conferida), Number(l.n)]));
+  const casos = await porSituacao(c, "SELECT situacao, COUNT(*) AS n FROM casos GROUP BY situacao");
+  const atualizacoes = await porSituacao(c, "SELECT situacao, COUNT(*) AS n FROM atualizacoes GROUP BY situacao");
+  const lote = await c.db.um("SELECT id, situacao, casos, atualizacoes, clears, disparado_em, criado_em FROM lotes WHERE situacao IN ('montando', 'disparado') ORDER BY criado_em LIMIT 1");
+  const ultimos = await c.db.query("SELECT id, desfecho, casos, atualizacoes, gravados, recusados, erro, terminado_em FROM lotes WHERE situacao = 'terminado' ORDER BY terminado_em DESC LIMIT 5");
+  const rodada = await c.db.um("SELECT valor FROM controle WHERE chave = 'ultima_rodada'");
   let ultimaRodada: unknown = null;
   try {
     ultimaRodada = rodada ? JSON.parse(String(rodada.valor)) : null;
@@ -70,10 +85,11 @@ export async function estado(c: Contexto): Promise<Response> {
     ultimaRodada = String(rodada?.valor);
   }
   return json({
-    edicoes: { pendente: 0, enviado: 0, gravado: 0, recusado: 0, ...porSituacao },
+    edicoes: { ...edicoes, conferencia: { esperando: 0, na_raw: 0, atrasada: 0, ...conferencia } },
+    fila: { casos, atualizacoes },
     loteEmAndamento: lote ?? null,
     ultimosLotes: ultimos,
     ultimaRodada,
-    configuracao: { metabase: Boolean(c.cfg.metabase), airflow: Boolean(c.cfg.airflow), slack: Boolean(c.cfg.slackUrl), problemas: c.cfg.problemas },
+    configuracao: { metabase: Boolean(c.cfg.metabase), rotaDados: Boolean(c.cfg.rotaDados), problemas: c.cfg.problemas },
   });
 }
