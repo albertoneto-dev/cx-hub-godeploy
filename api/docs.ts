@@ -392,9 +392,12 @@ const GUIA_HTML = `
   <div class="tabela-rolavel"><table class="marca">
     <thead><tr><th>Assunto</th><th>O que muda</th></tr></thead>
     <tbody>
-      <tr><td>Rituária no <code>/api/shopify/orders</code></td><td>O pedido vem do integrations-gateway, que só enxerga os
-        <strong>últimos 60 dias</strong>. Um pedido mais antigo volta como não encontrado. No Cosmos e no bot, a Rituária
-        segue igual.</td></tr>
+      <tr><td>Rituária no <code>/api/shopify/orders</code></td><td>O pedido vem do integrations-gateway, como o das marcas
+        sem Cosmos, e não do token da loja. No Cosmos e no bot, a Rituária segue igual.</td></tr>
+      <tr><td>Pedido com mais de 60 dias no <code>/api/shopify/orders</code> e no bot (Ápice, Yenzah, Denavita e
+        Rituária)</td><td>O integrations-gateway só enxerga os <strong>últimos 60 dias</strong>. O pedido que ele não acha,
+        ou com ele fora do ar, vem do <strong>Data Mart</strong>, no mesmo formato. Na Vercel, ele voltava como não
+        encontrado. A Gobeaute não está no Data Mart e continua com o limite.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.
         Para ensaiar, use <code>testMode: true</code>.</td></tr>
       <tr><td>Tempo de execução</td><td>Não há o <code>maxDuration</code> da Vercel. O bot continua planejando o trabalho para
@@ -515,8 +518,10 @@ const GUIA_HTML = `
         <td>O <code>BOT_RESEND_SECRET</code> não está cadastrado no app</td><td>Cadastre o segredo no GoDeploy</td></tr>
       <tr><td>O bot estoura o tempo</td><td>O timeout do cliente é menor que 150 s</td><td>Aumente para pelo menos 160 s</td></tr>
       <tr><td><code>404 { "code": "NOT_FOUND" }</code></td><td>Caminho digitado errado</td><td>Confira na lista de endpoints ao lado</td></tr>
-      <tr><td>Pedido da Rituária não encontrado no <code>/api/shopify/orders</code></td><td>O pedido tem mais de 60 dias</td>
-        <td>Busque pelo Cosmos (<code>/api/cosmos/orders</code>)</td></tr>
+      <tr><td>Pedido da Ápice, Yenzah, Denavita ou Rituária não encontrado no <code>/api/shopify/orders</code></td><td>Não
+        está na Shopify (60 dias) nem no Data Mart: número errado, pedido de outra marca, ou pedido de agora com o gateway
+        fora do ar (o Data Mart leva horas para receber)</td><td>Confira o número e a marca; na Rituária, busque também pelo
+        Cosmos (<code>/api/cosmos/orders</code>)</td></tr>
     </tbody>
   </table></div>
 </section>`;

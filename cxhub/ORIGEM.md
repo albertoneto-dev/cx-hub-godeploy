@@ -86,6 +86,17 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   de sucesso, que o contrato manda manter igual à da Vercel, e continuam verdadeiras. Nenhum arquivo daqui mudou por isso.
 - A fila também recebe as edições do backoffice (`backoffice/ORIGEM.md`, fila única). Quem lê as atualizações de um caso
   pela fila (`GET /api/v1/atualizacoes`, o `shared/lib/fila/estado.ts`) passa a ver as do backoffice junto das do CX Hub.
+- O pedido das marcas do gateway tem o Data Mart de reserva (2026-11-12). O integrations-gateway só enxerga os últimos
+  60 dias (falta o `read_all_orders` nas lojas), e o pedido #1607929 da Ápice, de 64 dias, não pôde ter o reenvio pedido.
+  Arquivos novos: `shared/lib/datamart/pedidoDaShopifyServer.ts` (lê `api.vw_shopify_orders` pela chave, com o
+  `order_id` da `gold.fct_shopify_orders` pelo índice de marca e número, e devolve o mesmo `ShopifyOrder` do gateway; na
+  Ápice, sem telefone na Shopify, vale o do Tiny, pelo `external_erp_id` da Intelipost) e
+  `shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart.ts` (o gateway primeiro; o Data Mart quando ele não acha ou
+  falha; sem o pedido nos dois, o desfecho do gateway). `app/api/shopify/orders/route.ts` e a busca do
+  `app/api/reenvio/bot/route.ts` chamam a função nova no lugar do `buscarPedidoNoGateway`, e o motivo do
+  `ORDER_NOT_FOUND` do bot diz "na Shopify nem no Data Mart". Vale para Ápice, Yenzah, Denavita e Rituária; a Gobeaute
+  não está no Data Mart. A tela do CX Hub ainda diz "a busca alcança só os pedidos dos últimos 60 dias" quando nada é
+  achado: é texto do navegador, que não está nesta cópia.
 
 ## Testes
 
@@ -107,6 +118,10 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   idêntico ao do CX Hub, e a suíte de lá o cobre.
 - Novos: dois casos da Rituária pelo gateway em `integration/api-marcas-sem-cosmos.test.ts`. O caso do REST passou a
   dizer "as outras 5 marcas do Cosmos".
+- Novos (o Data Mart de reserva, 2026-11-12): `shared/pedidoDaShopifyNoDataMart.test.ts` e
+  `shared/buscarPedidoNoGatewayOuNoDataMart.test.ts`, um caso em `integration/api-marcas-sem-cosmos.test.ts` (o pedido
+  fora dos 60 dias vem do Data Mart) e um em `integration/api-reenvio-bot-sem-cosmos.test.ts` (o bot registra com os
+  dados do pedido do Data Mart). O caso do `ORDER_NOT_FOUND` do bot passou a esperar "na Shopify nem no Data Mart".
 
 ## Atualizar para um commit novo do CX Hub
 

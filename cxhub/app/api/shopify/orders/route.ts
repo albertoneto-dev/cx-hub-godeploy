@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from '../../../../../api/next-server';
 import { lePedidoPeloGateway } from '../../../../shared/lib/shopify/gateway';
-import { buscarPedidoNoGateway } from '../../../../shared/lib/shopify/buscarPedidoNoGateway';
+import { buscarPedidoNoGatewayOuNoDataMart } from '../../../../shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart';
 
 const DEFAULT_TIMEOUT_MS = 10000;
 
@@ -50,12 +50,13 @@ export async function GET(request: NextRequest) {
     }
 
     // Marcas sem Cosmos (ADR-013) e a Rituária (`MarcaNoGateway`): o pedido é lido pelo integrations-gateway
-    // (`docs/integrations-gateway-shopify.md`), no formato REST de sempre, para o navegador e o `adaptShopifyOrder` não
-    // mudarem.
+    // (`docs/integrations-gateway-shopify.md`) e, quando ele não o acha (só enxerga 60 dias) ou falha, no Data Mart
+    // (decisão deste app, `cxhub/ORIGEM.md`) — sempre no formato REST de sempre, para o navegador e o
+    // `adaptShopifyOrder` não mudarem.
     const marca = brand.toLowerCase();
     if (lePedidoPeloGateway(marca)) {
         const timeoutDoGateway = parseInt(process.env.TIMEOUT || '', 10) || DEFAULT_TIMEOUT_MS;
-        const busca = await buscarPedidoNoGateway(marca, orderId, timeoutDoGateway);
+        const busca = await buscarPedidoNoGatewayOuNoDataMart(marca, orderId, timeoutDoGateway);
         if (busca.tipo === 'falha') return NextResponse.json({ error: busca.erro }, { status: busca.status });
         return NextResponse.json({ orders: busca.tipo === 'achado' ? [busca.pedido] : [] });
     }

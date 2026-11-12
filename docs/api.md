@@ -75,8 +75,14 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   `Allow`.
 - Os avisos que iam ao Google Chat vão ao Slack (`SLACK_ALERT_WEBHOOK_URL`, o mesmo canal da fila), com o mesmo texto.
 - A Rituária lê a Shopify pelo integrations-gateway, sem `SHOPIFY_TOKEN_RITUARIA` (o app não tem o token da loja). É o
-  fallback da tela quando o Cosmos não acha o pedido, e agora só acha pedido dos últimos 60 dias. No resto, inclusive no
-  bot, ela segue no Cosmos.
+  fallback da tela quando o Cosmos não acha o pedido. No resto, inclusive no bot, ela segue no Cosmos.
+- O pedido que o integrations-gateway não acha (ele só enxerga os últimos 60 dias) ou com ele fora do ar vem do Data
+  Mart (`api.vw_shopify_orders`, pela chave do Metabase), no mesmo formato: no `/api/shopify/orders` (Ápice, Yenzah,
+  Denavita e Rituária) e no bot (as sem Cosmos). Na Ápice, quando a Shopify não tem o telefone, vale o do Tiny. Na
+  Vercel, o pedido de mais de 60 dias voltava como não encontrado e a
+  agente não conseguia pedir o reenvio (o #1607929 da Ápice, em 2026-11-12). A Gobeaute não está no Data Mart e continua
+  com o limite. Código: `cxhub/shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart.ts` e
+  `cxhub/shared/lib/datamart/pedidoDaShopifyServer.ts`.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.

@@ -12,10 +12,11 @@ import { nomesDoPedidoNaShopify } from './nomeDoPedido';
 
 /**
  * A busca do pedido das marcas sem Cosmos (ADR-013) e da Rituária (`MarcaNoGateway`) no **integrations-gateway**, do
- * lado do servidor: a rota `/api/shopify/orders` (a tela) e a rota do bot (ADR-015, só as sem Cosmos) chamam esta
- * função. Procura `SH{n}{sufixo}` e depois só os dígitos (o `#n` antigo; na Rituária, só os dígitos), confere o nome do
- * resultado (o filtro é tolerante) e devolve o pedido no formato REST de sempre, que o `adaptShopifyOrder` lê. O
- * gateway só enxerga os últimos 60 dias de pedidos.
+ * lado do servidor: a rota `/api/shopify/orders` (a tela) e a rota do bot (ADR-015, só as sem Cosmos) a chamam pelo
+ * `buscarPedidoNoGatewayOuNoDataMart`, que tem o Data Mart de reserva (decisão deste app). Procura `SH{n}{sufixo}` e
+ * depois só os dígitos (o `#n` antigo; na Rituária, só os dígitos), confere o nome do resultado (o filtro é tolerante) e
+ * devolve o pedido no formato REST de sempre, que o `adaptShopifyOrder` lê. O gateway só enxerga os últimos 60 dias de
+ * pedidos (falta o `read_all_orders` nas lojas).
  *
  * Nunca lança: a falha volta com o status HTTP que a rota da tela responde (`500` sem chave ou na rede, `502` quando o
  * gateway responde errado, `504` no prazo) e com a mensagem dela.

@@ -192,13 +192,50 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integr
         expect(corpo.orders[0].note_attributes).toEqual([{ name: 'nf_number', value: '12345' }]);
     });
 
-    it('nenhum dos dois nomes acha ⇒ lista vazia (a tela diz "não encontrado", com o aviso dos 60 dias)', async () => {
+    it('nenhum dos dois nomes acha, e o Data Mart (aqui sem configuração) também não ⇒ lista vazia: a tela diz "não encontrado"', async () => {
         const fetchSpy = gateway({});
 
         const res = await GET(createRequest('http://localhost/api/shopify/orders?brand=apice&orderId=999'));
 
         expect(await res.json()).toEqual({ orders: [] });
         expect(fetchSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('pedido fora dos 60 dias do gateway ⇒ vem do Data Mart, no mesmo formato REST (decisão deste app)', async () => {
+        const METABASE = 'https://metabase.test';
+        vi.stubEnv('METABASE_URL', METABASE);
+        vi.stubEnv('METABASE_API_KEY', 'chave');
+        vi.stubEnv('METABASE_DATABASE_ID', '43');
+        const consultas: string[] = [];
+        // A linha do Data Mart (o pedido #1607929 da Ápice, com dado pessoal de mentira), na ordem do SELECT.
+        const linha = [
+            '7613222846686', '#1607929', '2026-09-09T18:10:22Z', 'cliente@exemplo.com', 'paid', 345.12, 345.12, 0,
+            'Maria Teste', null, null, 'Maria', 'Teste', 'Rua A, 10', 'Centro', 'Belém', '66000-000', 'PA',
+            JSON.stringify([{ id: 1, sku: '20911', name: 'Óleo Árabe Noor Elixir 60ml', vendor: 'Apice', quantity: 1, price: '59.90', total_discount: '0.00', discount_allocations: [] }]),
+            JSON.stringify([{ title: 'NORMAL_ANJUN_EXPRESS' }]), '[]', '[]',
+        ];
+        const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
+            if (String(input) === `${METABASE}/api/dataset`) {
+                consultas.push(JSON.parse(String(init?.body)).native.query as string);
+                return new Response(JSON.stringify({ status: 'completed', data: { rows: [linha] } }), { status: 202 });
+            }
+            // O gateway não acha nenhum dos dois nomes: o pedido tem mais de 60 dias.
+            return new Response(JSON.stringify({ data: { orders: { edges: [] } } }), { status: 200 });
+        });
+
+        const res = await GET(createRequest('http://localhost/api/shopify/orders?brand=apice&orderId=1607929'));
+
+        expect(res.status).toBe(200);
+        const corpo = await res.json();
+        expect(corpo.orders).toHaveLength(1);
+        expect(corpo.orders[0]).toMatchObject({
+            name: '#1607929', total_price: '345.12', shipping_lines: [{ title: 'NORMAL_ANJUN_EXPRESS' }],
+            line_items: [{ sku: '20911', quantity: 1, price: '59.90' }],
+        });
+        expect(adaptShopifyOrder(corpo.orders[0], 'apice')).toMatchObject({ transportadora: 'Anjun', cdOrigem: 'ES' });
+        // Os dois nomes no gateway, depois uma consulta no Data Mart.
+        expect(fetchSpy).toHaveBeenCalledTimes(3);
+        expect(consultas[0]).toContain("brand = 'apice' and order_number = 1607929");
     });
 
     it('sem a INTEGRATIONS_GATEWAY_READ_KEY ⇒ 500, sem chamar o gateway', async () => {

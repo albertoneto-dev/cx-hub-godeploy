@@ -13,7 +13,7 @@ import { FOLGA_HANDLER_MS } from '../../../../shared/lib/backendDireto';
 import { JANELA_PLANILHA_MS } from '../../../../shared/lib/sheets/gravarLinha';
 import { getCosmosServiceToken, fetchNormalizedCosmosOrder } from '../../../../shared/lib/cosmos/server';
 import { adaptShopifyOrder } from '../../../../shared/lib/shopify/index';
-import { buscarPedidoNoGateway } from '../../../../shared/lib/shopify/buscarPedidoNoGateway';
+import { buscarPedidoNoGatewayOuNoDataMart } from '../../../../shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart';
 import { sendAlert, deveAvisar, ALERT_TIMEOUT_MS, type AlertContext, type AlertReason } from '../../../../shared/lib/alerts/index';
 
 /**
@@ -426,7 +426,8 @@ async function recusarItens(motivo: string, requestId: string): Promise<NextResp
 
 /**
  * Marca sem Cosmos no bot (ADR-015): o desfecho é o mesmo da tela para essas marcas — o pedido vem da Shopify pelo
- * integrations-gateway e a solicitação é **só registrada** (fila e planilha; a Gobeaute, só na fila). Nenhuma chamada
+ * integrations-gateway (ou, fora dos 60 dias dele, do Data Mart: decisão deste app) e a solicitação é **só
+ * registrada** (fila e planilha; a Gobeaute, só na fila). Nenhuma chamada
  * ao Cosmos (INV-07), nenhuma guarda de automação (não há o que executar) e nenhum aviso quando tudo dá certo:
  * registrar é o caminho normal dessas marcas, não uma degradação.
  *
@@ -443,11 +444,12 @@ async function registrarMarcaSemCosmos(input: {
 }): Promise<NextResponse<SheetsAppendResponse>> {
     const { marca, data, body, testMode, parcial, requestId } = input;
 
-    // A busca no gateway ocupa o lugar da fase Cosmos no orçamento do handler: o mesmo prazo, o mesmo teto.
+    // A busca (no gateway e, sem o pedido, no Data Mart) ocupa o lugar da fase Cosmos no orçamento do handler: o mesmo
+    // prazo, o mesmo teto.
     const prazo = Date.now() + orcamentoFaseCosmos();
     const timeoutPorConsulta = parseInt(process.env.TIMEOUT || '', 10) || 10_000;
     const busca = data.numeroPedido
-        ? await buscarPedidoNoGateway(marca, data.numeroPedido, timeoutPorConsulta, prazo)
+        ? await buscarPedidoNoGatewayOuNoDataMart(marca, data.numeroPedido, timeoutPorConsulta, prazo)
         : { tipo: 'nao_encontrado' as const };
 
     if (busca.tipo === 'falha') {
@@ -471,7 +473,7 @@ async function registrarMarcaSemCosmos(input: {
             requestId,
             reprovacao: {
                 reason: 'ORDER_NOT_FOUND',
-                motivo: `Pedido ${data.numeroPedido || '(sem número)'} não foi encontrado na Shopify (a busca alcança os últimos 60 dias) — registrado para tratativa manual`,
+                motivo: `Pedido ${data.numeroPedido || '(sem número)'} não foi encontrado na Shopify nem no Data Mart — registrado para tratativa manual`,
             },
         });
     }

@@ -213,7 +213,7 @@ describe('POST /api/reenvio/bot — marca sem Cosmos', () => {
         expect(mFetchOrder).not.toHaveBeenCalled();
     });
 
-    it('pedido não achado (só 60 dias no gateway) ⇒ registra com o que o bot mandou, ORDER_NOT_FOUND e sem aviso', async () => {
+    it('pedido não achado no gateway nem no Data Mart ⇒ registra com o que o bot mandou, ORDER_NOT_FOUND e sem aviso', async () => {
         gateway({});
 
         const res = await post(corpo('yenzah'));
@@ -221,10 +221,39 @@ describe('POST /api/reenvio/bot — marca sem Cosmos', () => {
         expect(res.status).toBe(200);
         const body = await res.json();
         expect(body.reason).toBe('ORDER_NOT_FOUND');
-        expect(body.message).toContain('Pedido 1724179 não foi encontrado na Shopify');
+        expect(body.message).toContain('Pedido 1724179 não foi encontrado na Shopify nem no Data Mart');
         expect(mPost).toHaveBeenCalledTimes(1);
         expect(mPost.mock.calls[0][0].data.comentarios).toContain('[CXHub] Pedido 1724179 não foi encontrado na Shopify');
         expect(mFetchOrder).not.toHaveBeenCalled();
+        expect(mAlerta).not.toHaveBeenCalled();
+    });
+
+    it('pedido fora dos 60 dias do gateway ⇒ vem do Data Mart e é registrado com os dados dele, sem aviso', async () => {
+        const METABASE = 'https://metabase.test';
+        vi.stubEnv('METABASE_URL', METABASE);
+        vi.stubEnv('METABASE_API_KEY', 'chave');
+        vi.stubEnv('METABASE_DATABASE_ID', '43');
+        const linha = [
+            '7613222846686', '#1607929', '2026-09-09T18:10:22Z', 'cliente@exemplo.com', 'paid', 345.12, 345.12, 0,
+            'Cliente Teste', null, '+5591999990000', 'Cliente', 'Teste', 'Rua A, 10', 'Centro', 'Belém', '66000-000', 'PA',
+            JSON.stringify([{ id: 1, sku: '20911', name: 'Óleo Árabe Noor Elixir 60ml', vendor: 'Apice', quantity: 1, price: '59.90', total_discount: '0.00', discount_allocations: [] }]),
+            JSON.stringify([{ title: 'NORMAL_ANJUN_EXPRESS' }]), '[]', '[]',
+        ];
+        vi.spyOn(global, 'fetch').mockImplementation(async (input) => {
+            if (String(input) === `${METABASE}/api/dataset`) {
+                return new Response(JSON.stringify({ status: 'completed', data: { rows: [linha] } }), { status: 202 });
+            }
+            return new Response(JSON.stringify({ data: { orders: { edges: [] } } }), { status: 200 });
+        });
+
+        const res = await post(corpo('apice', { order: { ecommerceOrderId: '1607929' } }));
+
+        expect(res.status).toBe(200);
+        expect((await res.json()).reason).toBeUndefined();
+        const enviado = mPost.mock.calls[0][0];
+        expect(enviado.data.numeroPedido).toBe('#1607929');
+        expect(enviado.data.produtoReenviar).toContain('20911');
+        expect(enviado.data.comentarios).not.toContain('[CXHub]');
         expect(mAlerta).not.toHaveBeenCalled();
     });
 
