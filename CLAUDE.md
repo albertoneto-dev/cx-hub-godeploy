@@ -1,7 +1,7 @@
 # CX Hub no GoDeploy (app `cx-hub`)
 
 Este repositório é o código do app GoDeploy `cx-hub` (id `66edd698`, https://cx-hub.devgogroup.com, visibilidade
-`authenticated`). É um Cloudflare Worker com três partes:
+`authenticated`). É um Cloudflare Worker com estas partes:
 
 | Caminho | O que é | Código |
 |---|---|---|
@@ -12,7 +12,8 @@ Este repositório é o código do app GoDeploy `cx-hub` (id `66edd698`, https://
 | `/docs` | A página da API para quem integra | `api/docs.ts` + `api/docsRotas.ts` |
 
 O CX Hub (o site, a tela) continua no repositório `rpaiagogroup/cx-hub`. Lá estão as regras de negócio das rotas (o
-`CLAUDE.md` e os ADRs de lá). Este repositório não tem remoto: ele só registra o que foi publicado no GoDeploy.
+`CLAUDE.md` e os ADRs de lá). Este repositório (`albertoneto-dev/cx-hub-godeploy` no GitHub) registra o que foi
+publicado no GoDeploy.
 
 ## Mapa
 
@@ -61,9 +62,14 @@ O CX Hub (o site, a tela) continua no repositório `rpaiagogroup/cx-hub`. Lá es
   está num lote em andamento espera o resultado dele; a de um caso recusado é recusada).
 - **Por que os passos são gravados um a um:** o lote passa por montando → disparado → terminado, cada passo gravado. Se
   uma rodada cair no meio, a seguinte retoma com o mesmo `dag_run_id` (o 409 do Airflow vale como "disparado").
-- **Quem pode chamar o lote:** o cron do GoDeploy assina com `X-Godeploy-Cron`, mas a plataforma não documenta o
-  esquema da assinatura. Por isso, além da conferência, há três travas: o formato exato do cabeçalho, o `t` a menos de
-  5 min do relógio e no máximo uma rodada a cada 30 s. À mão, a chamada usa o `x-cxhub-fila-token`.
+- **Quem pode chamar o lote:** o cron do GoDeploy assina com `X-Godeploy-Cron`. O `servidor/cron.ts` foi escrito
+  quando a plataforma não documentava a assinatura: ele tenta esquemas adivinhados, e nenhum confere (o log diz
+  "nenhum esquema conferiu"). Por isso valem três travas: o formato exato do cabeçalho, o `t` a menos de 5 min do
+  relógio e no máximo uma rodada a cada 30 s. À mão, a chamada usa o `x-cxhub-fila-token`.
+- **O esquema documentado** (na descrição da ferramenta `createCronJob`, vista em 2026-11-12) é o HMAC-SHA256 de
+  `JSON.stringify(["v1", appId, MÉTODO, url.pathname, t])`, com `t` como número e `appId` = `cx-hub` (o primeiro rótulo
+  do host). A chave são os bytes UTF-8 da `GODEPLOY_CRON_KEY`. Conferir por ele ainda não foi feito: pede uma versão
+  nova.
 - **Airflow em http:** o Airflow de produção só responde em http (decisão de 18/09/2026), então o app aceita http.
 
 ### As rotas do CX Hub
@@ -160,8 +166,8 @@ a outro app do GoDeploy paga o gateway de novo, cerca de 0,8 s medidos em 2026-1
 O backoffice não tem cron próprio (fila única). A cada 10 min, o Airflow recebe no máximo 6 runs por hora, e só quando há
 o que mandar: o lote vazio não dispara, e nunca há dois ao mesmo tempo.
 
-O GoDeploy não confere a assinatura do cron, então vale a trava de 30 s. Ela é **uma por rota**, porque os horários
-coincidem. Criar ou mudar cron é mudar o GoDeploy: só quando o usuário pedir.
+O app ainda não confere a assinatura do cron (veja "Quem pode chamar o lote"), então vale a trava de 30 s. Ela é **uma
+por rota**, porque os horários coincidem. Criar ou mudar cron é mudar o GoDeploy: só quando o usuário pedir.
 
 ### Autenticação
 
@@ -206,25 +212,35 @@ esbuild@0.25`). Os três precisam passar antes de publicar.
 Publicar é mexer em produção: só quando o usuário pedir.
 
 1. Os três checks passaram.
-2. Ninguém publicou desde a última versão: confira `version` e `updatedAt` no `getApp`. O código no ar é o do disco:
-   confira com o `getApp` com `include: ["manifest"]` (caminho e tamanho de cada arquivo).
+2. Ninguém publicou desde a última versão: confira `version` e `updatedAt` no `getApp`. O código no ar é o do último
+   commit: compare os tamanhos do `getApp` com `include: ["manifest"]` com os de `git cat-file -s HEAD:<caminho>`.
 3. Envie para o upload: `worker.ts`, `servidor/`, `api/`, `cxhub/**/*.ts` sem `cxhub/__tests__`, e
-   `backoffice/servidor/` e `backoffice/shared/` (156 arquivos na v8, antes do backoffice; confira a lista contra o
-   manifesto no ar).
-   Use `getUploadToken` e depois `curl -F "<caminho>=@./<caminho>"` para cada arquivo, com
+   `backoffice/servidor/` e `backoffice/shared/` (178 arquivos na v10). A lista sai do comando abaixo. Contra a lista
+   da versão anterior, só podem mudar os arquivos que a mudança criou ou apagou.
+
+   ```bash
+   { echo worker.ts; find servidor api backoffice/servidor backoffice/shared -type f; find cxhub -type f -name '*.ts' -not -path 'cxhub/__tests__/*'; } | LC_ALL=C sort
+   ```
+
+   Use `getUploadToken` e depois, pelo Git Bash, um único `curl` com um `-F "<caminho>=@./<caminho>"` por arquivo e
    `-H "Authorization: Bearer <uploadToken>"`. Os 4 caminhos com `[id]` passam como estão. Um `internal_error` avulso
    do upload foi passageiro: tente de novo com um token novo.
 4. Rode `updateApp` com o `uploadId`, `entrypoint: "worker.ts"` e a descrição revista para o que mudou.
 5. Confira: a `version` nova no `getApp`, e no `getAppLogs` a fila com 200 e a rodada seguinte do cron sem erro.
 
 **Não sobem:** `docs/`, `testes/`, `ferramentas/`, `tipos-do-worker/`, `.env*`, `package.json`, os `tsconfig*`,
-`vitest.config.ts`, `cxhub/__tests__`, `cxhub/ORIGEM.md`, `backoffice/testes/`, `backoffice/ORIGEM.md` e este arquivo. O que a página `/docs` precisa mostrar mora em
-`api/`, por isso.
+`vitest.config.ts`, `cxhub/__tests__`, `cxhub/ORIGEM.md`, `backoffice/testes/`, `backoffice/ORIGEM.md` e este arquivo.
+O que a página `/docs` precisa mostrar mora em `api/`, por isso.
 
 ## Git
 
-- Repositório só local, branch `main`, sem remoto. Ele espelha as versões publicadas: **um commit por versão**
-  (`feat(fila): … (v5)`), e só quando o usuário pedir.
+- O remoto `origin` é `git@github.com:albertoneto-dev/cx-hub-godeploy.git`. A `main` espelha as versões publicadas:
+  **um commit por versão** (`feat(fila): … (v5)`), e só quando o usuário pedir.
+- Quando o usuário pede, o trabalho vai num branch: a v9 e a v10 foram feitas no `feat/melhorias-cx-godeploy`. Quando
+  ele pede o merge, a `main` avança por fast-forward, sem commit de merge.
+- **Push só quando o usuário pedir**, nunca com `--force`, e **pelo WSL**, porque a chave SSH do GitHub só funciona lá.
+  Use um script `.sh` com `cd /mnt/c/Users/Notebook/Documents/cx-hub-godeploy && git push origin main`, chamado com
+  `wsl.exe -d Ubuntu-24.04 -- bash <script>.sh`.
 - `core.autocrlf=false` de propósito: os arquivos ficam em LF.
 
 ## Atualizar a partir do CX Hub
