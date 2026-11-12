@@ -68,15 +68,19 @@ const ABERTAS_NA_VERCEL = new Set([
   "/api/logistica/submit", "/api/resend/data", "/api/shopify/orders",
 ]);
 
-function mudancaNoGoDeploy(e: Endpoint): string | null {
+// As rotas que nasceram aqui: não havia equivalente na Vercel.
+const ehRotaNova = (path: string) => path.startsWith("/api/backoffice/") || path.startsWith("/api/interno/");
+
+function mudancaNoGoDeploy(e: Endpoint): { titulo: string; texto: string } | null {
   if (e.path.startsWith("/api/v1/")) return null;
+  if (ehRotaNova(e.path)) return { titulo: "Novo no GoDeploy.", texto: "Esta rota não existia na Vercel." };
   if (e.routeHeader === "x-cosmos-token") {
-    return "O token do Cosmos ia no `Authorization`. Agora vai no `x-cosmos-token`, e o `Authorization` leva a `gdk_`.";
+    return { titulo: "Mudou no GoDeploy.", texto: "O token do Cosmos ia no `Authorization`. Agora vai no `x-cosmos-token`, e o `Authorization` leva a `gdk_`." };
   }
   if (e.routeHeader === "x-bot-secret") {
-    return "O `x-bot-secret` continua e agora vai junto da `gdk_` no `Authorization`. Com um só, a chamada é recusada.";
+    return { titulo: "Mudou no GoDeploy.", texto: "O `x-bot-secret` continua e agora vai junto da `gdk_` no `Authorization`. Com um só, a chamada é recusada." };
   }
-  if (ABERTAS_NA_VERCEL.has(e.path)) return "Era aberta na Vercel. Agora exige a `gdk_` no `Authorization`.";
+  if (ABERTAS_NA_VERCEL.has(e.path)) return { titulo: "Mudou no GoDeploy.", texto: "Era aberta na Vercel. Agora exige a `gdk_` no `Authorization`." };
   return null;
 }
 
@@ -84,7 +88,13 @@ const DESCRICAO_DO_HEADER: Record<string, string> = {
   "x-cosmos-token": "O `credentials.token` do `POST /api/auth/login`, com ou sem `Bearer ` na frente.",
   "x-bot-secret": "O segredo do bot (`BOT_RESEND_SECRET`). Ausente ou errado: 401.",
   "x-cxhub-fila-token": "Um dos tokens aceitos pela fila (`CXHUB_FILA_TOKENS`).",
+  "x-usuario-email":
+    "O e-mail de quem está na tela de quem chama (a agente na Central de Tickets): o autor das edições. Obrigatório na " +
+    "chamada de servidor; sem ele, vale só o e-mail que o gateway põe no login do navegador. Fora do formato de e-mail: 400.",
 };
+
+// As rotas de rodada, que o cron do GoDeploy chama com o X-Godeploy-Cron no lugar do header da rota.
+const ROTAS_DE_CRON = new Set(["/api/v1/interno/lote", "/api/backoffice/interno/lote", "/api/interno/rota-dados"]);
 
 function marcaObrigatorio(r: CampoDoCorpo["required"]): string {
   if (r === true) return `<span class="obrig">obrigatório</span>`;
@@ -124,8 +134,9 @@ function tabelaDeHeaders(e: Endpoint): string {
       <td><code>Bearer gdk_…</code>: a chave do GoDeploy para o app <code>cx-hub</code>. O gateway confere antes do app.</td></tr>`,
   ];
   if (e.routeHeader) {
-    const extra = e.path === "/api/v1/interno/lote" ? " O cron do GoDeploy usa o `X-Godeploy-Cron` no lugar dele." : "";
-    linhas.push(`<tr><td><code class="campo">${e.routeHeader}</code>${marcaObrigatorio(true)}</td>
+    const extra = ROTAS_DE_CRON.has(e.path) ? " O cron do GoDeploy usa o `X-Godeploy-Cron` no lugar dele." : "";
+    const obrigatorio = e.routeHeader === "x-usuario-email" ? "condicional" : true;
+    linhas.push(`<tr><td><code class="campo">${e.routeHeader}</code>${marcaObrigatorio(obrigatorio)}</td>
       <td>${inline(DESCRICAO_DO_HEADER[e.routeHeader] + extra)}</td></tr>`);
   }
   const jaListados = new Set(["authorization", "content-type", e.routeHeader ?? ""]);
@@ -163,7 +174,7 @@ function blocoDoEndpoint(e: Endpoint): string {
   </summary>
   <div class="op-corpo">
     <p class="op-descricao">${inline(e.description)}</p>
-    ${mudanca ? `<p class="mudou"><strong>Mudou no GoDeploy.</strong> ${inline(mudanca)}</p>` : ""}
+    ${mudanca ? `<p class="mudou"><strong>${mudanca.titulo}</strong> ${inline(mudanca.texto)}</p>` : ""}
     <h4 class="rotulo">Headers</h4>
     ${tabelaDeHeaders(e)}
     ${consultas.length ? `<h4 class="rotulo">Parâmetros</h4>${tabelaDeParametros(consultas)}` : ""}
@@ -198,6 +209,8 @@ const GUIA: ReadonlyArray<readonly [string, string]> = [
   ["respostas", "Respostas que mudaram"],
   ["igual", "O que não mudou"],
   ["comportamento", "Comportamento"],
+  ["backoffice", "Backoffice"],
+  ["crons", "Crons e cache"],
   ["problemas", "Problemas comuns"],
 ];
 
@@ -278,6 +291,10 @@ const GUIA_HTML = `
         <td>Nenhum: a rota era aberta</td><td>Nenhum header da rota. Basta passar pelo gateway.</td>
       </tr>
       <tr><td><code>/api/v1/*</code> (a fila)</td><td>Já estava no GoDeploy</td><td><code>x-cxhub-fila-token</code>, sem mudança</td></tr>
+      <tr><td><code>/api/backoffice/*</code> (o backoffice)</td><td>Não existia: era o app <code>backoffice-hub</code>, só pelo
+        navegador</td><td><code>x-usuario-email: &lt;e-mail de quem está na tela&gt;</code>, o autor das edições</td></tr>
+      <tr><td><code>/api/interno/rota-dados</code> (a cache)</td><td>Não existia</td>
+        <td><code>x-cxhub-fila-token</code>, ou o cron do GoDeploy</td></tr>
     </tbody>
   </table></div>
   <p class="aviso">O token do Cosmos é o <code>credentials.token</code> que o <code>POST /api/auth/login</code> devolve. O app o
@@ -384,10 +401,95 @@ const GUIA_HTML = `
         150 s, então o cliente precisa esperar pelo menos isso.</td></tr>
       <tr><td>Avisos de erro</td><td>O que ia ao grupo do Google Chat vai a um canal do Slack, com o mesmo texto.</td></tr>
       <tr><td>Fila de registro</td><td>As rotas entregam casos à fila dentro do próprio app, sem chamada de rede.</td></tr>
+      <tr><td>Listas do formulário (rota dados)</td><td>O <code>/api/resend/data</code> e as marcas do bot leem de uma cache no
+        <code>env.DB</code>, renovada a cada 5 min. Com a rota dados fora, servem a última resposta boa por até 24 h (na
+        Vercel, a chamada falhava).</td></tr>
       <tr><td>Log</td><td>Cada chamada às rotas deixa uma linha <code>MÉTODO caminho → status em N ms</code> (sem a query
         string) no log do app no GoDeploy.</td></tr>
     </tbody>
   </table></div>
+</section>
+
+<section class="bloco" id="backoffice">
+  <p class="sobrelinha">Rotas novas</p>
+  <h2>Backoffice de reenvio e reembolso</h2>
+  <p class="intro">O backend do antigo app <code>backoffice-hub</code> mora aqui, em <code>/api/backoffice</code>, com as mesmas
+  regras de negócio. Quem monta a tela (a Central de Tickets) chama pelo servidor, com a <code>gdk_</code> deste app e o
+  <code>x-usuario-email</code> da agente. Os detalhes de cada rota estão no grupo Backoffice, mais abaixo.</p>
+  <ol class="passos">
+    <li><strong>Liste</strong>
+      <span><code>GET /api/backoffice/solicitacoes?tipo=REEMBOLSO&amp;contar=1</code> traz a primeira página (50 linhas) e o
+      total. O <code>proximo</code> leva à página seguinte: guarde a pilha de cursores para voltar.</span></li>
+    <li><strong>Abra o caso</strong>
+      <span><code>GET /api/backoffice/solicitacoes/{chave}</code> traz a linha, as edições guardadas, o cliente e, se a linha se
+      edita, os motivos, o pedido (os itens que viram checkbox) e o catálogo do mimo.</span></li>
+    <li><strong>Edite</strong>
+      <span><code>POST /api/backoffice/solicitacoes/{chave}/edicoes</code>, só com o que mudou: os campos digitados, os itens
+      marcados do pedido e, no reenvio, os dados do cliente.</span></li>
+    <li><strong>Espere o lote</strong>
+      <span>O cron leva a edição à DAG em até 10 min. Até o Metabase mostrá-la, a lista a aplica por cima, com
+      <code>aguardando</code>.</span></li>
+    <li><strong>Desfaça, se precisar</strong>
+      <span><code>DELETE /api/backoffice/edicoes/{id}</code> enquanto a edição estiver pendente, ou para dispensar uma
+      recusada.</span></li>
+  </ol>
+
+  <h3>Quem chama</h3>
+  <div class="tabela-rolavel"><table class="marca">
+    <thead><tr><th>Chamada</th><th>Autor das edições</th><th>Proteção de escrita</th></tr></thead>
+    <tbody>
+      <tr><td>Servidor (a Central), com a <code>gdk_</code> e o <code>x-usuario-email</code></td><td>O
+        <code>x-usuario-email</code></td><td>Não se aplica: a chamada não tem <code>Origin</code></td></tr>
+      <tr><td>Navegador, com o login do GoDeploy</td><td>O e-mail do login</td>
+        <td><code>x-backoffice: 1</code> e a origem do app (senão 403)</td></tr>
+      <tr><td><code>x-usuario-email</code> fora do formato de e-mail</td><td>—</td><td>400, sem cair no dono da chave</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>O que trava a edição</h3>
+  <p class="intro">Uma linha só se edita quando todas valem; senão, <code>422 NOT_EDITABLE</code> com o motivo em
+  <code>bloqueio</code>. As regras olham a linha já com as edições guardadas por cima: marcar Cancelado trava na hora.</p>
+  <ul class="lista">
+    <li>É caso do CX Hub (<code>chave_unica</code> = <code>cxhub|&lt;id&gt;</code>): o histórico das planilhas não se edita.</li>
+    <li>É reenvio ou reembolso, e foi solicitado há até 30 dias.</li>
+    <li>Não está Cancelado e, se é reembolso, não está Realizado.</li>
+    <li>Se é reenvio, o Cosmos ainda não o registrou (<code>reenvio_no_cosmos</code>).</li>
+  </ul>
+
+  <h3>O que se edita</h3>
+  <div class="tabela-rolavel"><table class="marca">
+    <thead><tr><th>Campo</th><th>Reenvio</th><th>Reembolso</th><th>Como</th></tr></thead>
+    <tbody>
+      <tr><td><code>status_execucao</code></td><td>sim</td><td>sim</td><td>Pendente, Realizado ou Cancelado</td></tr>
+      <tr><td><code>data_execucao</code></td><td>sim</td><td>sim</td><td>aaaa-mm-dd, até hoje</td></tr>
+      <tr><td><code>responsavel_execucao</code>, <code>cod_nfd</code></td><td>sim</td><td>sim</td><td>Texto</td></tr>
+      <tr><td><code>motivo</code></td><td>sim</td><td>sim</td><td>Um da lista da rota dados</td></tr>
+      <tr><td><code>skus</code>, <code>produtos_reenvio</code></td><td>sim</td><td>—</td>
+        <td>Itens marcados do pedido (do kit, os itens); no SKU do reenvio, também o mimo do catálogo, de 1 a 10</td></tr>
+      <tr><td><code>escopo_reembolso</code></td><td>—</td><td>sim</td><td>Itens marcados do pedido e o frete</td></tr>
+      <tr><td><code>valor</code></td><td>—</td><td>sim</td>
+        <td>Sai dos itens marcados, até o total do pedido; digitado só com exceção à política</td></tr>
+      <tr><td><code>uf</code></td><td>sim</td><td>—</td><td>UF de destino</td></tr>
+      <tr><td>Cliente (<code>nome</code> a <code>cidade</code>)</td><td>sim</td><td>—</td>
+        <td>Fica só no app: o Metabase não guarda dado pessoal</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="bloco" id="crons">
+  <p class="sobrelinha">Rotinas</p>
+  <h2>Crons e cache</h2>
+  <div class="tabela-rolavel"><table class="marca">
+    <thead><tr><th>Rota</th><th>Agenda</th><th>O que faz</th></tr></thead>
+    <tbody>
+      <tr><td><code>POST /api/v1/interno/lote</code></td><td>A cada 20 min</td><td>Manda os casos e as atualizações da fila à DAG</td></tr>
+      <tr><td><code>POST /api/backoffice/interno/lote</code></td><td>A cada 10 min</td><td>Manda as edições do backoffice à DAG</td></tr>
+      <tr><td><code>POST /api/interno/rota-dados</code></td><td>A cada 5 min</td><td>Renova a cache das listas da rota dados</td></tr>
+    </tbody>
+  </table></div>
+  <p class="aviso">A cache da rota dados vale por 15 min: nesse tempo, o formulário, o bot e o backoffice nem chamam a rota
+  dados. Mais velha, a leitura busca ao vivo e guarda; com a rota dados fora, serve a última resposta boa por até 24 h. Cada
+  rota de cron aceita no máximo uma chamada sem assinatura a cada 30 s, com uma trava por rota.</p>
 </section>
 
 <section class="bloco" id="problemas">
@@ -614,8 +716,11 @@ const ICONE =
   "fill='%232659a5'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23d7d900'/%3E%3C/svg%3E";
 
 function montarPagina(): string {
-  const rotasDoHub = ENDPOINTS.filter((e) => !e.path.startsWith("/api/v1/")).length;
-  const daFila = ENDPOINTS.length - rotasDoHub;
+  const conta = (prefixo: string) => ENDPOINTS.filter((e) => e.path.startsWith(prefixo)).length;
+  const daFila = conta("/api/v1/");
+  const doBackoffice = conta("/api/backoffice/");
+  const internas = conta("/api/interno/");
+  const rotasDoHub = ENDPOINTS.length - daFila - doBackoffice - internas;
   const nav = navegacao();
   return `<!doctype html>
 <html lang="pt-BR">
@@ -642,11 +747,12 @@ function montarPagina(): string {
     <p class="sobrelinha">CX Hub · API no GoDeploy</p>
     <h1>Documentação da API</h1>
     <p class="lead">O backend do CX Hub saiu da Vercel e foi para o GoDeploy. Os caminhos, os métodos e os corpos são os
-    mesmos; mudam o endereço, os headers de autenticação e algumas respostas de erro. Abaixo, o guia da migração e cada
-    endpoint com a requisição e as respostas.</p>
+    mesmos; mudam o endereço, os headers de autenticação e algumas respostas de erro. Há também rotas novas, só daqui: o
+    backoffice de reenvio e reembolso e a cache da rota dados. Abaixo, o guia e cada endpoint com a requisição e as
+    respostas.</p>
     <div class="pilulas">
       <span class="pilula pilula-lima"><code>https://cx-hub.devgogroup.com</code></span>
-      <span class="pilula">${rotasDoHub} rotas do CX Hub + ${daFila} da fila</span>
+      <span class="pilula">${rotasDoHub} rotas do CX Hub · ${daFila} da fila · ${doBackoffice} do backoffice · ${internas} ${internas === 1 ? "interna" : "internas"}</span>
       <span class="pilula">Código do CX Hub: 8a1b1a9</span>
     </div>
   </header>

@@ -22,7 +22,7 @@ export type Resposta = {
   example?: unknown;
 };
 
-export type HeaderDaRota = "x-cosmos-token" | "x-bot-secret" | "x-cxhub-fila-token";
+export type HeaderDaRota = "x-cosmos-token" | "x-bot-secret" | "x-cxhub-fila-token" | "x-usuario-email";
 
 export type Endpoint = {
   method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -51,6 +51,8 @@ export const GRUPOS: ReadonlyArray<{ tag: string; descricao: string }> = [
   { tag: "Logística", descricao: "A abertura do ticket de logística." },
   { tag: "Consultas", descricao: "A lista de solicitações e a situação do registro de cada caso." },
   { tag: "Fila", descricao: "A fila de registro (`/api/v1`), que manda os casos em lote ao Airflow a cada 20 min. Não mudou na migração." },
+  { tag: "Backoffice", descricao: "O backoffice de reenvio e reembolso, que era o app `backoffice-hub`: a lista da gold + raw por cursor, o caso, as edições com as regras de lá e o lote delas para a mesma DAG. Rotas novas, só no GoDeploy. Toda chamada leva o `x-usuario-email` de quem está na tela." },
+  { tag: "Cache da rota dados", descricao: "A rodada do cron que renova as listas da rota dados guardadas no `env.DB`. Rota nova, só no GoDeploy." },
 ];
 
 export const ENDPOINTS: Endpoint[] = [
@@ -9314,6 +9316,1157 @@ export const ENDPOINTS: Endpoint[] = [
       "testes/aviso.test.ts",
       "testes/ambiente.ts",
       "cx-hub (origin/main): docs/fila-cxhub.md"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/backoffice/eu",
+    "tag": "Backoffice",
+    "summary": "Quem chama, a janela de edição e o tamanho da página",
+    "description": "Devolve o e-mail de quem chama (o `x-usuario-email`, ou o e-mail que o gateway põe no login do navegador), o nome tirado do e-mail (a sugestão para o responsável pela execução), a janela de edição em dias e o tamanho da página da lista. É a rota mais leve do backoffice: serve para conferir a chave e o autor antes de montar a tela.",
+    "routeHeader": "x-usuario-email",
+    "params": [],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "Quem chama foi identificado.",
+        "fields": [
+          {
+            "name": "email",
+            "type": "string",
+            "required": true,
+            "description": "O autor das edições, em minúsculas."
+          },
+          {
+            "name": "nome",
+            "type": "string",
+            "required": true,
+            "description": "O nome tirado do e-mail (`ana.silva@...` vira `Ana Silva`)."
+          },
+          {
+            "name": "janelaDias",
+            "type": "number",
+            "required": true,
+            "description": "Só se edita solicitação feita há até esse número de dias (30)."
+          },
+          {
+            "name": "tamanhoPagina",
+            "type": "number",
+            "required": true,
+            "description": "Linhas por página da lista (50)."
+          }
+        ],
+        "example": {
+          "email": "ana.silva@exemplo.com",
+          "nome": "Ana Silva",
+          "janelaDias": 30,
+          "tamanhoPagina": 50
+        }
+      },
+      {
+        "status": 400,
+        "description": "O `x-usuario-email` veio fora do formato de e-mail. A chamada é recusada para não cair no dono da chave em silêncio.",
+        "example": {
+          "code": "INVALID_REQUEST",
+          "message": "x-usuario-email precisa ser um e-mail."
+        }
+      },
+      {
+        "status": 401,
+        "description": "Nem `x-usuario-email` nem o login do navegador. Vale para todas as rotas do backoffice.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Sem o usuário: mande x-usuario-email (chamada de servidor) ou entre pelo login do GoDeploy."
+        }
+      }
+    ],
+    "notes": [],
+    "sources": [
+      "backoffice/servidor/rotas.ts",
+      "backoffice/servidor/acesso.ts",
+      "backoffice/shared/campos.ts"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/backoffice/solicitacoes",
+    "tag": "Backoffice",
+    "summary": "Uma página da lista de reenvios ou reembolsos (gold + raw), por cursor",
+    "description": "Lê pelo Metabase a `gold.fct_reenvio_reembolso_gobeaute`, com os casos do CX Hub que a raw já mudou e a gold ainda não mostra remontados da raw com as mesmas regras do dbt. A ordem é `data_solicitacao` desc, `chave_unica` desc, 50 por página. As edições guardadas no app que o Metabase ainda não mostra vêm aplicadas por cima, com `aguardando`. Histórico e CX Hub juntos.",
+    "routeHeader": "x-usuario-email",
+    "params": [
+      {
+        "name": "tipo",
+        "in": "query",
+        "type": "string",
+        "required": true,
+        "description": "Tipo da solicitação, sem diferença de maiúsculas.",
+        "enum": [
+          "REENVIO",
+          "REEMBOLSO"
+        ]
+      },
+      {
+        "name": "marca",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "A sigla da marca na gold: LE Lescent, KO Kokeshi, BS By Samia, AU Auá, BB Barbour's, RT Rituária, AP Ápice, YE Yenzah, DV Denavita, GB Gobeaute.",
+        "enum": [
+          "LE",
+          "KO",
+          "BS",
+          "AU",
+          "BB",
+          "RT",
+          "AP",
+          "YE",
+          "DV",
+          "GB"
+        ]
+      },
+      {
+        "name": "status",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "Status da execução; `sem_status` são as linhas ainda sem status.",
+        "enum": [
+          "sem_status",
+          "Pendente",
+          "Realizado",
+          "Cancelado"
+        ]
+      },
+      {
+        "name": "busca",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "Até 100 caracteres, procurados sem diferenciar maiúsculas em pedido, NF, chave da NF, atendimento, responsáveis, SKUs, NFD, motivo e chave da linha. `%` e `_` valem como texto."
+      },
+      {
+        "name": "cursor",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "O `proximo` da página anterior (opaco). Sem ele, vem a primeira página."
+      },
+      {
+        "name": "contar",
+        "in": "query",
+        "type": "string",
+        "required": false,
+        "description": "`1` traz o `total` do filtro. Use na primeira página; nas seguintes, a tela já sabe o total.",
+        "enum": [
+          "1"
+        ]
+      }
+    ],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "A página. Cada linha tem as 38 colunas da gold (lista nas observações) e os campos abaixo.",
+        "fields": [
+          {
+            "name": "itens[]",
+            "type": "array",
+            "required": true,
+            "description": "As linhas da página, até 50."
+          },
+          {
+            "name": "itens[].chave_unica",
+            "type": "string",
+            "required": true,
+            "description": "O identificador da linha: `cxhub|<id_solicitacao>` no caso do CX Hub; outro formato no histórico."
+          },
+          {
+            "name": "itens[].sistema_origem",
+            "type": "string",
+            "required": true,
+            "description": "`CX Hub`, ou a origem do histórico (planilhas e Supabase)."
+          },
+          {
+            "name": "itens[].editavel",
+            "type": "boolean",
+            "required": true,
+            "description": "Se a linha se edita agora, já com as edições guardadas por cima."
+          },
+          {
+            "name": "itens[].bloqueio",
+            "type": "string | null",
+            "required": true,
+            "description": "Por que a linha não se edita (null quando se edita)."
+          },
+          {
+            "name": "itens[].aguardando",
+            "type": "object | null",
+            "required": true,
+            "description": "As edições guardadas que o Metabase ainda não mostra: `situacao` (pendente, enviado, gravado), `autor`, `atualizadoEm` e `campos`."
+          },
+          {
+            "name": "itens[].recusada",
+            "type": "object | null",
+            "required": true,
+            "description": "A última edição que a DAG recusou, sem outra mais nova por cima: `id`, `erro`, `autor`, `atualizadoEm`."
+          },
+          {
+            "name": "itens[].reenvio_no_cosmos",
+            "type": "boolean",
+            "required": true,
+            "description": "O Cosmos já registrou o reenvio (o CX Hub o criou pela automação): a linha não se edita."
+          },
+          {
+            "name": "proximo",
+            "type": "string | null",
+            "required": true,
+            "description": "O cursor da página seguinte, ou null na última."
+          },
+          {
+            "name": "total",
+            "type": "number | null",
+            "required": true,
+            "description": "Quantas linhas o filtro tem; só com `contar=1`."
+          }
+        ],
+        "example": {
+          "itens": [
+            {
+              "chave_unica": "cxhub|3f9a2c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c",
+              "sistema_origem": "CX Hub",
+              "tipo": "REEMBOLSO",
+              "marca": "Lescent",
+              "sigla": "LE",
+              "data_solicitacao": "2026-11-10T14:05:03.000000",
+              "numero_pedido": "SH9000105LC",
+              "valor_nf_tratado": 59.9,
+              "escopo_reembolso": "LC01001 - 1",
+              "motivo": "Produto avariado",
+              "excecao_politica": false,
+              "status_execucao": null,
+              "data_execucao": null,
+              "responsavel_execucao": null,
+              "cod_nfd": null,
+              "reenvio_no_cosmos": false,
+              "editavel": true,
+              "bloqueio": null,
+              "aguardando": {
+                "situacao": "pendente",
+                "autor": "ana.silva@exemplo.com",
+                "atualizadoEm": "2026-11-11T13:20:00.000Z",
+                "campos": [
+                  "status_execucao",
+                  "data_execucao"
+                ]
+              },
+              "recusada": null
+            }
+          ],
+          "proximo": "WyIyMDI2LTExLTEwVDEwOjAwOjAwLjAwMDAwMCIsImN4aHVifGFiYyJd",
+          "total": 128
+        }
+      },
+      {
+        "status": 400,
+        "description": "Filtro fora do esperado. Outras mensagens: `Marca desconhecida: X.`, `Status desconhecido: X.`, `Busca com mais de 100 caracteres.` e `Cursor inválido: volte para a primeira página.`",
+        "example": {
+          "code": "INVALID_REQUEST",
+          "message": "tipo precisa ser REENVIO ou REEMBOLSO."
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem quem chama (ver `GET /api/backoffice/eu`).",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Sem o usuário: mande x-usuario-email (chamada de servidor) ou entre pelo login do GoDeploy."
+        }
+      },
+      {
+        "status": 502,
+        "description": "O Metabase recusou a consulta (chave, permissão ou SQL): não melhora repetindo.",
+        "example": {
+          "code": "METABASE_ERROR",
+          "message": "O Metabase não respondeu como esperado (HTTP 403). Tente de novo em instantes."
+        }
+      },
+      {
+        "status": 503,
+        "description": "O Metabase não respondeu a tempo ou está fora (`METABASE_ERROR`), o app está sem a configuração do Metabase (`UNAVAILABLE`), ou o `env.DB` falhou. Repetir é seguro.",
+        "example": {
+          "code": "UNAVAILABLE",
+          "message": "O app está sem a configuração do Metabase (METABASE_URL, METABASE_API_KEY e METABASE_DATABASE_ID)."
+        }
+      }
+    ],
+    "notes": [
+      "As colunas de cada linha: chave_unica, sistema_origem, tipo, marca, sigla, data_solicitacao, numero_pedido, cod_nf_original, chave_nf, valor_nf_tratado, sku_produto_problema, produtos_reenvio, escopo_reembolso, motivo, area, uf_origem, uf_destino, status_ocorrencia, transportadora, transportadora_reenvio, ticket_transportadora, lote, erp, parcial_completo, pedido_devolvido_operacao, responsavel_atendimento, origem_solicitacao, id_atendimento, tipo_solicitacao, excecao_politica, status_execucao, data_execucao, responsavel_execucao, cod_nfd, chave_nfd, prazo_execucao, data_pedido, carregado_em.",
+      "Datas vêm como texto: `data_solicitacao` em hora de São Paulo, sem fuso; `data_execucao`, `prazo_execucao` e `data_pedido` como aaaa-mm-dd; `carregado_em` em UTC.",
+      "A paginação é por cursor porque o Metabase não pagina SQL nativo, e OFFSET num filtro que muda pula ou repete linha. Para o botão Anterior, guarde a pilha de cursores.",
+      "Um caso registrado no CX Hub há menos de ~20 min pode ainda não aparecer: ele está na fila, antes da raw."
+    ],
+    "sources": [
+      "backoffice/servidor/rotas.ts",
+      "backoffice/servidor/gold.ts",
+      "backoffice/servidor/raw.ts",
+      "backoffice/shared/tipos.ts",
+      "backoffice/shared/marcas.ts"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/backoffice/solicitacoes/{chave}",
+    "tag": "Backoffice",
+    "summary": "Um caso: a linha, as edições guardadas, o cliente e o que a edição precisa",
+    "description": "Devolve a linha (com as edições por cima), todas as edições guardadas no app para ela e, no reenvio, os dados do cliente. Se a linha se edita, traz também os motivos (da rota dados), o pedido no Data Mart (os itens que viram checkbox) e, no reenvio, o catálogo da marca para o mimo. O que não veio traz o porquê em `motivosErro`, `pedidoErro` ou `catalogoErro`, sem impedir o resto.",
+    "routeHeader": "x-usuario-email",
+    "params": [
+      {
+        "name": "chave",
+        "in": "path",
+        "type": "string",
+        "required": true,
+        "description": "A `chave_unica` da linha, codificada na URL (`cxhub%7C<id_solicitacao>`)."
+      }
+    ],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "O caso.",
+        "fields": [
+          {
+            "name": "caso",
+            "type": "object",
+            "required": true,
+            "description": "A linha, no formato de um item da lista (com `editavel`, `bloqueio`, `aguardando` e `recusada`)."
+          },
+          {
+            "name": "edicoes[]",
+            "type": "array",
+            "required": true,
+            "description": "As edições guardadas, na ordem em que foram feitas: `id`, `campos`, `autor`, `atualizadoEm`, `situacao` (pendente, enviado, gravado, recusado) e `erro`."
+          },
+          {
+            "name": "cliente",
+            "type": "object | null",
+            "required": true,
+            "description": "Só no reenvio: `nome`, `telefone`, `cep`, `logradouro`, `numero`, `complemento`, `bairro`, `cidade`, `atualizadoEm` e `autor`. null se nunca foi guardado."
+          },
+          {
+            "name": "motivos",
+            "type": "string[] | null",
+            "required": true,
+            "description": "A lista de motivos do tipo do caso (só no caso que se edita)."
+          },
+          {
+            "name": "motivosErro",
+            "type": "string | null",
+            "required": true,
+            "description": "Por que os motivos não vieram."
+          },
+          {
+            "name": "pedido",
+            "type": "object | null",
+            "required": true,
+            "description": "O pedido da Shopify no Data Mart (só no caso que se edita): `numero`, `total`, `frete`, `desconto` e `itens[]`."
+          },
+          {
+            "name": "pedido.itens[]",
+            "type": "array",
+            "required": false,
+            "description": "Cada linha: `id`, `sku`, `nome`, `quantidade`, `preco` (unitário), `liquidoCentavos` (a linha depois do desconto rateado) e `componentes[]` (os itens do kit: `sku`, `nome`, `quantidade`, `peso`)."
+          },
+          {
+            "name": "pedidoErro",
+            "type": "string | null",
+            "required": true,
+            "description": "Por que o pedido não veio (a Gobeaute, por exemplo, não está no Data Mart)."
+          },
+          {
+            "name": "catalogo",
+            "type": "array | null",
+            "required": true,
+            "description": "Só no reenvio que se edita: os produtos da marca para o mimo, `sku`, `nome`, `preco` e `brinde`, com os brindes primeiro."
+          },
+          {
+            "name": "catalogoErro",
+            "type": "string | null",
+            "required": true,
+            "description": "Por que o catálogo não veio."
+          }
+        ],
+        "example": {
+          "caso": {
+            "chave_unica": "cxhub|3f9a2c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c",
+            "tipo": "REEMBOLSO",
+            "sigla": "LE",
+            "numero_pedido": "SH9000105LC",
+            "valor_nf_tratado": 59.9,
+            "excecao_politica": false,
+            "editavel": true,
+            "bloqueio": null,
+            "aguardando": null,
+            "recusada": null
+          },
+          "edicoes": [],
+          "cliente": null,
+          "motivos": [
+            "Extravio",
+            "Produto avariado"
+          ],
+          "motivosErro": null,
+          "pedido": {
+            "numero": "9000105",
+            "total": 74.9,
+            "frete": 15,
+            "desconto": 0,
+            "itens": [
+              {
+                "id": "15873249210531",
+                "sku": "LC01001",
+                "nome": "Sérum Facial",
+                "quantidade": 1,
+                "preco": 59.9,
+                "liquidoCentavos": 5990,
+                "componentes": []
+              }
+            ]
+          },
+          "pedidoErro": null,
+          "catalogo": null,
+          "catalogoErro": null
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem quem chama.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Sem o usuário: mande x-usuario-email (chamada de servidor) ou entre pelo login do GoDeploy."
+        }
+      },
+      {
+        "status": 404,
+        "description": "Nenhuma linha com essa chave na gold nem na raw.",
+        "example": {
+          "code": "NOT_FOUND",
+          "message": "Solicitação não encontrada no Metabase."
+        }
+      },
+      {
+        "status": 502,
+        "description": "O Metabase recusou a consulta.",
+        "example": {
+          "code": "METABASE_ERROR",
+          "message": "O Metabase não respondeu como esperado (HTTP 403). Tente de novo em instantes."
+        }
+      },
+      {
+        "status": 503,
+        "description": "O Metabase fora, sem a configuração dele ou o `env.DB` falhou. Repetir é seguro.",
+        "example": {
+          "code": "METABASE_ERROR",
+          "message": "O Metabase não respondeu como esperado (tempo esgotado). Tente de novo em instantes."
+        }
+      }
+    ],
+    "notes": [
+      "No kit, o que se marca é sempre o componente, nunca o kit: o `id` do componente para a edição é `<id da linha>.<n>` (1, 2...), na ordem de `componentes[]`."
+    ],
+    "sources": [
+      "backoffice/servidor/rotas.ts",
+      "backoffice/servidor/edicoes.ts",
+      "backoffice/servidor/pedido.ts",
+      "backoffice/servidor/catalogo.ts",
+      "backoffice/shared/itens.ts"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/backoffice/solicitacoes/{chave}/edicoes",
+    "tag": "Backoffice",
+    "summary": "Guarda uma edição (vai à DAG no próximo lote) e/ou os dados do cliente",
+    "description": "O servidor confere tudo de novo e guarda como edição pendente só o que mudou em relação ao que a linha mostra (Metabase + edições guardadas). O cron leva a edição à DAG `gobeaute_reenvio_reembolso_etl` em até 10 min; até o Metabase mostrá-la, a lista a aplica por cima (`aguardando`). Os dados do cliente, só no reenvio, ficam no app e nunca vão à DAG.",
+    "routeHeader": "x-usuario-email",
+    "params": [
+      {
+        "name": "chave",
+        "in": "path",
+        "type": "string",
+        "required": true,
+        "description": "A `chave_unica` da linha, codificada na URL."
+      }
+    ],
+    "requestBody": {
+      "contentType": "application/json",
+      "fields": [
+        {
+          "name": "campos",
+          "type": "object",
+          "required": false,
+          "description": "Os campos que se digitam, pelo nome do contrato da DAG. Só os do tipo do caso; campo fora da lista dá 400."
+        },
+        {
+          "name": "campos.status_execucao",
+          "type": "string",
+          "required": false,
+          "description": "Status da execução.",
+          "enum": [
+            "Pendente",
+            "Realizado",
+            "Cancelado"
+          ]
+        },
+        {
+          "name": "campos.data_execucao",
+          "type": "string",
+          "required": false,
+          "description": "aaaa-mm-dd, não depois de hoje em São Paulo; vazio limpa."
+        },
+        {
+          "name": "campos.responsavel_execucao",
+          "type": "string",
+          "required": false,
+          "description": "Até 120 caracteres."
+        },
+        {
+          "name": "campos.cod_nfd",
+          "type": "string",
+          "required": false,
+          "description": "Até 60 caracteres."
+        },
+        {
+          "name": "campos.motivo",
+          "type": "string",
+          "required": false,
+          "description": "Um da lista `motivos` do caso (a rota dados confere de novo)."
+        },
+        {
+          "name": "campos.uf",
+          "type": "string",
+          "required": false,
+          "description": "Só no reenvio: a UF de destino (sigla); vazio limpa."
+        },
+        {
+          "name": "campos.valor",
+          "type": "number | string",
+          "required": "condicional",
+          "description": "Só no reembolso com exceção à política (`excecao_politica`): número ou texto no formato 1.234,56, maior que zero e até o total do pedido. Sem a exceção, o valor sai dos itens marcados no escopo."
+        },
+        {
+          "name": "itens",
+          "type": "object",
+          "required": false,
+          "description": "Os itens do pedido marcados, por campo: `escopo_reembolso` no reembolso; `skus` e `produtos_reenvio` no reenvio. Esses campos nunca se digitam."
+        },
+        {
+          "name": "itens.<campo>.itens[]",
+          "type": "array",
+          "required": true,
+          "description": "Os itens marcados, até 200: `{ id, quantidade }`. O `id` é o do item do pedido; no kit, o do componente, `<id da linha>.<n>`. A quantidade vai de 1 à comprada; no `skus`, não conta."
+        },
+        {
+          "name": "itens.<campo>.frete",
+          "type": "boolean",
+          "required": false,
+          "description": "Só no `escopo_reembolso`, e só se o pedido cobrou frete."
+        },
+        {
+          "name": "itens.<campo>.mimos[]",
+          "type": "array",
+          "required": false,
+          "description": "Só no `produtos_reenvio`: `{ sku, quantidade }` do catálogo da marca, de 1 a 10 unidades, até 50 mimos. O mimo já registrado pode ficar mesmo fora do catálogo."
+        },
+        {
+          "name": "cliente",
+          "type": "object",
+          "required": false,
+          "description": "Só no reenvio: `nome`, `telefone`, `cep` (8 dígitos), `logradouro`, `numero`, `complemento`, `bairro` e `cidade`, todos texto. Ficam guardados no app."
+        }
+      ],
+      "example": {
+        "campos": {
+          "status_execucao": "Realizado",
+          "data_execucao": "2026-11-10",
+          "responsavel_execucao": "Ana Silva",
+          "motivo": "Produto avariado"
+        },
+        "itens": {
+          "escopo_reembolso": {
+            "itens": [
+              {
+                "id": "15873249210531",
+                "quantidade": 1
+              }
+            ],
+            "frete": true
+          }
+        }
+      }
+    },
+    "responses": [
+      {
+        "status": 200,
+        "description": "Guardado (`code: OK`), com o detalhe do caso atualizado, no formato do `GET` do caso. Sem nada diferente do que a linha já mostra, `code: SEM_MUDANCA` (`Nada mudou.`), sem guardar nada.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "`OK` ou `SEM_MUDANCA`.",
+            "enum": [
+              "OK",
+              "SEM_MUDANCA"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "O que foi feito: a edição a caminho do Metabase e/ou os dados do cliente guardados."
+          },
+          {
+            "name": "caso, edicoes, cliente, motivos, pedido, catalogo…",
+            "type": "object",
+            "required": true,
+            "description": "O mesmo detalhe do `GET /api/backoffice/solicitacoes/{chave}`, depois de guardar."
+          }
+        ],
+        "example": {
+          "code": "OK",
+          "message": "Salvo: a edição chega ao Metabase no próximo lote, em até 10 min.",
+          "caso": {
+            "chave_unica": "cxhub|3f9a2c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c",
+            "status_execucao": "Realizado",
+            "valor_nf_tratado": 74.9,
+            "escopo_reembolso": "LC01001 - 1;Frete",
+            "editavel": false,
+            "bloqueio": "Reembolso já efetuado (status Realizado): não se edita mais.",
+            "aguardando": {
+              "situacao": "pendente",
+              "autor": "ana.silva@exemplo.com",
+              "atualizadoEm": "2026-11-11T13:20:00.000Z",
+              "campos": [
+                "status_execucao",
+                "data_execucao",
+                "responsavel_execucao",
+                "motivo",
+                "escopo_reembolso",
+                "valor"
+              ]
+            },
+            "recusada": null
+          },
+          "edicoes": [
+            {
+              "id": "6f1c0e2a-1111-4222-8333-444455556666",
+              "campos": {
+                "status_execucao": "Realizado",
+                "data_execucao": "2026-11-10",
+                "responsavel_execucao": "Ana Silva",
+                "motivo": "Produto avariado",
+                "escopo_reembolso": "LC01001 - 1;Frete",
+                "valor": 74.9
+              },
+              "autor": "ana.silva@exemplo.com",
+              "atualizadoEm": "2026-11-11T13:20:00.000Z",
+              "situacao": "pendente",
+              "erro": null
+            }
+          ]
+        }
+      },
+      {
+        "status": 400,
+        "description": "Algo do corpo não confere. Outras mensagens: o campo que não se edita no tipo; o valor digitado sem exceção à política; o valor acima do total do pedido; o item que não é do pedido (ou o SKU do kit); o mimo fora do catálogo; os dados do cliente num reembolso; o CEP sem 8 dígitos; o JSON inválido; o corpo acima de 16 KB.",
+        "example": {
+          "code": "INVALID_REQUEST",
+          "message": "Motivo fora da lista da rota de dados."
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem quem chama.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Sem o usuário: mande x-usuario-email (chamada de servidor) ou entre pelo login do GoDeploy."
+        }
+      },
+      {
+        "status": 403,
+        "description": "Chamada de navegador (com `Origin`) sem `x-backoffice: 1` ou de outra origem. A chamada de servidor, sem `Origin`, não passa por aqui.",
+        "example": {
+          "code": "FORBIDDEN",
+          "message": "Cabeçalho x-backoffice ausente."
+        }
+      },
+      {
+        "status": 404,
+        "description": "A linha não existe no Metabase.",
+        "example": {
+          "code": "NOT_FOUND",
+          "message": "Solicitação não encontrada no Metabase."
+        }
+      },
+      {
+        "status": 422,
+        "description": "A linha não se edita: a mensagem é o `bloqueio` (histórico, mais de 30 dias, cancelado, reembolso realizado, reenvio no Cosmos). Também quando os itens ou o valor dependem do pedido e ele não está no Data Mart.",
+        "example": {
+          "code": "NOT_EDITABLE",
+          "message": "Solicitação com mais de 30 dias: só leitura."
+        }
+      },
+      {
+        "status": 503,
+        "description": "Não deu para conferir o motivo (rota dados) ou o mimo (catálogo), o Metabase está fora, ou o `env.DB` falhou. Nada foi guardado; repetir é seguro.",
+        "example": {
+          "code": "UNAVAILABLE",
+          "message": "Não deu para conferir o motivo. Lista de motivos indisponível (a rota de dados não respondeu a tempo)."
+        }
+      }
+    ],
+    "notes": [
+      "Mande só o que mudou: o que é igual ao que a linha já mostra é ignorado. A mesma seleção de itens que o texto registrado já representa também não muda nada.",
+      "O que trava a edição: caso do histórico; não reenvio nem reembolso; mais de 30 dias; status Cancelado; no reembolso, status Realizado; no reenvio, o Cosmos já registrou. Marcar Cancelado (ou Realizado no reembolso) trava a linha na hora; a edição ainda pendente se desfaz com `DELETE /api/backoffice/edicoes/{id}`.",
+      "Reembolso: os itens marcados no escopo dão o valor (preço × quantidade menos a parte no desconto do pedido, mais o frete), nunca acima do total do pedido. Com exceção à política, o valor é digitado e os itens mudam só o escopo.",
+      "Reenvio das marcas com Cosmos: quando há o pedido `-R-n` no Cosmos, o dbt tira dele o status e a data de execução, e isso prevalece sobre a edição."
+    ],
+    "sources": [
+      "backoffice/servidor/edicoes.ts",
+      "backoffice/shared/campos.ts",
+      "backoffice/shared/itens.ts",
+      "backoffice/servidor/acesso.ts"
+    ]
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/backoffice/edicoes/{id}",
+    "tag": "Backoffice",
+    "summary": "Desfaz uma edição pendente ou dispensa uma recusada",
+    "description": "Apaga do app a edição que ainda não foi a um lote (pendente) ou a que a DAG recusou. A enviada ou gravada não volta, porque já está a caminho do Metabase: para mudar, faça outra edição por cima.",
+    "routeHeader": "x-usuario-email",
+    "params": [
+      {
+        "name": "id",
+        "in": "path",
+        "type": "string",
+        "required": true,
+        "description": "O `id` da edição (de `edicoes[]` no `GET` do caso)."
+      }
+    ],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "Descartada.",
+        "example": {
+          "code": "OK",
+          "message": "Edição descartada."
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem quem chama.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Sem o usuário: mande x-usuario-email (chamada de servidor) ou entre pelo login do GoDeploy."
+        }
+      },
+      {
+        "status": 403,
+        "description": "Chamada de navegador sem a proteção de escrita.",
+        "example": {
+          "code": "FORBIDDEN",
+          "message": "Origem da requisição não permitida."
+        }
+      },
+      {
+        "status": 404,
+        "description": "A edição não existe mais (talvez já tenha chegado ao Metabase e saído do app).",
+        "example": {
+          "code": "NOT_FOUND",
+          "message": "Edição não encontrada (talvez já tenha chegado ao Metabase)."
+        }
+      },
+      {
+        "status": 409,
+        "description": "A edição já foi enviada à DAG.",
+        "example": {
+          "code": "CONFLICT",
+          "message": "A edição já foi enviada ao Metabase e não pode ser desfeita. Faça outra edição por cima."
+        }
+      }
+    ],
+    "notes": [],
+    "sources": [
+      "backoffice/servidor/edicoes.ts"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/backoffice/estado",
+    "tag": "Backoffice",
+    "summary": "Diagnóstico das edições e dos lotes",
+    "description": "Quantas edições há em cada situação, o lote em andamento, os 5 últimos lotes terminados, o resumo da última rodada do cron e a configuração (sem valor de segredo).",
+    "routeHeader": "x-usuario-email",
+    "params": [],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "O diagnóstico.",
+        "fields": [
+          {
+            "name": "edicoes",
+            "type": "object",
+            "required": true,
+            "description": "Contagem por situação: `pendente`, `enviado`, `gravado`, `recusado`."
+          },
+          {
+            "name": "loteEmAndamento",
+            "type": "object | null",
+            "required": true,
+            "description": "O lote montando ou disparado: `id`, `situacao`, `itens`, `clears`, `disparado_em`, `criado_em`."
+          },
+          {
+            "name": "ultimosLotes[]",
+            "type": "array",
+            "required": true,
+            "description": "Os 5 últimos terminados: `id`, `desfecho`, `itens`, `gravados`, `recusados`, `erro`, `terminado_em`."
+          },
+          {
+            "name": "ultimaRodada",
+            "type": "object | null",
+            "required": true,
+            "description": "O resumo da última rodada (o mesmo corpo do `POST /api/backoffice/interno/lote`)."
+          },
+          {
+            "name": "configuracao",
+            "type": "object",
+            "required": true,
+            "description": "`metabase`, `airflow` e `slack` (configurados ou não) e `problemas` (o que falta, sem valor)."
+          }
+        ],
+        "example": {
+          "edicoes": {
+            "pendente": 1,
+            "enviado": 0,
+            "gravado": 2,
+            "recusado": 0
+          },
+          "loteEmAndamento": null,
+          "ultimosLotes": [
+            {
+              "id": "cxhub_backoffice__20261111T221000",
+              "desfecho": "concluido",
+              "itens": 2,
+              "gravados": 2,
+              "recusados": 0,
+              "erro": null,
+              "terminado_em": "2026-11-11T22:20:01.512Z"
+            }
+          ],
+          "ultimaRodada": {
+            "em": "2026-11-11T22:20:00.401Z",
+            "andamento": {
+              "lote": "cxhub_backoffice__20261111T221000",
+              "livre": true,
+              "estado": "success",
+              "gravados": 2,
+              "recusados": 0
+            },
+            "conferencia": {
+              "estado": "conferido",
+              "naRaw": 0,
+              "atrasadas": 0,
+              "esperando": 2
+            },
+            "disparo": {
+              "estado": "disparado",
+              "lote": "cxhub_backoffice__20261111T222000",
+              "edicoes": 1
+            },
+            "limpeza": false,
+            "avisos": 0
+          },
+          "configuracao": {
+            "metabase": true,
+            "airflow": true,
+            "slack": false,
+            "problemas": [
+              "SLACK_ALERT_WEBHOOK_URL vazio: os avisos só vão para o log"
+            ]
+          }
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem quem chama.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Sem o usuário: mande x-usuario-email (chamada de servidor) ou entre pelo login do GoDeploy."
+        }
+      }
+    ],
+    "notes": [],
+    "sources": [
+      "backoffice/servidor/rotas.ts",
+      "backoffice/servidor/lote.ts"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/backoffice/interno/lote",
+    "tag": "Backoffice",
+    "summary": "A rodada do lote das edições (o cron, a cada 10 min)",
+    "description": "Acompanha o lote em andamento (um por vez) e aplica o resultado por edição (o XCom da task `gravar`). Confere na raw as gravadas e as tira do app quando a raw as mostra (ou depois de 6 h, com aviso). Dispara o próximo lote com as pendentes (até `LOTE_MAX`, `dag_run_id` = `cxhub_backoffice__<aaaammddThhmmss>`). Uma vez por hora, limpa as recusadas e os lotes terminados há mais de 7 dias. Avisa no Slack o que a rodada achou.",
+    "routeHeader": "x-usuario-email",
+    "params": [],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "A rodada rodou (`code: OK`), com o resumo de cada etapa. Com outra rodada em andamento, `code: OUTRA_RODADA`, sem fazer nada.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "`OK` ou `OUTRA_RODADA`.",
+            "enum": [
+              "OK",
+              "OUTRA_RODADA"
+            ]
+          },
+          {
+            "name": "andamento",
+            "type": "object",
+            "required": false,
+            "description": "O lote em andamento: `lote`, `livre` (se outro pode ser disparado) e `estado` (nenhum, queued, running, success, failed, sem_resultado…)."
+          },
+          {
+            "name": "conferencia",
+            "type": "object",
+            "required": false,
+            "description": "A conferência na raw: `estado` (nada, conferido, sem_metabase, sem_tempo, sem_resposta), `naRaw`, `atrasadas`, `esperando`."
+          },
+          {
+            "name": "disparo",
+            "type": "object | null",
+            "required": false,
+            "description": "O próximo lote: `estado` (disparado, vazio, dag_pausada, sem_airflow, sem_tempo, falha_no_disparo…), `lote` e `edicoes`."
+          },
+          {
+            "name": "limpeza",
+            "type": "boolean",
+            "required": false,
+            "description": "Se a limpeza de hora em hora rodou nesta rodada."
+          },
+          {
+            "name": "avisos",
+            "type": "number",
+            "required": false,
+            "description": "Quantas linhas foram ao aviso do Slack."
+          }
+        ],
+        "example": {
+          "code": "OK",
+          "em": "2026-11-11T22:20:00.401Z",
+          "andamento": {
+            "lote": null,
+            "livre": true,
+            "estado": "nenhum"
+          },
+          "conferencia": {
+            "estado": "nada"
+          },
+          "disparo": {
+            "estado": "disparado",
+            "lote": "cxhub_backoffice__20261111T222000",
+            "edicoes": 1
+          },
+          "limpeza": false,
+          "avisos": 0
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem cron nem quem chama, ou o `X-Godeploy-Cron` fora do formato ou da janela de 5 min.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "Assinatura do cron não conferiu."
+        }
+      },
+      {
+        "status": 403,
+        "description": "Chamada de navegador sem a proteção de escrita.",
+        "example": {
+          "code": "FORBIDDEN",
+          "message": "Cabeçalho x-backoffice ausente."
+        }
+      },
+      {
+        "status": 405,
+        "description": "Método que não é POST.",
+        "example": {
+          "code": "METHOD_NOT_ALLOWED",
+          "message": "Use POST nesta rota."
+        }
+      },
+      {
+        "status": 429,
+        "description": "Cron sem assinatura conferida a menos de 30 s do anterior nesta rota.",
+        "example": {
+          "code": "TOO_MANY_REQUESTS",
+          "message": "Rodada recente: sem a assinatura conferida, o cron roda no máximo uma vez a cada 30 s."
+        }
+      },
+      {
+        "status": 500,
+        "description": "Uma etapa falhou (fica no log); o resumo das outras vem junto e a próxima rodada tenta de novo.",
+        "example": {
+          "code": "INTERNAL_ERROR",
+          "message": "A rodada falhou em: disparo.",
+          "em": "2026-11-11T22:20:00.401Z"
+        }
+      }
+    ],
+    "notes": [
+      "Quem chama: o cron do GoDeploy, com o `X-Godeploy-Cron`, ou alguém identificado, à mão.",
+      "O lote vai à mesma DAG da fila, só com atualizações. Run que falhou sem XCom é recolocado uma vez; falhou de novo, as edições voltam à fila, e na segunda vez de uma edição ela é recusada."
+    ],
+    "sources": [
+      "backoffice/servidor/app.ts",
+      "backoffice/servidor/lote.ts",
+      "backoffice/servidor/cron.ts"
+    ]
+  },
+  {
+    "method": "POST",
+    "path": "/api/interno/rota-dados",
+    "tag": "Cache da rota dados",
+    "summary": "Renova a cache das listas da rota dados (o cron, a cada 5 min)",
+    "description": "Busca ao vivo no app `rota-dados-cxhub` as listas das três origens (`reenvio`, `reembolso`, `logistica`) e guarda cada resposta boa na cache do `env.DB`. Quem lê pela cache: o `GET /api/resend/data`, as marcas que o bot aceita e os motivos do backoffice.",
+    "routeHeader": "x-cxhub-fila-token",
+    "params": [],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "Ao menos uma origem renovou.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "`OK`.",
+            "enum": [
+              "OK"
+            ]
+          },
+          {
+            "name": "em",
+            "type": "string (ISO 8601)",
+            "required": true,
+            "description": "Quando a rodada começou, em UTC."
+          },
+          {
+            "name": "renovadas",
+            "type": "number",
+            "required": true,
+            "description": "Quantas origens renovaram (até 3)."
+          },
+          {
+            "name": "origens",
+            "type": "object",
+            "required": true,
+            "description": "Por origem: `estado` (renovada ou falhou), `status`, `ms` e, na que falhou, `erro`."
+          }
+        ],
+        "example": {
+          "code": "OK",
+          "em": "2026-11-11T22:05:00.214Z",
+          "renovadas": 3,
+          "origens": {
+            "reenvio": {
+              "estado": "renovada",
+              "status": 200,
+              "ms": 812
+            },
+            "reembolso": {
+              "estado": "renovada",
+              "status": 200,
+              "ms": 640
+            },
+            "logistica": {
+              "estado": "renovada",
+              "status": 200,
+              "ms": 655
+            }
+          }
+        }
+      },
+      {
+        "status": 401,
+        "description": "Sem o `x-cxhub-fila-token` certo e sem o cron.",
+        "example": {
+          "code": "UNAUTHORIZED",
+          "message": "x-cxhub-fila-token ausente ou inválido."
+        }
+      },
+      {
+        "status": 405,
+        "description": "Método que não é POST.",
+        "example": {
+          "code": "METHOD_NOT_ALLOWED",
+          "message": "Use POST nesta rota."
+        }
+      },
+      {
+        "status": 429,
+        "description": "Cron sem assinatura conferida a menos de 30 s do anterior nesta rota.",
+        "example": {
+          "code": "TOO_MANY_REQUESTS",
+          "message": "Rodada recente: sem a assinatura conferida, o cron roda no máximo uma vez a cada 30 s."
+        }
+      },
+      {
+        "status": 502,
+        "description": "Nenhuma origem renovou (a rota dados fora ou a credencial recusada). A cache fica como estava.",
+        "example": {
+          "code": "FALHOU",
+          "em": "2026-11-11T22:05:00.214Z",
+          "renovadas": 0,
+          "origens": {
+            "reenvio": {
+              "estado": "falhou",
+              "status": 502,
+              "ms": 304,
+              "erro": "App de configuração do formulário inalcançável"
+            }
+          }
+        }
+      },
+      {
+        "status": 503,
+        "description": "O `env.DB` falhou. Repetir é seguro.",
+        "example": {
+          "code": "UNAVAILABLE",
+          "message": "A cache não conseguiu ler ou gravar agora. Repetir é seguro."
+        }
+      }
+    ],
+    "notes": [
+      "A validade de quem lê: com a cache até 15 min, a rota dados não é chamada; mais velha, busca ao vivo e guarda; com a rota dados fora, serve a última resposta boa por até 24 h, com aviso no log.",
+      "Uma origem que falha não impede as outras, e a cache dela fica como estava."
+    ],
+    "sources": [
+      "api/cacheDaRotaDados.ts",
+      "cxhub/shared/lib/formDataApi.ts",
+      "servidor/cron.ts"
     ]
   }
 ];

@@ -17,6 +17,15 @@ const ROTAS_DA_FILA = [
   "POST /api/v1/atualizacoes", "GET /api/v1/atualizacoes", "GET /api/v1/estado", "POST /api/v1/interno/lote",
 ];
 
+// As do backoffice, como o backoffice/servidor/app.ts as atende, e a da cache da rota dados (worker.ts). Rota nova ou
+// removida lá entra ou sai daqui e da página (CLAUDE.md: a página /docs reflete sempre o estado atual da API).
+const ROTAS_NOVAS = [
+  "GET /api/backoffice/eu", "GET /api/backoffice/solicitacoes", "GET /api/backoffice/solicitacoes/{chave}",
+  "POST /api/backoffice/solicitacoes/{chave}/edicoes", "DELETE /api/backoffice/edicoes/{id}", "GET /api/backoffice/estado",
+  "POST /api/backoffice/interno/lote", "POST /api/interno/rota-dados",
+];
+const ehDoHub = (d: string) => !/ \/api\/(v1|backoffice|interno)\//.test(d);
+
 describe("página /docs", () => {
   it("GET /docs e /docs/ devolvem o HTML, sem depender de segredo nenhum (env vazio)", async () => {
     for (const caminho of ["/docs", "/docs/"]) {
@@ -58,11 +67,25 @@ describe("especificação dos endpoints (api/docsRotas.ts)", () => {
   it("as rotas do roteador são exatamente as documentadas fora da fila, com cada método", () => {
     const doRoteador = ROTAS_DA_API.flatMap((r) => r.metodos.map((m) => `${m} ${r.caminho.replace(/\[(\w+)\]/g, "{$1}")}`));
     expect(ROTAS_DA_API).toHaveLength(23);
-    expect(documentados.filter((d) => !d.includes(" /api/v1/")).sort()).toEqual(doRoteador.sort());
+    expect(documentados.filter(ehDoHub).sort()).toEqual(doRoteador.sort());
   });
 
   it("as rotas da fila são exatamente as documentadas em /api/v1", () => {
     expect(documentados.filter((d) => d.includes(" /api/v1/")).sort()).toEqual([...ROTAS_DA_FILA].sort());
+  });
+
+  it("as rotas do backoffice e a da cache são exatamente as documentadas em /api/backoffice e /api/interno", () => {
+    expect(documentados.filter((d) => / \/api\/(backoffice|interno)\//.test(d)).sort()).toEqual([...ROTAS_NOVAS].sort());
+  });
+
+  it("cada rota documentada do backoffice responde no app (nenhuma é 404 de rota inexistente)", async () => {
+    for (const d of ROTAS_NOVAS) {
+      const [metodo, caminho] = d.split(" ");
+      const r = await worker.fetch(new Request(URL_APP + caminho.replace("{chave}", "cxhub%7Cx").replace("{id}", "x"), { method: metodo }), {} as never);
+      const corpo = (await r.json().catch(() => ({}))) as { code?: string; message?: string };
+      // Sem quem chama, sem token ou sem banco, a rota recusa ou falha, mas não com a 404 de "rota não encontrada".
+      expect(`${d}: ${r.status} ${corpo.message ?? ""}`).not.toMatch(/: 404 (Não encontrado|Rota não encontrada)/);
+    }
   });
 
   it("nenhum endpoint repetido; cada um tem grupo, resumo e pelo menos uma resposta", () => {

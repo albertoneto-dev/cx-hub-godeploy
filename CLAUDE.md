@@ -237,8 +237,18 @@ registrar a adaptação no `ORIGEM.md`: é ele que separa o que veio do CX Hub d
 
 - **Arquivos:** `api/docsRotas.ts` tem a especificação de cada endpoint (headers, parâmetros, corpo, respostas por status
   e exemplos), levantada do código das rotas. `api/docs.ts` a transforma em HTML e soma o guia da migração.
-- **Mudou rota, header ou resposta:** atualize a especificação. O `testes/docs.test.ts` exige que toda rota do roteador
-  e da fila esteja nela, com o método certo.
+- **Regra obrigatória: a página `https://cx-hub.devgogroup.com/docs` reflete sempre o estado atual da API.** Toda
+  mudança numa rota atualiza a página **na mesma mudança**:
+  - rota adicionada, removida ou renomeada;
+  - parâmetro, header, corpo, resposta ou status que mudou;
+  - mudança de lógica no funcionamento da rota (o que ela grava, quando recusa, prazos, regras de edição, cache, cron).
+
+  O que atualizar:
+  - a especificação em `api/docsRotas.ts`, com exemplos fictícios;
+  - os textos do guia em `api/docs.ts`, quando a regra aparece lá (autenticação, crons, backoffice).
+
+  O `testes/docs.test.ts` exige que as rotas da página e as que o app atende sejam as mesmas, mas não confere a lógica:
+  essa parte é responsabilidade de quem muda. Mudança de rota sem a página atualizada não está pronta para publicar.
 - **Visual:** o da marca Gogroup (azul `#2659a5` como cor principal, acento lima `#d7d900`, Poppins, cantos
   arredondados, blocos de cor chapada).
 - **Sem logos:** o usuário decidiu em 2026-11-11 que eles não sobem ao GoDeploy. Não escreva "Gogroup" estilizado no
@@ -256,3 +266,5 @@ registrar a adaptação no `ORIGEM.md`: é ele que separa o que veio do CX Hub d
   explicam o porquê; o quê, o código já mostra.
 - **Mudança de comportamento** em relação ao CX Hub entra no `cxhub/ORIGEM.md` ("Decisões deste app") e em
   `docs/api.md`.
+- **Mudou qualquer rota (adição, remoção, edição ou lógica): atualize a página `/docs` na mesma mudança**, como diz a
+  seção "A página `/docs`". Ela é o contrato que quem integra lê, e tem de mostrar o estado atual da API.
