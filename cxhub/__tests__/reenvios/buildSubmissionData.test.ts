@@ -457,6 +457,25 @@ describe('buildSubmissionData — mimo e troca de produto nas marcas sem Cosmos 
         // O produto com problema e o valor seguem os itens ORIGINAIS (o substituto herda o preço; o mimo não entra).
         expect(dados.produtoComProblema).toBe('20002');
         expect(dados.valorReenvio).toBe('152,70');
+        // E é por eles que o servidor calcula o valor da NF de reenvio (ADR-018): os SKUs originais, sem os mimos.
+        expect(dados.itensOriginaisReenviados).toEqual([{ sku: '20001', quantidade: 2 }, { sku: '20002', quantidade: 1 }]);
+    });
+
+    it('os itens originais vão pelo id marcado: o kit inteiro pelo SKU do kit, o componente pelo dele (ADR-018)', () => {
+        const pedido = pedidoDaShopify([{
+            id: 'k1', product_id: 0, nome: 'Kit', sku: 'KIT-1', quantidade: 1, preco: '100', isKit: true,
+            kitComponents: [{ id: 'c1', product_id: 0, nome: 'A', sku: 'DN-A', quantidade: 1, preco: '50' }],
+        }]);
+        expect(montar({ produtosReenviar: ['k1'], quantidadesReenviar: {} }, 'Denavita', pedido).itensOriginaisReenviados)
+            .toEqual([{ sku: 'KIT-1', quantidade: 1 }]);
+        expect(montar({ produtosReenviar: ['c1'], quantidadesReenviar: {}, substituicoes: { c1: { sku: 'DN-Z', name: 'Z' } } }, 'Denavita', pedido).itensOriginaisReenviados)
+            .toEqual([{ sku: 'DN-A', quantidade: 1 }]);
+    });
+
+    it('a Gobeaute e as marcas do Cosmos não mandam os itens originais (só as três têm a conferência)', () => {
+        expect(montar({}, 'Gobeaute').itensOriginaisReenviados).toBeUndefined();
+        const cosmos = buildSubmissionData({ formData: makeFormData({ marca: 'Lescent' }), step2Data: makeStep2Data(), orderData: makeOrderData() });
+        expect(cosmos.submissionData.itensOriginaisReenviados).toBeUndefined();
     });
 
     it('as notas seguem a ordem de produtosReenviar, e a troca de um item de quantidade 2 leva as 2', () => {

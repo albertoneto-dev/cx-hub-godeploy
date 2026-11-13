@@ -18,6 +18,11 @@ export type AlertReason =
     | 'INVALID_PAYLOAD'
     /** Reenvio parcial com itens que não conferem com o pedido (ou lista vazia) — recusado, nenhuma linha gravada */
     | 'INVALID_ITEMS'
+    /**
+     * Marca sem Cosmos (ADR-018): o Data Mart respondeu e o pedido não tem NF de venda (Tiny ou Intelipost) — o reenvio é
+     * recusado, nenhuma linha gravada
+     */
+    | 'ORDER_NOT_INVOICED'
     /** ERP inacessível ou mal configurado, **depois** de esgotadas as retentativas */
     | 'COSMOS_UNAVAILABLE'
     /**

@@ -25,8 +25,15 @@ export interface RefundSubmissionData {
     /**
      * Chave Pix da cliente, para o financeiro pagar: só nas marcas sem Cosmos (ADR-013), cuja planilha tem a coluna
      * "Recebimento - Chave Pix". **Dado pessoal sensível**: vai só para a planilha — nunca para a fila, a gold ou o log.
+     * O servidor a valida pelo tipo e grava normalizada (ADR-018, `normalizarChavePix`).
      */
     pixKey?: string | null;
+    /**
+     * O tipo da chave Pix (`cpf`, `cnpj`, `email`, `celular` ou `aleatoria`), opcional (ADR-018). Sem ele, o servidor
+     * infere pelo formato — e 11 dígitos são CPF quando o dígito verificador fecha, senão celular. Com ele, a chave só
+     * vale como aquele tipo (um CPF com um dígito trocado é recusado em vez de virar celular).
+     */
+    pixKeyType?: string | null;
 }
 
 export type RefundWebhookResponseCode =

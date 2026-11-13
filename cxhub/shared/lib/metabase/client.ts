@@ -53,9 +53,12 @@ interface RespostaDataset {
 
 /**
  * Roda um SELECT no Data Mart e devolve as linhas (`data.rows`). Uma tentativa só: quem chama decide se
- * retenta, pelo `MetabaseError.transitorio`. Nunca lança outra coisa além de `MetabaseError`.
+ * retenta, pelo `MetabaseError.transitorio`. Nunca lança outra coisa além de `MetabaseError`. `timeoutMs` troca o teto
+ * de 5 s: a consulta que precisa caber no que sobra de um prazo, ou a que se sabe mais lenta (o Tiny por data e a NF
+ * por faixa da conferência do pedido, ADR-018).
  */
-export async function consultarDataMart(sql: string): Promise<unknown[][]> {
+export async function consultarDataMart(sql: string, opcoes: { timeoutMs?: number } = {}): Promise<unknown[][]> {
+    const tetoMs = opcoes.timeoutMs ?? METABASE_TIMEOUT_MS;
     const url = (process.env.METABASE_URL ?? '').replace(/\/$/, '');
     const chave = process.env.METABASE_API_KEY ?? '';
     const banco = Number(process.env.METABASE_DATABASE_ID);
@@ -64,7 +67,7 @@ export async function consultarDataMart(sql: string): Promise<unknown[][]> {
     }
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), METABASE_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), tetoMs);
     let status: number;
     let texto: string;
     try {
@@ -78,7 +81,7 @@ export async function consultarDataMart(sql: string): Promise<unknown[][]> {
         texto = await res.text();
     } catch (erro) {
         if (erro instanceof Error && erro.name === 'AbortError') {
-            throw new MetabaseError(0, `Metabase não respondeu em ${METABASE_TIMEOUT_MS / 1000}s`);
+            throw new MetabaseError(0, `Metabase não respondeu em ${tetoMs / 1000}s`);
         }
         throw new MetabaseError(0, `Metabase inalcançável: ${erro instanceof Error ? erro.message : String(erro)}`);
     } finally {

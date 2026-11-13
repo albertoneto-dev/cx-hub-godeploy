@@ -276,7 +276,8 @@ const GUIA_HTML = `
     <thead><tr><th>Rotas</th><th>Vercel (antes)</th><th>GoDeploy (agora)</th></tr></thead>
     <tbody>
       <tr>
-        <td><code>/api/cosmos/*</code>, <code>/api/datamart/products</code>, <code>/api/refund/cancel</code>,
+        <td><code>/api/cosmos/*</code>, <code>/api/datamart/products</code>, <code>/api/datamart/order-context</code>,
+          <code>/api/refund/cancel</code>,
           <code>/api/refund/update</code>, <code>/api/refund/complete</code>, <code>/api/refund/sync</code>,
           <code>/api/registro</code>, <code>/api/solicitacoes</code></td>
         <td><code>Authorization: Bearer &lt;token do Cosmos&gt;</code></td>
@@ -376,7 +377,8 @@ const GUIA_HTML = `
   <p class="sobrelinha">Continua igual</p>
   <h2>O que não mudou</h2>
   <ul class="lista">
-    <li>Os corpos das requisições e das respostas de sucesso, campo a campo, nas 23 rotas.</li>
+    <li>Os corpos das requisições e das respostas de sucesso, campo a campo, nas 23 rotas que vieram da Vercel. Os campos
+      que a ADR-018 acrescentou são opcionais.</li>
     <li>O contrato do <code>code</code> e do <code>reason</code>: um <strong>200 com <code>code</code> de erro</strong>
       (<code>SHEETS_ERROR</code>, <code>UNKNOWN_ERROR</code>) quer dizer "registrado, não repita".</li>
     <li>Os valores do <code>reason</code> do bot, que o Typebot usa para decidir o que responder à cliente.</li>
@@ -398,6 +400,13 @@ const GUIA_HTML = `
         Rituária)</td><td>O integrations-gateway só enxerga os <strong>últimos 60 dias</strong>. O pedido que ele não acha,
         ou com ele fora do ar, vem do <strong>Data Mart</strong>, no mesmo formato. Na Vercel, ele voltava como não
         encontrado. A Gobeaute não está no Data Mart e continua com o limite.</td></tr>
+      <tr><td>Reenvio e reembolso da Ápice, Yenzah e Denavita (<code>/api/sheets/append</code>, <code>/api/refund/submit</code>
+        e o bot)</td><td>O servidor confere o pedido no <strong>Data Mart</strong> (ADR-018). A NF de venda, o CD de origem e
+        o valor da NF de reenvio vêm de lá, no lugar dos que vieram. Pedido <strong>sem NF de venda</strong> é recusado com
+        <span class="status s4xx">422</span>, sem gravar nada (no bot, <code>reason: ORDER_NOT_INVOICED</code>). Com o
+        Data Mart fora, o registro segue com o que veio, e uma nota <code>[… NÃO CONFERIDOS: DATA MART SEM RESPOSTA]</code>
+        vai nas observações. A chave Pix do reembolso é validada pelo tipo. O <code>GET /api/datamart/order-context</code>
+        mostra antes o que vai ser gravado. Na Vercel, valia o que a tela mandava.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.
         Para ensaiar, use <code>testMode: true</code>.</td></tr>
       <tr><td>Tempo de execução</td><td>Não há o <code>maxDuration</code> da Vercel. O bot continua planejando o trabalho para
@@ -522,6 +531,10 @@ const GUIA_HTML = `
         está na Shopify (60 dias) nem no Data Mart: número errado, pedido de outra marca, ou pedido de agora com o gateway
         fora do ar (o Data Mart leva horas para receber)</td><td>Confira o número e a marca; na Rituária, busque também pelo
         Cosmos (<code>/api/cosmos/orders</code>)</td></tr>
+      <tr><td><code>422</code> "não tem NF de venda" no reenvio ou no reembolso da Ápice, Yenzah ou Denavita</td><td>O Data
+        Mart respondeu e o pedido não tem NF de venda: não foi faturado, ou foi há poucas horas e a NF ainda não chegou
+        lá</td><td>Confira no <code>GET /api/datamart/order-context</code> (<code>nfStatus</code>) e tente de novo quando a
+        NF aparecer</td></tr>
     </tbody>
   </table></div>
 </section>`;
@@ -762,7 +775,7 @@ function montarPagina(): string {
     <div class="pilulas">
       <span class="pilula pilula-lima"><code>https://cx-hub.devgogroup.com</code></span>
       <span class="pilula">${rotasDoHub} rotas do CX Hub · ${daFila} da fila · ${doBackoffice} do backoffice · ${internas} ${internas === 1 ? "interna" : "internas"}</span>
-      <span class="pilula">Código do CX Hub: 8a1b1a9</span>
+      <span class="pilula">Código do CX Hub: 11cebff</span>
     </div>
   </header>
   ${GUIA_HTML}

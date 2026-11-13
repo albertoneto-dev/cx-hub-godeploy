@@ -62,6 +62,14 @@ export const MARCAS_SEM_COSMOS_COM_PLANILHA: readonly MarcaSemCosmosComPlanilha[
  * planilha (nunca para a fila, a gold ou o log). A Gobeaute não tem planilha e não pede (ADR-014).
  */
 export function pedeChavePixNoReembolso(marca: string): marca is MarcaSemCosmosComPlanilha {
+    return ehMarcaSemCosmosComPlanilha(marca);
+}
+
+/**
+ * Ápice, Yenzah e Denavita: as sem Cosmos com planilha. São as marcas cujo pedido o servidor confere no Data Mart
+ * (NF, CD e valor da NF de reenvio, ADR-018). A Gobeaute, sem Cosmos e sem planilha, fica de fora.
+ */
+export function ehMarcaSemCosmosComPlanilha(marca: string): marca is MarcaSemCosmosComPlanilha {
     return (MARCAS_SEM_COSMOS_COM_PLANILHA as readonly string[]).includes(marca);
 }
 

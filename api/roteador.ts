@@ -1,4 +1,4 @@
-// As 23 rotas que o CX Hub tem na Vercel, nos mesmos caminhos e métodos, com o código portado em cxhub/app/api.
+// As 24 rotas que o CX Hub tem na Vercel, nos mesmos caminhos e métodos, com o código portado em cxhub/app/api.
 // Cada rota recebe o que recebia do Next: a requisição com nextUrl e { params } (os [id] do caminho, já decodificados).
 //
 // Autenticação: o app é "authenticated" no GoDeploy, e o Authorization pertence ao gateway (a chave gdk_ de quem chama
@@ -17,6 +17,7 @@ import * as cosmosProducts from "../cxhub/app/api/cosmos/products/route";
 import * as cosmosResendCancel from "../cxhub/app/api/cosmos/resends/[id]/cancel/route";
 import * as cosmosResend from "../cxhub/app/api/cosmos/resends/[id]/route";
 import * as cosmosResends from "../cxhub/app/api/cosmos/resends/route";
+import * as datamartOrderContext from "../cxhub/app/api/datamart/order-context/route";
 import * as datamartProducts from "../cxhub/app/api/datamart/products/route";
 import * as logisticaSubmit from "../cxhub/app/api/logistica/submit/route";
 import * as reenvioBot from "../cxhub/app/api/reenvio/bot/route";
@@ -49,6 +50,7 @@ const ROTAS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ["/api/cosmos/resends", cosmosResends],
   ["/api/cosmos/resends/[id]", cosmosResend],
   ["/api/cosmos/resends/[id]/cancel", cosmosResendCancel],
+  ["/api/datamart/order-context", datamartOrderContext],
   ["/api/datamart/products", datamartProducts],
   ["/api/logistica/submit", logisticaSubmit],
   ["/api/reenvio/bot", reenvioBot],

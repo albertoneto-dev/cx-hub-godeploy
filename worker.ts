@@ -5,7 +5,7 @@
 //     gold + raw (+ os casos ainda na fila) por cursor e as edições com as regras de lá. A edição é uma atualização da
 //     fila acima e sobe no lote dela; a rodada do cron da fila confere as edições gravadas (posRodada).
 //   - /api/interno/rota-dados: a rodada do cron que renova a cache da rota dados no env.DB (api/cacheDaRotaDados.ts).
-//   - o resto: as 23 rotas que o CX Hub tem na Vercel (cxhub/, portadas; api/ é a cola com o Worker). Elas entregam
+//   - o resto: as 24 rotas do CX Hub (cxhub/, portadas; api/ é a cola com o Worker). Elas entregam
 //     casos e atualizações à fila sem rede (api/filaNoWorker.ts) e leem a rota dados pela cache.
 // E /docs, a página do que muda para quem chamava a Vercel (api/docs.ts), que não depende de segredo nenhum.
 // Liga os segredos do app (env) às dependências reais e passa cada requisição para a parte dela.

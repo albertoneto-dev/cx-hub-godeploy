@@ -214,6 +214,13 @@ export const ALERT_POLICY: Record<AlertReason, AlertPolicy> = {
         acao: 'Desligamento intencional — a solicitação é registrada e tratada à mão. Nada a corrigir.',
         agrupar: true,
     },
+    // O pedido ainda não foi faturado: é dado do pedido, não sistema quebrado (ADR-005 §3, ADR-018).
+    ORDER_NOT_INVOICED: {
+        severidade: 'nenhuma',
+        titulo: 'Pedido sem NF de venda — reenvio recusado',
+        acao: 'Avisar a cliente que o pedido ainda não foi faturado; o reenvio só pode ser pedido depois da NF de venda.',
+        agrupar: true,
+    },
 };
 
 /**

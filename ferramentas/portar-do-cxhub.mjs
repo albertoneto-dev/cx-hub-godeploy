@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Porta o backend do CX Hub (as rotas de app/api que rodam na Vercel) para este app. Copia, do commit dado do repositório do
+// Porta o backend do CX Hub (as rotas de app/api que rodavam na Vercel, e as novas) para este app. Copia, do commit dado do repositório do
 // CX Hub, o fecho de imports das rotas e os testes que só dependem desse fecho, e muda só os especificadores de
 // import do código: os aliases (@/, @shared/, @modules/) viram caminho relativo e next/server vira o adaptador
 // api/next-server.ts. Os testes ficam como estão (o vitest.config.ts resolve os aliases). As adaptações ao Worker
@@ -33,7 +33,8 @@ const ler = arq => {
   return lidos.get(arq);
 };
 
-// As rotas (mesmos caminhos da Vercel): 22 no commit e8fe51c, 23 desde o 8a1b1a9 (2026-11-11, /api/datamart/products).
+// As rotas (mesmos caminhos da Vercel): 22 no commit e8fe51c, 23 desde o 8a1b1a9 (2026-11-11, /api/datamart/products),
+// 24 desde o 11cebff (2026-11-12, /api/datamart/order-context, ADR-018).
 // Rota nova no CX Hub entra aqui e no api/roteador.ts. O resto entra pelo fecho de imports.
 const ROTAS = [
   "app/api/auth/login/route.ts",
@@ -46,6 +47,7 @@ const ROTAS = [
   "app/api/cosmos/resends/[id]/cancel/route.ts",
   "app/api/cosmos/resends/[id]/route.ts",
   "app/api/cosmos/resends/route.ts",
+  "app/api/datamart/order-context/route.ts",
   "app/api/datamart/products/route.ts",
   "app/api/logistica/submit/route.ts",
   "app/api/reenvio/bot/route.ts",
@@ -156,7 +158,7 @@ gravar("cxhub/ORIGEM.md", [
   "# Origem desta pasta",
   "",
   `Cópia do backend do CX Hub (repositório \`rpaiagogroup/cx-hub\`), commit \`${commit}\`, feita por`,
-  `\`ferramentas/portar-do-cxhub.mjs\`: o fecho de imports das ${ROTAS.length} rotas que rodam na Vercel e os testes que só`,
+  `\`ferramentas/portar-do-cxhub.mjs\`: o fecho de imports das ${ROTAS.length} rotas de app/api do CX Hub e os testes que só`,
   "dependem dele, com os mesmos caminhos relativos do CX Hub. O script só troca especificadores de import no código",
   "(aliases → caminho relativo; `next/server` → `api/next-server.ts`); as adaptações ao Worker vieram à mão, depois.",
   "Para ver só elas: rode o script com `--saida <pasta vazia>` e compare com `diff -r <pasta>/cxhub cxhub`.",

@@ -110,6 +110,49 @@ describe('consultarDataMart', () => {
         expect(erro.transitorio).toBe(false);
         expect(fetchSpy).not.toHaveBeenCalled();
     });
+
+    describe('prazo por consulta', () => {
+        /** Um fetch que só termina quando o `AbortController` da consulta dispara, como a rede parada. */
+        function fetchParado() {
+            return vi.spyOn(global, 'fetch').mockImplementation((_url, init) => new Promise((_resolve, reject) => {
+                (init as RequestInit).signal?.addEventListener('abort', () => {
+                    reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+                });
+            }));
+        }
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it('sem opções, o teto continua 5 s', async () => {
+            vi.useFakeTimers();
+            fetchParado();
+            const pendente = consultarDataMart('select 1').catch(e => e);
+            await vi.advanceTimersByTimeAsync(4_999);
+            let terminou = false;
+            void pendente.then(() => { terminou = true; });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(terminou).toBe(false);
+            await vi.advanceTimersByTimeAsync(1);
+            expect((await pendente).message).toBe('Metabase não respondeu em 5s');
+        });
+
+        it('timeoutMs troca o teto, e a mensagem diz o teto usado', async () => {
+            vi.useFakeTimers();
+            fetchParado();
+            const pendente = consultarDataMart('select 1', { timeoutMs: 8_000 }).catch(e => e);
+            await vi.advanceTimersByTimeAsync(5_000);
+            let terminou = false;
+            void pendente.then(() => { terminou = true; });
+            await vi.advanceTimersByTimeAsync(0);
+            expect(terminou).toBe(false);
+            await vi.advanceTimersByTimeAsync(3_000);
+            const erro = await pendente;
+            expect(erro).toBeInstanceOf(MetabaseError);
+            expect(erro.message).toBe('Metabase não respondeu em 8s');
+        });
+    });
 });
 
 describe('literalSql', () => {

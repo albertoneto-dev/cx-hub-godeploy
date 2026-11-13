@@ -66,7 +66,8 @@ describe("especificação dos endpoints (api/docsRotas.ts)", () => {
 
   it("as rotas do roteador são exatamente as documentadas fora da fila, com cada método", () => {
     const doRoteador = ROTAS_DA_API.flatMap((r) => r.metodos.map((m) => `${m} ${r.caminho.replace(/\[(\w+)\]/g, "{$1}")}`));
-    expect(ROTAS_DA_API).toHaveLength(23);
+    // As 23 da Vercel e o order-context da ADR-018.
+    expect(ROTAS_DA_API).toHaveLength(24);
     expect(documentados.filter(ehDoHub).sort()).toEqual(doRoteador.sort());
   });
 

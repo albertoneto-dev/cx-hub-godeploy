@@ -81,7 +81,7 @@ function jwtValido(assertion) {
 
 async function rede(req) {
   const url = req.url;
-  saidas.push({ url, metodo: req.method, authorization: req.headers.get("authorization") });
+  saidas.push({ url, metodo: req.method, authorization: req.headers.get("authorization"), chave: req.headers.get("x-api-key") });
   if (url.startsWith(`${COSMOS}/organizations/`)) return Response.json([]);
   if (url === `${METABASE}/api/dataset`) return Response.json({ status: "completed", data: { rows: [] } }, { status: 202 });
   if (url === TOKEN_URL) {
@@ -165,6 +165,14 @@ async function rodada(dataDeCompatibilidade) {
     conferir("rota do CX Hub lê a fila dentro do Worker (registro: aguardando)", registro.estados?.[id] === "aguardando", JSON.stringify(registro));
     conferir("x-cosmos-token vai ao Cosmos como Authorization; a gdk_ não", saidas.some(s => s.url.startsWith(COSMOS) && s.authorization === "Bearer jwt-do-login") && !saidas.some(s => s.authorization?.includes("gdk_")));
     conferir("nada da fila saiu do Worker pela rede", saidas.every(s => s.url.startsWith(COSMOS) || s.url.startsWith(METABASE)), JSON.stringify(saidas.map(s => s.url)));
+
+    // ADR-018: o Metabase falso não tem linha nenhuma, então a Intelipost respondeu sem remessa e o pedido "não tem NF".
+    saidas = [];
+    r = await pedir("/api/datamart/order-context?brand=apice&order=SH1234567AP", { headers: { "x-cosmos-token": "jwt-do-login", authorization: "Bearer gdk_chave" } });
+    const contexto = r.status === 200 ? await r.json() : { status: r.status, corpo: await r.text() };
+    conferir("order-context (ADR-018) roda no workerd: Data Mart sem linhas dá nfStatus ausente", contexto.order === "SH1234567AP" && contexto.nfStatus === "ausente" && contexto.naoConferidos?.length === 0, JSON.stringify(contexto));
+    const noDataMart = saidas.filter(s => s.url === `${METABASE}/api/dataset`);
+    conferir("order-context lê o Data Mart com a chave do app e confere o token no Cosmos; a gdk_ não sai", noDataMart.length === 3 && noDataMart.every(s => s.chave === "chave-do-metabase") && saidas.some(s => s.url.startsWith(COSMOS) && s.authorization === "Bearer jwt-do-login") && !saidas.some(s => s.authorization?.includes("gdk_")), JSON.stringify(saidas.map(s => s.url)));
 
     r = await pedir("/__conferencias");
     const c = await r.json();

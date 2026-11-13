@@ -6,8 +6,9 @@ mesmo Worker:
 - `/api/v1/*`: a fila do Metabase, que guarda casos e atualizações e dispara a DAG `gobeaute_reenvio_reembolso_etl`
   em lote a cada 10 min (era 20 até a v9). O contrato está em `docs/fila-cxhub.md`, no repositório do CX Hub. As
   edições do backoffice (abaixo) são atualizações desta fila.
-- O resto: as 23 rotas que o CX Hub tem na Vercel, **nos mesmos caminhos, métodos, corpos e respostas**. O código é
-  o do CX Hub (`cxhub/`, com origem em `cxhub/ORIGEM.md`); as regras de negócio estão no `CLAUDE.md` de lá.
+- O resto: as 23 rotas que o CX Hub tem na Vercel, **nos mesmos caminhos, métodos, corpos e respostas**, e o
+  `GET /api/datamart/order-context` da ADR-018, que a Vercel não tem. O código é o do CX Hub (`cxhub/`, com origem
+  em `cxhub/ORIGEM.md`); as regras de negócio estão no `CLAUDE.md` de lá.
 
 Para quem integra: `GET /docs` é uma página HTML (`api/docs.ts`) com o que muda para quem chamava a Vercel, os
 exemplos de antes e depois e as rotas. Ela vai no pacote do Worker, porque esta pasta `docs/` não sobe ao GoDeploy.
@@ -26,7 +27,7 @@ Como o `Authorization` é do gateway, o que cada rota confere vai em outro heade
 
 | Rotas | Header da rota |
 |---|---|
-| `/api/cosmos/*`, `/api/datamart/products`, `/api/refund/{cancel,update,complete,sync}`, `/api/registro`, `/api/solicitacoes` | `x-cosmos-token: <token>`: o `credentials.token` do `/api/auth/login`, com ou sem `Bearer `. Na Vercel ia no `Authorization`. O app o põe no `Authorization` só para a rota, e uma `gdk_` nunca chega ao Cosmos. |
+| `/api/cosmos/*`, `/api/datamart/{products,order-context}`, `/api/refund/{cancel,update,complete,sync}`, `/api/registro`, `/api/solicitacoes` | `x-cosmos-token: <token>`: o `credentials.token` do `/api/auth/login`, com ou sem `Bearer `. Na Vercel ia no `Authorization`. O app o põe no `Authorization` só para a rota, e uma `gdk_` nunca chega ao Cosmos. |
 | `/api/reenvio/bot` | `x-bot-secret` (o `BOT_RESEND_SECRET`), **junto da** `gdk_`: um só não passa. Quem chama é o Typebot e, quando for publicado, o Extravios Gobeaute do hub Jornada CX |
 | `/api/v1/*` (a fila) | `x-cxhub-fila-token` |
 | `/api/auth/login`, `/api/cancellation/submit`, `/api/refund/submit`, `/api/sheets/append`, `/api/logistica/submit`, `/api/resend/data`, `/api/shopify/orders` | nenhum, como na Vercel. Aqui ficam atrás do gateway, e na Vercel estavam abertas. |
@@ -50,10 +51,11 @@ não é `gdk_`.
 | POST | `/api/cosmos/resends/{id}/cancel?brand=` | Cancela um reenvio no Cosmos (sem volta); o cancelamento vai à gold pela fila |
 | GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify: pelo REST da loja (Lescent, Kokeshi, BySamia, Auá, Barbours) ou pelo integrations-gateway (Rituária, Ápice, Yenzah, Denavita, Gobeaute) |
 | GET | `/api/datamart/products?brand=apice\|yenzah\|denavita` | O catálogo de produtos avulsos da marca no Data Mart, no formato dos produtos do Cosmos: o mimo e a troca do reenvio das marcas sem Cosmos. Guardado por 6 h em memória |
+| GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, `ausente` ou `desconhecida`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
-| POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h, Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava |
+| POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h (com a conferência no Data Mart junto, nas três sem Cosmos com planilha), Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava |
 | POST | `/api/reenvio/bot` | O reenvio do Typebot: busca o pedido, aplica as guardas e registra; toda dúvida vira registro sem automação. `testMode: true` não grava |
-| POST | `/api/refund/submit` | Registra um reembolso: dedup de 24 h, fila e planilha |
+| POST | `/api/refund/submit` | Registra um reembolso: chave Pix validada (as três sem Cosmos com planilha), dedup de 24 h com a conferência no Data Mart junto, fila e planilha |
 | POST | `/api/cancellation/submit` | Registra um cancelamento junto do reenvio ou do reembolso: fila e planilha |
 | POST | `/api/refund/cancel` | Cancela o reembolso mais recente do pedido (fila, depois planilha) |
 | POST | `/api/refund/update` | Edita valor e motivo do reembolso |
@@ -83,6 +85,26 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   agente não conseguia pedir o reenvio (o #1607929 da Ápice, em 2026-11-12). A Gobeaute não está no Data Mart e continua
   com o limite. Código: `cxhub/shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart.ts` e
   `cxhub/shared/lib/datamart/pedidoDaShopifyServer.ts`.
+- **ADR-018 (do `11cebff`, o último commit do repositório antigo do CX Hub, encerrado em 2026-11-13; a Vercel não a
+  tem):** o reenvio e o reembolso da Ápice, da Yenzah e da Denavita conferem o pedido no Data Mart, em toda entrada
+  (tela, Central de Tickets, bot):
+  - a NF de venda (a da primeira remessa da Intelipost; na Ápice, sem ela, a do Tiny que não está cancelada) e o CD (Ápice:
+    a tabela do Tiny; Yenzah: a UF de origem da Intelipost; Denavita: `CD MG`) entram no lugar dos que vieram. A NF que
+    veio e difere vai para o log;
+  - o Data Mart respondeu e o pedido não tem NF ⇒ `422 UNKNOWN_ERROR`, nada gravado (no bot, `reason: ORDER_NOT_INVOICED`,
+    sem aviso);
+  - o "Valor da NF de reenvio (R$)" é calculado; na Ápice e na Yenzah vai para a coluna da operação (AC), junto com as
+    fórmulas;
+  - a chave Pix do reembolso é validada pelo tipo e gravada normalizada; obrigatória só com `CHAVE_PIX_OBRIGATORIA=on`,
+    desligada neste app;
+  - o registro nunca depende do Data Mart: a conferência corre junto do dedup, com teto de 12 s, e o que não foi lido fica
+    com o valor que veio e a nota `[… NÃO CONFERIDOS: DATA MART SEM RESPOSTA]`.
+
+  A leitura usa a mesma chave do Metabase (banco 43): `gold.fct_intelipost_orders`, `gold.fct_shopify_orders`,
+  `gold.vw_shopify_order_items_exploded_priced_enriched` e, na Ápice, `api.tiny_pedidos_ap_cosmetics_{es,rj}` e
+  `api.tiny_nfe_ap_cosmetics_{es,rj}` (com os `_itens`). Cada registro dessas marcas faz de 3 a 7 consultas. As 6 marcas
+  do Cosmos e a Gobeaute não mudam. Código: `cxhub/shared/lib/datamart/{pedidoServer,pedido,conferenciaServer}.ts` e
+  `cxhub/modules/*/actions/conferenciaDo*.ts`.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MARCAS_SEM_COSMOS_COM_PLANILHA, type MarcaSemCosmosComPlanilha } from '@shared/lib/constants';
-import { CABECALHO_ESPERADO } from '@shared/lib/sheets/cabecalhos';
+import { CABECALHO_ESPERADO, colunaDoCabecalho } from '@shared/lib/sheets/cabecalhos';
 import { FORMULAS_DA_LINHA } from '@shared/lib/sheets/formulas';
 import type { FluxoPlanilha, SheetCell } from '@shared/lib/sheets';
 import { buildResendRow } from '@modules/reenvios/actions/buildResendRow';
@@ -228,5 +228,26 @@ describe('reembolso — o layout das 3 planilhas', () => {
             const linha = buildRefundRow(marca, prepararReembolso(DATA, CARIMBO));
             expect(linha.length, marca).toBeLessThanOrEqual(primeiraColunaDeFormula('reembolso', marca));
         }
+    });
+});
+
+describe('colunaDoCabecalho', () => {
+    it('acha o "Valor da NF de reenvio (R$)" do reenvio: AC na Ápice e na Yenzah, e V no formulário da Denavita', () => {
+        expect(colunaDoCabecalho('reenvio', 'apice', 'Valor da NF de reenvio (R$)')).toBe('AC');
+        expect(colunaDoCabecalho('reenvio', 'yenzah', 'Valor da NF de reenvio (R$)')).toBe('AC');
+        expect(colunaDoCabecalho('reenvio', 'denavita', 'Valor da NF de reenvio (R$)')).toBe('V');
+    });
+
+    it('a coluna da Ápice e da Yenzah não tem fórmula no molde: o valor pode ir nela', () => {
+        for (const marca of ['apice', 'yenzah'] as const) {
+            expect(Object.keys(FORMULAS_DA_LINHA.reenvio?.[marca] ?? {}), marca).not.toContain('AC');
+        }
+    });
+
+    it('ignora os espaços das pontas, vale a primeira e devolve null sem a coluna', () => {
+        expect(colunaDoCabecalho('reenvio', 'apice', '  Carimbo de data/hora ')).toBe('A');
+        expect(colunaDoCabecalho('reenvio', 'apice', 'Coluna que não existe')).toBeNull();
+        expect(colunaDoCabecalho('reembolso', 'apice', 'Valor da NF de reenvio (R$)')).toBeNull();
+        expect(colunaDoCabecalho('reenvio', 'kokeshi', 'Carimbo de data/hora')).toBeNull();
     });
 });

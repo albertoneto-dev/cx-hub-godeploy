@@ -1,9 +1,17 @@
-import { ehMarcaSemCosmos, registraNaPlanilha, temOrganizacaoNoCosmos, type MarcaCxHub } from '../../../shared/lib/constants';
+import {
+    ehMarcaSemCosmos,
+    ehMarcaSemCosmosComPlanilha,
+    pedeChavePixNoReembolso,
+    registraNaPlanilha,
+    temOrganizacaoNoCosmos,
+    type MarcaCxHub,
+} from '../../../shared/lib/constants';
 import type { CasoCxhub } from '../../../shared/lib/airflow/types';
 import { configuracaoQueFalta } from '../../../shared/lib/backendDireto';
 import { buildCancellationRow, prepararCancelamento } from '../../../shared/lib/cancellation/buildCancellationRow';
 import { casoDoCancelamento } from '../../../shared/lib/cancellation/casoDoCancelamento';
 import type { CancellationPayload } from '../../../shared/lib/cancellation/types';
+import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../shared/lib/datamart/conferenciaServer';
 import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { planilhaQueFalta } from '../../../shared/lib/sheets/index';
@@ -11,6 +19,7 @@ import { gravarNasPlanilhas, type LinhaDaSolicitacao } from '../../../shared/lib
 import type { RefundSubmissionData, RefundSubmitResponse } from '../types/index';
 import { buildRefundRow, COLUNA_DA_CHAVE_PIX, prepararReembolso } from './buildRefundRow';
 import { casoDoReembolso } from './casoDoReembolso';
+import { aplicarConferenciaAoReembolso, chavePixDoReembolso } from './conferenciaDoReembolso';
 import { camposFaltandoNoReembolso } from './validateRefundBody';
 
 const LOG = '[Refund Direct]';
@@ -59,6 +68,15 @@ export async function processRefund(
         };
     }
 
+    // ─── Chave Pix (Ápice, Yenzah e Denavita, ADR-018): validada pelo tipo e gravada normalizada ──
+    // Antes de qualquer leitura: é o corpo. A chave nunca vai ao log (LGPD); o erro não a repete.
+    let dados = data;
+    if (pedeChavePixNoReembolso(brand)) {
+        const pix = chavePixDoReembolso(data, chavePixObrigatoria());
+        if (!pix.ok) return { body: { code: 'UNKNOWN_ERROR', message: `${pix.erro} Nada foi registrado.` }, status: 422 };
+        dados = { ...data, pixKey: pix.chave };
+    }
+
     // ─── Configuração: fila e planilha andam juntas ───────────────────────────────────────────────
     // A planilha da marca também tem de existir no ambiente (as marcas sem Cosmos ainda não têm cópia de staging). A
     // marca sem planilha (ADR-014) só precisa da fila.
@@ -78,6 +96,11 @@ export async function processRefund(
     }
 
     // ─── Dedup de 24h (era o `[PROD] [AUX] Consulta Reembolsos CXHub`, lendo a planilha) ──────────
+    // Junto dele, a conferência do pedido no Data Mart (ADR-018): as duas só leem, e ela tem teto próprio
+    // (`JANELA_CONFERENCIA_MS`, menor que o pior caso do dedup), então não alonga a rota. Nunca lança.
+    const conferencia = ehMarcaSemCosmosComPlanilha(brand)
+        ? conferirPedidoNoDataMart(brand, String(data.ecommerceOrderId), prazoDaConferencia())
+        : null;
     try {
         const existente = await solicitacaoRecenteNoRegistro('REEMBOLSO', brand, String(data.ecommerceOrderId));
         if (existente) {
@@ -101,14 +124,32 @@ export async function processRefund(
         };
     }
 
+    // ─── O que a conferência muda: NF e CD (ADR-018) ─────────────────────────────────────────────
+    if (conferencia && ehMarcaSemCosmosComPlanilha(brand)) {
+        const conferido = aplicarConferenciaAoReembolso(brand, dados, await conferencia);
+        if (conferido.tipo === 'recusado') {
+            console.log(`${LOG} Recusado (${brand}): o pedido ${data.ecommerceOrderId} não tem NF de venda no Data Mart`);
+            return { body: { code: 'UNKNOWN_ERROR', message: conferido.mensagem }, status: 422 };
+        }
+        if (conferido.nfDivergente) {
+            console.warn(`${LOG} A NF que veio (${conferido.nfDivergente.digitada}) difere da do Data Mart `
+                + `(${conferido.nfDivergente.doDataMart}) no pedido ${data.ecommerceOrderId} (${brand}) — vale a do Data Mart`);
+        }
+        if (conferido.naoConferidos.length > 0) {
+            console.warn(`${LOG} Sem conferência no Data Mart (${conferido.naoConferidos.join(', ')}) no pedido `
+                + `${data.ecommerceOrderId} (${brand}) — vale o que veio, com a nota nas observações`);
+        }
+        dados = conferido.data;
+    }
+
     // ─── Fila do Metabase ─────────────────────────────────────────────────────────────────────────
     const idReembolso = crypto.randomUUID();
-    const casos: CasoCxhub[] = [casoDoReembolso({ brand, data, idSolicitacao: idReembolso, criadoEm: agora })];
+    const casos: CasoCxhub[] = [casoDoReembolso({ brand, data: dados, idSolicitacao: idReembolso, criadoEm: agora })];
     // O reembolso do Bot vem com cancelamento (era o "If" → "HTTP Request - Cancelamento"): um caso CANCELAMENTO
     // próprio, entregue à fila junto com o reembolso. Nas marcas sem Cosmos também (ADR-015), mas só na fila: elas
     // não têm planilha de cancelamento (o cancelamento delas é no Portal de Reembolso).
     const cancelamentoDoBot = data.handledBy === 'Bot'
-        ? { marca: brand, payload: payloadDoCancelamentoDoBot(brand, data), idSolicitacao: crypto.randomUUID() }
+        ? { marca: brand, payload: payloadDoCancelamentoDoBot(brand, dados), idSolicitacao: crypto.randomUUID() }
         : null;
     if (cancelamentoDoBot) {
         casos.push(casoDoCancelamento({
@@ -153,12 +194,12 @@ export async function processRefund(
     // ─── Registro na planilha (depois da fila) ────────────────────────────────────────────────────
     // O carimbo da linha é o `criado_em` dos casos, o mesmo instante que foi para a fila (ADR-010).
     const carimbo = formatarCarimboSP(agora);
-    const pedido = String(data.ecommerceOrderId);
+    const pedido = String(dados.ecommerceOrderId);
     const linhas: LinhaDaSolicitacao[] = [
         {
             fluxo: 'reembolso',
             marca: brand,
-            linha: buildRefundRow(brand, prepararReembolso(data, carimbo)),
+            linha: buildRefundRow(brand, prepararReembolso(dados, carimbo)),
             idSolicitacao: idReembolso,
             pedido,
             criadoEm: agora,
@@ -179,7 +220,7 @@ export async function processRefund(
     }
     const planilha = await gravarNasPlanilhas(linhas, {
         numeroPedido: pedido,
-        idAtendimento: data.supportTicketId,
+        idAtendimento: dados.supportTicketId,
         statusDaFila: fila.status,
     });
 
@@ -225,6 +266,15 @@ export async function processRefund(
         },
         status: 200,
     };
+}
+
+/**
+ * A chave Pix é obrigatória no reembolso de Ápice, Yenzah e Denavita (a regra do app antigo, ADR-018)? Só com
+ * `CHAVE_PIX_OBRIGATORIA=on`: a Central de Tickets ainda manda o reembolso sem a chave, e exigi-la antes de a Central
+ * mudar quebraria o envio dela. Lida a cada chamada, para valer sem deploy onde o ambiente é lido na hora (GoDeploy).
+ */
+function chavePixObrigatoria(): boolean {
+    return (process.env.CHAVE_PIX_OBRIGATORIA ?? '').trim().toLowerCase() === 'on';
 }
 
 /**

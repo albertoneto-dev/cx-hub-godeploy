@@ -99,26 +99,3 @@ export function estadoComSigla(estado: string | null | undefined): string {
     const nome = UF_TO_STATE_NAME[uf];
     return nome ? `${nome} (${uf})` : (estado ?? '');
 }
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const CHAVE_ALEATORIA = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
-
-/**
- * A chave Pix tem um dos formatos que o Banco Central aceita: CPF (11 dígitos), CNPJ (14), telefone (10 ou 11 dígitos,
- * com ou sem o `+55`), e-mail ou chave aleatória (UUID, com ou sem hífen). Pontuação de CPF, CNPJ e telefone não
- * importa. Só confere o **formato**: os dígitos verificadores e a existência da chave ficam com quem paga.
- *
- * ⚠️ Chave Pix é dado pessoal sensível: quem chama não loga o valor.
- */
-export function ehChavePixValida(valor: string): boolean {
-    const texto = valor.trim();
-    if (!texto) return false;
-    if (texto.includes('@')) return EMAIL.test(texto);
-    if (CHAVE_ALEATORIA.test(texto)) return true;
-    // Fora e-mail e chave aleatória, só dígitos e a pontuação de documento e telefone.
-    if (!/^\+?[\d\s.\-/()]+$/.test(texto)) return false;
-    const digitos = texto.replace(/\D/g, '');
-    const semPais = texto.startsWith('+') && digitos.startsWith('55') ? digitos.slice(2) : digitos;
-    if (texto.startsWith('+')) return semPais.length === 10 || semPais.length === 11;
-    return [10, 11, 14].includes(digitos.length);
-}

@@ -42,7 +42,7 @@ function redeFalsa(rawTem: string[] = []): Chamada[] {
 }
 
 describe("roteador das rotas do CX Hub", () => {
-  it("atende as 23 rotas da Vercel, nos mesmos caminhos e métodos", () => {
+  it("atende as 23 rotas da Vercel e o order-context da ADR-018, nos mesmos caminhos e métodos do CX Hub", () => {
     expect(ROTAS_DA_API).toEqual([
       { caminho: "/api/auth/login", metodos: ["POST"] },
       { caminho: "/api/cancellation/submit", metodos: ["POST"] },
@@ -54,6 +54,7 @@ describe("roteador das rotas do CX Hub", () => {
       { caminho: "/api/cosmos/resends", metodos: ["GET"] },
       { caminho: "/api/cosmos/resends/[id]", metodos: ["PATCH"] },
       { caminho: "/api/cosmos/resends/[id]/cancel", metodos: ["POST"] },
+      { caminho: "/api/datamart/order-context", metodos: ["GET"] },
       { caminho: "/api/datamart/products", metodos: ["GET"] },
       { caminho: "/api/logistica/submit", metodos: ["POST"] },
       { caminho: "/api/reenvio/bot", metodos: ["POST"] },
@@ -246,5 +247,84 @@ describe("fila dentro do Worker, ponta a ponta pelo worker.fetch", () => {
     expect(r.status).toBe("recusado");
     expect(r.status === "recusado" && r.motivo).toContain("HTTP 401");
     expect(erro).toHaveBeenCalled();
+  });
+});
+
+// O GET /api/datamart/order-context (ADR-018) pelo worker.fetch, como o GoDeploy o chama: a autenticação é a do
+// /api/datamart/products (a gdk_ fica no gateway, o x-cosmos-token é conferido no Cosmos) e a leitura do Data Mart usa a
+// chave do Metabase que o app já tem, no banco 43. Um pedido fictício da Yenzah: Intelipost, Shopify e itens explodidos.
+describe("order-context pelo worker.fetch (ADR-018)", () => {
+  const ctx = { waitUntil: vi.fn() };
+  const envDoApp = () => ({
+    DB: bancoEmMemoria(),
+    CXHUB_FILA_TOKENS: TOKEN,
+    COSMOS_API_URL: COSMOS,
+    METABASE_URL: METABASE,
+    METABASE_API_KEY: "chave-do-metabase",
+    METABASE_DATABASE_ID: "43",
+  });
+
+  type Consulta = { chave: string | null; banco: unknown; authorization: string | null };
+  function dataMartFalso() {
+    const consultas: Consulta[] = [];
+    const tokensNoCosmos: Array<string | null> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (entrada, init) => {
+      const url = String(entrada instanceof Request ? entrada.url : entrada);
+      const headers = new Headers(init?.headers);
+      if (url.startsWith(`${COSMOS}/organizations/`)) {
+        tokensNoCosmos.push(headers.get("authorization"));
+        return Response.json([]);
+      }
+      if (url === `${METABASE}/api/dataset`) {
+        const corpo = JSON.parse(String(init?.body)) as { database: unknown; native: { query: string } };
+        consultas.push({ chave: headers.get("x-api-key"), banco: corpo.database, authorization: headers.get("authorization") });
+        const sql = corpo.native.query;
+        // A consulta dos itens tem a da Shopify como subconsulta: ela vem antes.
+        const linhas = sql.includes("fct_intelipost_orders")
+          ? [["777001", "ES", null, "2026-11-01T10:00:00+00:00", null, true]]
+          : sql.includes("vw_shopify_order_items_exploded_priced_enriched")
+            ? [["YE9001", "YE0001", true, 1, 1, 50], ["YE9001", "YE0002", true, 2, 2, 30]]
+            : sql.includes("fct_shopify_orders")
+              ? [["8001", "2026-10-30T12:00:00+00:00", 95.9, 15.9, false, true]]
+              : [];
+        return Response.json({ status: "completed", data: { rows: linhas } }, { status: 202 });
+      }
+      throw new TypeError("fetch failed");
+    });
+    return { consultas, tokensNoCosmos };
+  }
+  const pedir = (headers: Record<string, string>) =>
+    worker.fetch(new Request(`${URL_APP}/api/datamart/order-context?brand=yenzah&order=SH5478YE`, { headers }), envDoApp() as never, ctx);
+
+  it("com a gdk_ e o x-cosmos-token: o Cosmos confere o token (nunca a gdk_), e o Data Mart é lido com a chave do app no banco 43", async () => {
+    const { consultas, tokensNoCosmos } = dataMartFalso();
+
+    const r = await pedir({ "x-cosmos-token": "jwt-do-login", authorization: "Bearer gdk_chave" });
+
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({
+      brand: "yenzah",
+      order: "SH5478YE",
+      nf: "777001",
+      nfStatus: "achada",
+      cd: "CD ES",
+      statusSugerido: "Pedido não entregue (em trânsito)",
+      avisos: [],
+      kits: [{ sku: "YE9001", componentes: [{ sku: "YE0001", quantidade: 1 }, { sku: "YE0002", quantidade: 2 }] }],
+      naoConferidos: [],
+    });
+    expect(tokensNoCosmos).toEqual(["Bearer jwt-do-login"]);
+    expect(consultas).toEqual(Array(3).fill({ chave: "chave-do-metabase", banco: 43, authorization: null }));
+  });
+
+  it("só com a gdk_ (sem x-cosmos-token): 401, sem chamar o Cosmos nem o Data Mart", async () => {
+    const { consultas, tokensNoCosmos } = dataMartFalso();
+
+    const r = await pedir({ authorization: "Bearer gdk_chave" });
+
+    expect(r.status).toBe(401);
+    expect(await r.json()).toEqual({ error: "Header Authorization ausente." });
+    expect(tokensNoCosmos).toEqual([]);
+    expect(consultas).toEqual([]);
   });
 });

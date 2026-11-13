@@ -147,6 +147,110 @@ describe('gravarLinhaNaPlanilha — marcas sem Cosmos', () => {
         expect(resultado).toEqual({ status: 'gravado' });
         expect(aba.atualizacoes).toHaveLength(0);
     });
+
+    describe('valores da operação (o "Valor da NF de reenvio (R$)")', () => {
+        const ABA = "'Respostas ao formulário'";
+        const NOVA_LINHA = { updates: { updatedRange: `${ABA}!A2:Z2` } };
+
+        it('o valor vai como número no mesmo batchUpdate das fórmulas, só na coluna que não tem fórmula', async () => {
+            const aba = instalarGoogleFalso(CABECALHO);
+            aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+            const resultado = await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, { AC: 289.8 });
+
+            expect(resultado).toEqual({ status: 'gravado' });
+            expect(aba.atualizacoes).toHaveLength(1);
+            expect(aba.atualizacoes[0].valueInputOption).toBe('USER_ENTERED');
+            expect(aba.atualizacoes[0].celulas).toHaveLength(7);
+            expect(aba.atualizacoes[0].celulas[0]).toEqual({ range: `${ABA}!AA2`, valor: '=WORKDAY(Z2; 3)' });
+            expect(aba.atualizacoes[0].celulas[6]).toEqual({ range: `${ABA}!AC2`, valor: 289.8 });
+        });
+
+        it('a linha que a conferência achou também recebe o valor', async () => {
+            const aba = instalarGoogleFalso(CABECALHO, [outraLinha('SH1AP'), [...LINHA]]);
+
+            const resultado = await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, { AC: 10 });
+
+            expect(resultado).toEqual({ status: 'ja_existia' });
+            expect(aba.atualizacoes[0].celulas.at(-1)).toEqual({ range: `${ABA}!AC3`, valor: 10 });
+        });
+
+        it('coluna com fórmula no molde não recebe o valor: ele é descartado, e o aviso diz a coluna e não o valor', async () => {
+            const aba = instalarGoogleFalso(CABECALHO);
+            aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+            await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, { AA: 123.45, AC: 289.8 });
+
+            const colunas = aba.atualizacoes[0].celulas.map((celula) => celula.range);
+            expect(colunas.filter((range) => range.endsWith('!AA2'))).toHaveLength(1);
+            expect(aba.atualizacoes[0].celulas.find((celula) => celula.range.endsWith('!AA2'))?.valor).toBe('=WORKDAY(Z2; 3)');
+            const avisos = vi.mocked(console.warn).mock.calls.map((chamada) => chamada.join(' ')).join('\n');
+            expect(avisos).toContain('a coluna AA tem fórmula');
+            expect(avisos).not.toContain('123.45');
+        });
+
+        it('valor null ou vazio não vai', async () => {
+            const aba = instalarGoogleFalso(CABECALHO);
+            aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+            await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, { AC: null, AB: '' });
+
+            expect(aba.atualizacoes[0].celulas).toHaveLength(6);
+        });
+
+        it('planilha sem molde de fórmulas grava só o valor, no número da linha achado pela conferência', async () => {
+            const linha = buildResendRow('kokeshi', RESEND_DATA, CARIMBO);
+            const aba = instalarGoogleFalso(cabecalhoDoLayout('reenvio', 'kokeshi', linha.length));
+
+            const resultado = await gravarLinhaNaPlanilha(
+                'reenvio', 'kokeshi', linha, { ...CASO, pedido: RESEND_DATA.numeroPedido }, prazo(), semEspera, { AC: 99.9 },
+            );
+
+            expect(resultado).toEqual({ status: 'gravado' });
+            expect(aba.atualizacoes).toHaveLength(1);
+            expect(aba.atualizacoes[0].valueInputOption).toBe('USER_ENTERED');
+            expect(aba.atualizacoes[0].celulas).toEqual([{ range: `${ABA}!AC2`, valor: 99.9 }]);
+        });
+
+        it('sem molde e sem valor a gravar, nenhuma chamada', async () => {
+            const linha = buildResendRow('kokeshi', RESEND_DATA, CARIMBO);
+            const aba = instalarGoogleFalso(cabecalhoDoLayout('reenvio', 'kokeshi', linha.length));
+
+            await gravarLinhaNaPlanilha('reenvio', 'kokeshi', linha, { ...CASO, pedido: RESEND_DATA.numeroPedido }, prazo(), semEspera, { AC: null });
+
+            expect(aba.atualizacoes).toHaveLength(0);
+        });
+
+        it('a escrita falha ⇒ sem_formulas, e o motivo diz que eram as fórmulas e os valores', async () => {
+            const aba = instalarGoogleFalso(CABECALHO);
+            aba.appends.push({ status: 200, json: NOVA_LINHA });
+            const falso = vi.mocked(fetch).getMockImplementation()!;
+            vi.mocked(fetch).mockImplementation(async (input, init) => (String(input).includes('values:batchUpdate')
+                ? new Response(JSON.stringify({ error: { message: 'sem permissão' } }), { status: 403 })
+                : falso(input, init)));
+
+            const resultado = await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, { AC: 289.8 });
+
+            expect(resultado.status).toBe('sem_formulas');
+            expect(resultado.motivo).toMatch(/^a linha 2 entrou, mas as fórmulas e os valores da operação não: .*HTTP 403/);
+            expect(aba.linhas).toHaveLength(1);
+        });
+
+        it('gravarNasPlanilhas repassa os valores da linha, e quem não os traz segue como antes', async () => {
+            const aba = instalarGoogleFalso(CABECALHO);
+            aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+            const resultado = await gravarNasPlanilhas(
+                [{ ...CASO, fluxo: 'reenvio', marca: 'apice', linha: LINHA, valoresDaOperacao: { AC: 305.7 } }],
+                { statusDaFila: 'enfileirado' },
+                prazo(),
+                semEspera,
+            );
+
+            expect(resultado).toEqual({ ok: true });
+            expect(aba.atualizacoes[0].celulas.at(-1)).toEqual({ range: `${ABA}!AC2`, valor: 305.7 });
+        });
+    });
 });
 
 describe('gravarNasPlanilhas — marcas sem Cosmos', () => {

@@ -113,3 +113,13 @@ export function divergenciaNoCabecalho(esperado: readonly string[], lido: SheetC
     }
     return null;
 }
+
+/**
+ * A letra da primeira coluna do cabeçalho esperado com o texto pedido (sem os espaços das pontas), ou `null` se a
+ * planilha não tem essa coluna. Quem grava um valor numa coluna da operação (o "Valor da NF de reenvio (R$)") a acha
+ * por aqui em vez de fixar a letra, que muda de uma marca para outra (AC na Ápice e na Yenzah, V na Denavita).
+ */
+export function colunaDoCabecalho(fluxo: FluxoPlanilha, marca: MarcaCxHub, cabecalho: string): string | null {
+    const indice = CABECALHO_ESPERADO[fluxo]?.[marca]?.findIndex((texto) => texto.trim() === cabecalho.trim()) ?? -1;
+    return indice === -1 ? null : letraDaColuna(indice);
+}

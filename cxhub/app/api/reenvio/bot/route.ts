@@ -363,6 +363,10 @@ async function postarSemAutomacao(input: {
         idSolicitacao: requestId,
         prazoFila: prazoDaFila(),
     });
+    // Marca sem Cosmos cujo pedido o Data Mart diz que não tem NF de venda (ADR-018): nada foi gravado, e a recusa
+    // responde sozinha — prefixar a causa da degradação ("registrado com o que o bot informou") a contradiria. É dado do
+    // pedido, não sistema quebrado: sem aviso.
+    if (result.reason === 'ORDER_NOT_INVOICED') return NextResponse.json(result, { status });
     // Precedência do transporte: se a linha ficou INCERTA, isso importa mais do que a guarda que
     // degradou — "não sabemos se registrou" pede outra ação que "registrou sem automação".
     const reason = result.reason ?? reprovacao.reason;

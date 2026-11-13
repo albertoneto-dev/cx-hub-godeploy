@@ -3,6 +3,7 @@
 // `import type` de propósito: `@shared/lib/alerts` é server-only (lê env var, faz fetch), e este
 // arquivo de tipos é importado pelo cliente via `submitResend`. Tipo é apagado na compilação.
 import type { AlertReason } from '../../../shared/lib/alerts/types';
+import type { ItemReenviado } from '../../../shared/lib/datamart/pedidoTipos';
 
 /**
  * Dados de submissão de reenvio para a planilha do Google Sheets
@@ -62,6 +63,15 @@ export interface ResendSubmissionData {
 
     // Observações
     comentarios: string;             // COMENTÁRIOS GERAIS
+
+    /**
+     * Só nas marcas sem Cosmos com planilha (ADR-018): os itens do pedido que vão no reenvio, como foram marcados (o kit
+     * ou o componente), **antes** da troca e sem os mimos. É a base do "Valor da NF de reenvio (R$)" que o servidor
+     * calcula: o `produtoReenviar` já chega com o substituto e o mimo somados por SKU, e dele não dá para separar o
+     * original. Opcional: sem a lista (a Central de Tickets, por enquanto), o servidor lê o `produtoReenviar` quando os
+     * comentários não têm mimo nem troca, e deixa o valor em branco quando têm.
+     */
+    itensOriginaisReenviados?: ItemReenviado[];
 
     // === Dados estruturados para a API Cosmos (usados pelo n8n no nó de resend) ===
     // Preenchidos apenas quando shouldSendToAPI=true

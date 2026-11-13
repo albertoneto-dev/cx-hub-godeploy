@@ -117,7 +117,7 @@ async function avisar(ctx: AlertContext): Promise<void> {
  * (`429`) não é repetida por este laço: a leitura já a esperou em escada (`server.ts`).
  *
  * Nas planilhas com molde de fórmulas (as das marcas sem Cosmos, ADR-013), depois que a linha está lá — anexada agora
- * ou achada pela conferência — as fórmulas da operação são escritas nela (`escreverFormulas`).
+ * ou achada pela conferência — as fórmulas da operação e os `valoresDaOperacao` são escritos nela (`escreverNaOperacao`).
  *
  * **Nunca lança**: qualquer erro vira `falhou` com o `motivo`.
  */
@@ -127,13 +127,14 @@ export async function gravarLinhaNaPlanilha(
     linha: SheetCell[],
     caso: CasoDaLinha,
     prazo: number,
-    deps: GravarDeps = PADRAO
+    deps: GravarDeps = PADRAO,
+    valoresDaOperacao: Readonly<Record<string, SheetCell>> = {},
 ): Promise<ResultadoDaPlanilha> {
     try {
         const destino = resolverPlanilha(fluxo, marca);
         const gravacao = await garantirLinha(fluxo, marca, destino, linha, caso, prazo, deps);
         if (gravacao.status === 'falhou') return { status: 'falhou', motivo: gravacao.motivo };
-        return await escreverFormulas(fluxo, marca, destino, caso, gravacao.numeroDaLinha, prazo) ?? { status: gravacao.status };
+        return await escreverNaOperacao(fluxo, marca, destino, caso, gravacao.numeroDaLinha, prazo, valoresDaOperacao) ?? { status: gravacao.status };
     } catch (erro) {
         return { status: 'falhou', motivo: descrever(erro) };
     }
@@ -183,39 +184,63 @@ async function garantirLinha(
 }
 
 /**
- * Escreve as fórmulas da operação na linha do caso (`formulas.ts`), num `values:batchUpdate` só, com `USER_ENTERED`
- * (é fórmula de verdade, não texto). Repetir é inofensivo: as mesmas fórmulas nas mesmas células. Sem o número da
- * linha (o append não o devolveu), ele é achado pela conferência.
+ * Escreve na linha do caso, num `values:batchUpdate` só e com `USER_ENTERED`, as fórmulas da operação (`formulas.ts`) e os
+ * valores que o servidor calculou para colunas da operação (`valoresDaOperacao`: o "Valor da NF de reenvio (R$)").
+ * `USER_ENTERED` porque a fórmula é fórmula de verdade, e o número entra como número. Repetir é inofensivo: as mesmas
+ * células com o mesmo conteúdo. Sem o número da linha (o append não o devolveu), ele é achado pela conferência.
  *
- * `null` quando a planilha não tem molde ou as fórmulas entraram; senão, `sem_formulas` com o motivo. **Nunca lança.**
+ * O valor só vai onde não há fórmula: a coluna que tem fórmula no molde é da planilha, e sobrescrevê-la a quebraria.
+ * Valor `null` ou vazio não vai (a célula fica como está). A planilha sem molde grava só os valores; sem nada a
+ * escrever, não há chamada nenhuma.
+ *
+ * `null` quando não havia o que escrever ou tudo entrou; senão, `sem_formulas` com o motivo. **Nunca lança.**
  */
-async function escreverFormulas(
+async function escreverNaOperacao(
     fluxo: FluxoPlanilha,
     marca: MarcaCxHub,
     destino: PlanilhaDestino,
     caso: CasoDaLinha,
     numeroConhecido: number | null,
     prazo: number,
+    valoresDaOperacao: Readonly<Record<string, SheetCell>>,
 ): Promise<ResultadoDaPlanilha | null> {
-    if (!FORMULAS_DA_LINHA[fluxo]?.[marca]) return null;
+    const molde = FORMULAS_DA_LINHA[fluxo]?.[marca];
+    const valores: Array<{ coluna: string; valor: SheetCell }> = [];
+    for (const [coluna, valor] of Object.entries(valoresDaOperacao)) {
+        if (valor === null || valor === '') continue;
+        if (molde?.[coluna] !== undefined) {
+            // Só a coluna no aviso: o valor pode ser de dinheiro da cliente, e o log é compartilhado.
+            console.warn(`${LOG} ${fluxo}/${marca} ${caso.idSolicitacao}: a coluna ${coluna} tem fórmula na planilha, então o valor calculado não foi gravado nela`);
+            continue;
+        }
+        valores.push({ coluna, valor });
+    }
+    if (!molde && valores.length === 0) return null;
 
+    const oQue = !molde ? 'os valores' : valores.length > 0 ? 'as fórmulas e os valores' : 'as fórmulas';
     let numero = numeroConhecido;
     try {
         numero ??= await acharLinhaDoCaso(fluxo, marca, caso, prazo);
-        const formulas = numero === null ? [] : formulasDaLinha(fluxo, marca, numero);
-        if (numero === null || formulas.length === 0) {
-            return { status: 'sem_formulas', motivo: 'a linha entrou, mas não deu para saber o número dela para escrever as fórmulas' };
+        if (numero === null) {
+            return { status: 'sem_formulas', motivo: `a linha entrou, mas não deu para saber o número dela para escrever ${oQue} da operação` };
         }
-        const linhaDasFormulas = numero;
+        const linhaDoCaso = numero;
+        const celulas = [
+            ...formulasDaLinha(fluxo, marca, linhaDoCaso).map(({ coluna, formula }) => ({ coluna, valor: formula as SheetCell })),
+            ...valores,
+        ];
+        if (celulas.length === 0) {
+            return { status: 'sem_formulas', motivo: `a linha entrou, mas não deu para saber o número dela para escrever ${oQue} da operação` };
+        }
         await atualizarCelulas(
             destino.spreadsheetId,
-            formulas.map(({ coluna, formula }) => ({ intervalo: `${abaA1(destino.aba)}!${coluna}${linhaDasFormulas}`, valor: formula })),
+            celulas.map(({ coluna, valor }) => ({ intervalo: `${abaA1(destino.aba)}!${coluna}${linhaDoCaso}`, valor })),
             prazo,
             { entrada: 'USER_ENTERED' },
         );
         return null;
     } catch (erro) {
-        const motivo = `a linha${numero === null ? '' : ` ${numero}`} entrou, mas as fórmulas da operação não: ${descrever(erro)}`;
+        const motivo = `a linha${numero === null ? '' : ` ${numero}`} entrou, mas ${oQue} da operação não: ${descrever(erro)}`;
         console.warn(`${LOG} ${fluxo}/${marca} ${caso.idSolicitacao}: ${motivo}`);
         return { status: 'sem_formulas', motivo };
     }
@@ -230,6 +255,11 @@ export interface LinhaDaSolicitacao extends CasoDaLinha {
      * Pix do reembolso das marcas sem Cosmos (LGPD, ADR-013). Quem repõe pede a chave de novo no atendimento.
      */
     colunasSensiveis?: number[];
+    /**
+     * Valores que o servidor calcula para colunas da operação (letra da coluna ⇒ valor): o "Valor da NF de reenvio (R$)"
+     * da Ápice e da Yenzah. Vão como número, junto com as fórmulas, e só em coluna sem fórmula no molde.
+     */
+    valoresDaOperacao?: Readonly<Record<string, SheetCell>>;
 }
 
 /** A linha para o log: as colunas sensíveis viram `[omitido]`. */
@@ -272,7 +302,7 @@ export async function gravarNasPlanilhas(
     deps: GravarDeps = PADRAO
 ): Promise<ResultadoDasPlanilhas> {
     const resultados = await Promise.all(
-        linhas.map((item) => gravarLinhaNaPlanilha(item.fluxo, item.marca, item.linha, item, prazo, deps))
+        linhas.map((item) => gravarLinhaNaPlanilha(item.fluxo, item.marca, item.linha, item, prazo, deps, item.valoresDaOperacao))
     );
 
     const falhas = linhas

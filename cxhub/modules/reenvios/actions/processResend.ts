@@ -1,12 +1,22 @@
-import { BRAND_TO_ORG_ID, registraNaPlanilha, temOrganizacaoNoCosmos, type MarcaCxHub, type SupportedBrand } from '../../../shared/lib/constants';
+import {
+    BRAND_TO_ORG_ID,
+    ehMarcaSemCosmosComPlanilha,
+    registraNaPlanilha,
+    temOrganizacaoNoCosmos,
+    type MarcaCxHub,
+    type SupportedBrand,
+} from '../../../shared/lib/constants';
 import { configuracaoQueFalta, prazoDaRequisicao } from '../../../shared/lib/backendDireto';
+import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../shared/lib/datamart/conferenciaServer';
 import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro, type ResultadoFila } from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { planilhaQueFalta } from '../../../shared/lib/sheets/index';
+import { colunaDoCabecalho } from '../../../shared/lib/sheets/cabecalhos';
 import { gravarNasPlanilhas } from '../../../shared/lib/sheets/gravarLinha';
 import type { ResendSubmissionData, SheetsAppendResponse } from '../types/index';
 import { buildResendRow } from './buildResendRow';
 import { casoDoReenvio } from './casoDoReenvio';
+import { aplicarConferenciaAoReenvio, type ConferenciaDoReenvio } from './conferenciaDoReenvio';
 import { buildCosmosResendBody, interpretarErroCosmos, type FalhaCosmos } from './cosmosResend';
 
 const LOG = '[Resend Direct]';
@@ -32,7 +42,9 @@ export interface ProcessResendInput {
  * Metabase e **junto dele** na planilha da marca (ADR-007, ADR-010, ADR-012):
  *
  * 0. **configuração** — fila e planilha, antes de tudo: sem uma das duas nada é registrado nem reenviado;
- * 1. **dedup de 24h** — na fila e na raw de eventos (era a aba da marca, pelo `[AUX] Consulta Pedidos`);
+ * 1. **dedup de 24h** — na fila e na raw de eventos (era a aba da marca, pelo `[AUX] Consulta Pedidos`). Na Ápice, na
+ *    Yenzah e na Denavita, junto dele, a **conferência do pedido no Data Mart** (ADR-018): pedido sem NF de venda é
+ *    recusado aqui, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram;
  * 2. **reenvio no Cosmos**, só com automação e fora do modo de teste (era o IF "Order should be sent to API2" —
  *    é aqui que mora o INV-02);
  * 3. **fila do Metabase** — o caso vai à fila do app `cx-hub`, e o lote o leva à gold em até 20 min (ADR-012);
@@ -87,7 +99,12 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         };
     }
 
-    // ─── 1. Dedup de 24h ──────────────────────────────────────────────────────────────────────────
+    // ─── 1. Dedup de 24h, com a conferência no Data Mart junto ───────────────────────────────────
+    // A conferência (ADR-018) começa antes do dedup e corre junto dele: as duas só leem. Ela fica no prazo do Cosmos, que
+    // essas marcas nunca chamam, então não alonga o pior caso da rota; e nunca lança (o que não leu volta "não conferido").
+    const conferencia = ehMarcaSemCosmosComPlanilha(brand)
+        ? conferirPedidoNoDataMart(brand, data.numeroPedido, prazoDaConferencia(prazo))
+        : null;
     try {
         const existente = await solicitacaoRecenteNoRegistro('REENVIO', brand, data.numeroPedido);
         if (existente) {
@@ -114,9 +131,26 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         };
     }
 
+    // ─── 1b. O que a conferência muda: NF, CD e o valor da NF de reenvio (ADR-018) ───────────────
+    let dados = data;
+    let valorNaOperacao: number | null = null;
+    if (conferencia && ehMarcaSemCosmosComPlanilha(brand)) {
+        const conferido = aplicarConferenciaAoReenvio(brand, data, await conferencia);
+        if (conferido.tipo === 'recusado') {
+            console.log(`${LOG} ${idSolicitacao}: recusado — o pedido ${data.numeroPedido} não tem NF de venda no Data Mart`);
+            return {
+                body: { code: 'UNKNOWN_ERROR', message: conferido.mensagem, sentToAPI: false, reason: 'ORDER_NOT_INVOICED' },
+                status: 422,
+            };
+        }
+        logarConferencia(idSolicitacao, data.numeroPedido, conferido);
+        dados = conferido.data;
+        valorNaOperacao = conferido.valorNaOperacao;
+    }
+
     // ─── 2. Reenvio no Cosmos ─────────────────────────────────────────────────────────────────────
     if (executar && temOrganizacaoNoCosmos(brand)) {
-        const falha = await executarNoCosmos(brand, data, token, prazo, idSolicitacao);
+        const falha = await executarNoCosmos(brand, dados, token, prazo, idSolicitacao);
         if (falha) return { body: { ...falha, sentToAPI: false }, status: 200 };
     }
 
@@ -133,7 +167,7 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     }
 
     // ─── 3. Fila do Metabase ──────────────────────────────────────────────────────────────────────
-    const caso = casoDoReenvio({ brand, data, automacao: executar, idSolicitacao, criadoEm: agora });
+    const caso = casoDoReenvio({ brand, data: dados, automacao: executar, idSolicitacao, criadoEm: agora });
     const fila = await enfileirarCasos([caso], input.prazoFila ?? prazoDaFila());
 
     // Fila recusou: com certeza nada foi guardado, e a planilha também fica de fora (o agente pode repetir).
@@ -156,17 +190,20 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     if (!comPlanilha) return respostaSemPlanilha(fila, idSolicitacao);
 
     // ─── 4. Linha na planilha ─────────────────────────────────────────────────────────────────────
+    // Na Ápice e na Yenzah o valor da NF de reenvio é coluna da operação: vai na linha nova junto com as fórmulas (ADR-018).
+    const colunaDoValor = valorNaOperacao === null ? null : colunaDoCabecalho('reenvio', brand, 'Valor da NF de reenvio (R$)');
     const planilha = await gravarNasPlanilhas(
         [{
             fluxo: 'reenvio',
             marca: brand,
             // O carimbo da linha é o `criado_em` do caso, o mesmo instante que foi para a fila (ADR-010).
-            linha: buildResendRow(brand, data, formatarCarimboSP(agora)),
+            linha: buildResendRow(brand, dados, formatarCarimboSP(agora)),
             idSolicitacao,
-            pedido: data.numeroPedido,
+            pedido: dados.numeroPedido,
             criadoEm: agora,
+            ...(colunaDoValor ? { valoresDaOperacao: { [colunaDoValor]: valorNaOperacao } } : {}),
         }],
-        { numeroPedido: data.numeroPedido, idAtendimento: data.idAtendimento, statusDaFila: fila.status },
+        { numeroPedido: dados.numeroPedido, idAtendimento: dados.idAtendimento, statusDaFila: fila.status },
     );
 
     const feito = executar ? 'O reenvio foi processado com sucesso no Cosmos e a' : 'A';
@@ -252,6 +289,28 @@ function respostaSemPlanilha(
         },
         status: 200,
     };
+}
+
+/**
+ * O que a conferência fez, para o log (ADR-018): a NF que veio e difere da do Data Mart (números de NF não são dado
+ * pessoal), o motivo do valor em branco e o que ficou sem conferir.
+ */
+function logarConferencia(
+    idSolicitacao: string,
+    pedido: string,
+    conferido: Extract<ConferenciaDoReenvio, { tipo: 'aplicado' }>,
+): void {
+    if (conferido.nfDivergente) {
+        console.warn(`${LOG} ${idSolicitacao}: a NF que veio (${conferido.nfDivergente.digitada}) difere da do Data Mart `
+            + `(${conferido.nfDivergente.doDataMart}) no pedido ${pedido} — vale a do Data Mart`);
+    }
+    if (conferido.valorEmBranco) {
+        console.log(`${LOG} ${idSolicitacao}: valor da NF de reenvio em branco (${pedido}) — ${conferido.valorEmBranco}`);
+    }
+    if (conferido.naoConferidos.length > 0) {
+        console.warn(`${LOG} ${idSolicitacao}: sem conferência no Data Mart (${conferido.naoConferidos.join(', ')}) no pedido `
+            + `${pedido} — vale o que veio, com a nota nas observações`);
+    }
 }
 
 /**

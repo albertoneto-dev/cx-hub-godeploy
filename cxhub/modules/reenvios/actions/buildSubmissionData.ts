@@ -5,7 +5,8 @@ import type { AlertReason } from '@shared/lib/alerts/types';
 import type { MarcaCxHub, ResendSubmissionData, SupportedBrand } from '../types/sheets';
 import type { Step1FormData, Step2Data } from '../types/resend';
 import { BRAND_DISPLAY_MAP } from '../types/resend';
-import { ehMarcaSemCosmos, temOrganizacaoNoCosmos } from '../../../shared/lib/constants';
+import { ehMarcaSemCosmos, ehMarcaSemCosmosComPlanilha, temOrganizacaoNoCosmos } from '../../../shared/lib/constants';
+import type { ItemReenviado } from '../../../shared/lib/datamart/pedidoTipos';
 import { shouldSendToAPI } from './shouldSendToAPI';
 import { calculateResendValue, getSkusToResend } from './calculateResendValue';
 import { resolveCarrier } from './carrierMap';
@@ -168,18 +169,22 @@ function buildProdutosReenviar(
  *   mimos; as quantidades do mesmo SKU somadas (na ordem em que o SKU aparece primeiro), `SKU - qtd` separados por `;`.
  * - `notas`: cada troca (na ordem de `produtosReenviar`) e depois cada mimo, no vocabulário que a operação já lê nas
  *   planilhas dessas marcas. Vão na frente das observações.
+ * - `itensOriginais`: os itens do pedido marcados, com o SKU **original** e sem os mimos (ADR-018). É por eles que o
+ *   servidor calcula o valor da NF de reenvio: o substituto herda o preço do item que substitui, e o mimo não entra.
  */
 function reenvioDaMarcaSemCosmos(
     step2Data: Step2Data,
     orderData: NormalizedOrder,
-): { produtoReenviar: string; notas: string[] } {
+): { produtoReenviar: string; notas: string[]; itensOriginais: ItemReenviado[] } {
     const quantidadePorSku = new Map<string, number>();
     const somar = (sku: string, quantidade: number) => quantidadePorSku.set(sku, (quantidadePorSku.get(sku) ?? 0) + quantidade);
     const notas: string[] = [];
+    const itensOriginais: ItemReenviado[] = [];
 
     for (const item of itensDoPedidoParaReenviar(step2Data, orderData)) {
         const troca = step2Data.substituicoes[item.id];
         somar(troca?.sku ?? item.sku, item.quantidade);
+        itensOriginais.push({ sku: item.sku, quantidade: item.quantidade });
         if (troca) notas.push(`SKU ${item.sku} sem estoque substituído pelo SKU ${troca.sku}`);
     }
     for (const mimo of step2Data.itensAdicionais) {
@@ -190,6 +195,7 @@ function reenvioDaMarcaSemCosmos(
     return {
         produtoReenviar: [...quantidadePorSku].map(([sku, quantidade]) => `${sku} - ${quantidade}`).join(';'),
         notas,
+        itensOriginais,
     };
 }
 
@@ -433,6 +439,9 @@ export function buildSubmissionData(input: BuildSubmissionDataInput): BuildSubmi
         erp: shouldSend ? resolveErp(brand, orderData.source) : '',
 
         comentarios,
+
+        // Só onde o servidor confere o pedido no Data Mart (ADR-018): a Gobeaute também é sem Cosmos, mas não tem a regra.
+        ...(reenvioSemCosmos && ehMarcaSemCosmosComPlanilha(brand) ? { itensOriginaisReenviados: reenvioSemCosmos.itensOriginais } : {}),
 
         ...(shouldSend && temOrganizacaoNoCosmos(brand) ? { apiData: buildApiData(brand, step2Data, orderData, addr, carrierFallback) } : {}),
     };

@@ -1,6 +1,7 @@
 // A especificação de cada endpoint que a página /docs (api/docs.ts) mostra no estilo Swagger: parâmetros, corpo da
 // requisição e respostas por status, com exemplos. Levantada do código das rotas (cxhub/app/api, servidor/) em
-// 2026-11-11, com o CX Hub no commit 8a1b1a9; "sources" diz de onde veio cada uma, para conferir quando a rota mudar.
+// 2026-11-11, com o CX Hub no commit 8a1b1a9, e revista em 2026-11-13 para o 11cebff (ADR-018: o order-context e a
+// conferência no Data Mart); "sources" diz de onde veio cada uma, para conferir quando a rota mudar.
 // Os exemplos são fictícios: nenhum dado de cliente, token ou segredo. O testes/docs.test.ts cobra que toda rota do
 // roteador e da fila esteja aqui, e que nada aqui seja rota que não existe.
 
@@ -2086,6 +2087,204 @@ export const ENDPOINTS: Endpoint[] = [
   },
   {
     "method": "GET",
+    "path": "/api/datamart/order-context",
+    "tag": "Shopify e Data Mart",
+    "summary": "O que o servidor vai gravar para o pedido de uma marca sem Cosmos: NF, CD, status sugerido, avisos e kits",
+    "description": "Confere o token no Cosmos (na org da Lescent, como o catálogo) e lê o pedido no Data Mart pelo Metabase, com as mesmas consultas e regras que o /api/sheets/append, o /api/refund/submit e o /api/reenvio/bot usam ao gravar (ADR-018): a Intelipost, a Shopify, os itens explodidos e, na Ápice, o pedido e a NF no Tiny. Serve para a tela mostrar, antes de enviar, a NF e o CD que vão para a planilha, e para avisar quando o pedido ainda não tem NF de venda (o registro seria recusado com 422). A leitura tem teto de 12 s; o que o Data Mart não responder a tempo volta em naoConferidos, ainda com 200.",
+    "routeHeader": "x-cosmos-token",
+    "params": [
+      {
+        "name": "brand",
+        "in": "query",
+        "type": "string",
+        "required": true,
+        "description": "Marca sem Cosmos com planilha (sem diferenciar maiúsculas; espaços nas pontas são ignorados). A gobeaute e as marcas do Cosmos dão 400.",
+        "enum": [
+          "apice",
+          "yenzah",
+          "denavita"
+        ]
+      },
+      {
+        "name": "order",
+        "in": "query",
+        "type": "string",
+        "required": true,
+        "description": "O número do pedido, com ou sem o prefixo e o sufixo: SH1234567AP, #1234567 e 1234567 valem o mesmo. Só os dígitos contam, e precisam ser de 3 a 9."
+      }
+    ],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "O contexto do pedido. Com o Data Mart fora do ar também é 200: nfStatus desconhecida, e o que faltou em naoConferidos.",
+        "fields": [
+          {
+            "name": "brand",
+            "type": "string",
+            "required": true,
+            "description": "A marca, em minúsculas."
+          },
+          {
+            "name": "order",
+            "type": "string",
+            "required": true,
+            "description": "O número como a planilha o guarda: SH, os dígitos e o sufixo da marca (AP, YE, DE)."
+          },
+          {
+            "name": "nf",
+            "type": "string | null",
+            "required": true,
+            "description": "A NF de venda que o servidor grava: a da primeira remessa da Intelipost; na Ápice, sem ela, a do Tiny que não está cancelada. null quando não há (ausente) ou não se sabe (desconhecida)."
+          },
+          {
+            "name": "nfStatus",
+            "type": "string",
+            "required": true,
+            "description": "achada: há NF de venda. ausente: o Data Mart respondeu e não há NF, e o registro do reenvio ou do reembolso deste pedido é recusado com 422 (no bot, reason ORDER_NOT_INVOICED). desconhecida: uma leitura falhou ou passou do prazo; ao gravar, o servidor confere de novo.",
+            "enum": [
+              "achada",
+              "ausente",
+              "desconhecida"
+            ]
+          },
+          {
+            "name": "cd",
+            "type": "string | null",
+            "required": true,
+            "description": "O CD de origem que o servidor grava. Ápice: a tabela do Tiny em que o pedido está (ES ou RJ), com a UF de origem da Intelipost de reserva. Yenzah: a UF de origem da Intelipost. Denavita: sempre CD MG. null quando não se sabe.",
+            "enum": [
+              "CD ES",
+              "CD RJ",
+              "CD MG"
+            ]
+          },
+          {
+            "name": "statusSugerido",
+            "type": "string | null",
+            "required": true,
+            "description": "Pela primeira remessa da Intelipost: entregue dá \"Cliente ficou com o pedido\"; despachada dá \"Pedido não entregue (em trânsito)\"; sem rastreio dá \"Pedido não foi enviado\". null sem a Intelipost ou quando nada disso vale."
+          },
+          {
+            "name": "avisos",
+            "type": "array",
+            "required": true,
+            "description": "Frases para a tela: pedido sem NF, pedido em mais de um CD, mais de uma remessa na Intelipost (pode já existir um reenvio), pedido cancelado ou fora da Shopify, kit sem composição, e o que o Data Mart não respondeu a tempo."
+          },
+          {
+            "name": "kits",
+            "type": "array",
+            "required": true,
+            "description": "Os kits do pedido, na ordem em que aparecem, cada um com os componentes únicos. Vazio quando o pedido não tem kit ou os itens não foram lidos."
+          },
+          {
+            "name": "kits[].sku",
+            "type": "string",
+            "required": true,
+            "description": "SKU do kit."
+          },
+          {
+            "name": "kits[].componentes[].sku",
+            "type": "string",
+            "required": true,
+            "description": "SKU do componente, o que sai do CD."
+          },
+          {
+            "name": "kits[].componentes[].quantidade",
+            "type": "integer",
+            "required": true,
+            "description": "Unidades do componente em UM kit."
+          },
+          {
+            "name": "naoConferidos",
+            "type": "array",
+            "required": true,
+            "description": "O que o Data Mart não respondeu a tempo: \"nf\", \"cd\" ou os dois. Vazio quando tudo foi lido."
+          }
+        ],
+        "example": {
+          "brand": "apice",
+          "order": "SH1234567AP",
+          "nf": "10000001",
+          "nfStatus": "achada",
+          "cd": "CD ES",
+          "statusSugerido": "Pedido não entregue (em trânsito)",
+          "avisos": [],
+          "kits": [
+            {
+              "sku": "40001",
+              "componentes": [
+                {
+                  "sku": "20001",
+                  "quantidade": 1
+                },
+                {
+                  "sku": "20002",
+                  "quantidade": 1
+                }
+              ]
+            }
+          ],
+          "naoConferidos": []
+        }
+      },
+      {
+        "status": 400,
+        "description": "Falta brand; a marca não tem a conferência (inclusive gobeaute e as marcas do Cosmos: \"A marca <brand> não tem a conferência do pedido no Data Mart: use apice, yenzah ou denavita.\"); ou o order falta ou não tem de 3 a 9 dígitos (\"Parâmetro order ausente ou inválido: use o número do pedido (ex.: SH1731559AP).\"). Nada é consultado.",
+        "example": {
+          "error": "Parâmetro brand ausente."
+        }
+      },
+      {
+        "status": 401,
+        "description": "Falta o x-cosmos-token. O Cosmos recusar o token dá {\"error\": \"Token do Cosmos inválido ou expirado.\"}. Nos dois casos o Data Mart não é lido.",
+        "example": {
+          "error": "Header Authorization ausente."
+        }
+      },
+      {
+        "status": 403,
+        "description": "O Cosmos respondeu 403 na conferência do token.",
+        "example": {
+          "error": "O token não tem acesso ao Cosmos."
+        }
+      },
+      {
+        "status": 502,
+        "description": "A conferência do token falhou (status inesperado, rede, ou COSMOS_API_URL ausente). Uma falha inesperada nas regras da conferência dá {\"error\": \"Não foi possível conferir o pedido no Data Mart. Tente de novo em instantes.\"}. O Data Mart fora do ar não dá 502: dá 200 com naoConferidos.",
+        "example": {
+          "error": "Não foi possível conferir o token no Cosmos."
+        }
+      },
+      {
+        "status": 504,
+        "description": "O Cosmos não respondeu no prazo ao conferir o token.",
+        "example": {
+          "error": "O Cosmos demorou para conferir o token."
+        }
+      }
+    ],
+    "notes": [
+      "Erros em {error}, não em {code, message}.",
+      "Nada da marca vai ao Cosmos: ele só confere o token, na org da Lescent.",
+      "As funções são as da gravação (conferirPedidoNoDataMart): o que esta rota mostra é o que vai para a planilha, a menos que o Data Mart mude entre a leitura e o envio.",
+      "nfStatus ausente não é erro desta rota: avisa que o registro seria recusado com 422.",
+      "O Data Mart tem atraso de carga: um pedido faturado há pouco pode vir sem NF e ganhá-la horas depois.",
+      "Leituras por chamada: 3 consultas ao Metabase na Yenzah e na Denavita, de 5 a 7 na Ápice, de 0,3 a 0,6 s cada. A busca do Tiny por data (pedido sem o id do Tiny na Intelipost) leva vários segundos. Sem cache: cada chamada lê de novo."
+    ],
+    "sources": [
+      "cxhub/app/api/datamart/order-context/route.ts",
+      "cxhub/shared/lib/datamart/conferenciaServer.ts",
+      "cxhub/shared/lib/datamart/pedidoServer.ts",
+      "cxhub/shared/lib/datamart/pedido.ts",
+      "cxhub/shared/lib/datamart/pedidoTipos.ts",
+      "cxhub/shared/lib/cosmos/http.ts",
+      "cxhub/shared/lib/metabase/client.ts",
+      "cxhub/__tests__/integration/api-datamart-order-context.test.ts"
+    ]
+  },
+  {
+    "method": "GET",
     "path": "/api/resend/data",
     "tag": "Formulário",
     "summary": "Listas dos dropdowns do formulário",
@@ -2227,7 +2426,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/sheets/append",
     "tag": "Reenvio",
     "summary": "Registra o reenvio montado pela tela do CX Hub e, com automação, executa no Cosmos.",
-    "description": "Recebe a solicitação já montada pela tela (data); se data.automacao vier preenchida numa marca com Cosmos e fora do modo de teste, chama POST /resend no Cosmos com o token do agente, depois entrega o caso à fila do Metabase e grava a linha na planilha da marca (a gobeaute só vai à fila). Antes de tudo barra duplicata do mesmo pedido e marca nas últimas 24 h (fila e raw). testMode: true roda o dedup mas não chama o Cosmos nem grava nada; a rota foi dimensionada para caber em 120 s.",
+    "description": "Recebe a solicitação já montada pela tela (data); se data.automacao vier preenchida numa marca com Cosmos e fora do modo de teste, chama POST /resend no Cosmos com o token do agente, depois entrega o caso à fila do Metabase e grava a linha na planilha da marca (a gobeaute só vai à fila). Antes de tudo barra duplicata do mesmo pedido e marca nas últimas 24 h (fila e raw). Na apice, na yenzah e na denavita, junto do dedup, o pedido é conferido no Data Mart (ADR-018): pedido sem NF de venda é recusado com 422, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). testMode: true roda o dedup e a conferência mas não chama o Cosmos nem grava nada; a rota foi dimensionada para caber em 120 s.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -2319,7 +2518,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.cdOrigem",
           "type": "string",
           "required": false,
-          "description": "CD de origem do pedido."
+          "description": "CD de origem do pedido. Na apice, na yenzah e na denavita vale o do Data Mart (CD ES, CD RJ ou CD MG); o que veio só fica quando o Data Mart não respondeu."
         },
         {
           "name": "data.nomeCliente",
@@ -2361,7 +2560,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.numeroNF",
           "type": "string",
           "required": false,
-          "description": "Número da nota fiscal."
+          "description": "Número da nota fiscal. Na apice, na yenzah e na denavita vale a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando o Data Mart não respondeu."
         },
         {
           "name": "data.chaveNF",
@@ -2447,7 +2646,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.valorReenvio",
           "type": "string",
           "required": false,
-          "description": "Valor do reenvio no formato 1234,56 (vai como número à planilha; fora desse formato a célula fica vazia)."
+          "description": "Valor do reenvio no formato 1234,56 (vai como número à planilha; fora desse formato a célula fica vazia). Na apice, na yenzah e na denavita o servidor o calcula pelos itens originais do reenvio: o pedido completo vale o total da NF; o parcial, os itens com desconto e frete proporcionais. Sem como calcular, fica em branco. Na apice e na yenzah ele vai também para a coluna da operação \"Valor da NF de reenvio (R$)\"."
         },
         {
           "name": "data.status",
@@ -2477,7 +2676,25 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.comentarios",
           "type": "string",
           "required": false,
-          "description": "Comentários gerais; vão só à planilha."
+          "description": "Comentários gerais; vão só à planilha. Na apice, na yenzah e na denavita, o que o Data Mart não respondeu a tempo ganha uma nota na frente, como [CD/NF/VALOR NÃO CONFERIDOS: DATA MART SEM RESPOSTA]."
+        },
+        {
+          "name": "data.itensOriginaisReenviados",
+          "type": "array",
+          "required": false,
+          "description": "Só na apice, na yenzah e na denavita (ADR-018): os itens do pedido que vão no reenvio, como foram marcados (o kit ou o componente), antes da troca e sem os mimos. É a base do valor da NF de reenvio: o substituto herda o preço do item que substitui, e o mimo não entra. Sem a lista, o servidor lê data.produtoReenviar quando os comentários não têm mimo nem troca; quando têm, o valor fica em branco."
+        },
+        {
+          "name": "data.itensOriginaisReenviados[].sku",
+          "type": "string",
+          "required": "condicional",
+          "description": "SKU do item no pedido original (o do kit, se o kit inteiro vai)."
+        },
+        {
+          "name": "data.itensOriginaisReenviados[].quantidade",
+          "type": "number",
+          "required": "condicional",
+          "description": "Unidades reenviadas; item com quantidade que não é número maior que zero fica de fora."
         },
         {
           "name": "data.apiData",
@@ -3012,6 +3229,48 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
+        "status": 422,
+        "description": "Só apice, yenzah e denavita (ADR-018): o Data Mart respondeu e o pedido não tem NF de venda (na Intelipost e, na apice, no Tiny). Nada foi registrado; pode repetir quando a NF chegar ao Data Mart, que tem atraso de carga. O Data Mart fora do ar nunca dá esta recusa: o registro segue com o que veio e a nota de não conferido.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Sempre UNKNOWN_ERROR.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "Diz o pedido, onde a NF foi procurada e que nada foi registrado."
+          },
+          {
+            "name": "sentToAPI",
+            "type": "boolean",
+            "required": true,
+            "description": "Sempre false."
+          },
+          {
+            "name": "reason",
+            "type": "string",
+            "required": true,
+            "description": "O pedido ainda não foi faturado.",
+            "enum": [
+              "ORDER_NOT_INVOICED"
+            ]
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "O pedido SH1234567AP não tem NF de venda no Tiny nem na Intelipost: não dá para solicitar reenvio ainda. Nada foi registrado. Se a NF acabou de sair, ela pode levar algumas horas para chegar ao Data Mart.",
+          "sentToAPI": false,
+          "reason": "ORDER_NOT_INVOICED"
+        }
+      },
+      {
         "status": 500,
         "description": "Exceção não tratada, inclusive corpo que não é JSON válido; pode repetir.",
         "fields": [
@@ -3131,7 +3390,8 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Decida pelo code (e pelo reason) do corpo, não pelo status HTTP: DUPLICATE_RESEND, OUT_OF_STOCK, API_ERROR e SHEETS_ERROR chegam como 200.",
       "A rota não confere credencial própria: o token do Cosmos vai no corpo (token), e o header x-cosmos-token não é lido aqui.",
-      "Ordem do processamento: configuração → dedup de 24 h → POST /resend no Cosmos → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
+      "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha) → POST /resend no Cosmos → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
+      "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não foi lido a tempo fica com o valor que veio, e a nota vai na frente dos comentários. Só o pedido sem NF de venda, com o Data Mart respondendo, é recusado (422). As 6 marcas do Cosmos e a gobeaute não passam por ela.",
       "O dedup procura o mesmo tipo (REENVIO), marca e data.numeroPedido nas últimas 24 h, na fila e na raw; um reenvio cancelado libera o pedido.",
       "O POST /resend no Cosmos não é retentado; o prazo dele é a env TIMEOUT (10 s sem ela), contado do início da requisição.",
       "Marcas sem Cosmos (apice, yenzah, denavita, gobeaute) nunca executam no Cosmos, mesmo com data.automacao preenchida; a gobeaute não tem planilha e o registro termina na fila.",
@@ -3147,11 +3407,14 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/app/api/sheets/append/route.ts",
       "cxhub/modules/reenvios/actions/postResendWebhook.ts",
       "cxhub/modules/reenvios/actions/processResend.ts",
+      "cxhub/modules/reenvios/actions/conferenciaDoReenvio.ts",
       "cxhub/modules/reenvios/actions/cosmosResend.ts",
       "cxhub/modules/reenvios/actions/buildResendRow.ts",
       "cxhub/modules/reenvios/actions/casoDoReenvio.ts",
       "cxhub/modules/reenvios/types/sheets.ts",
       "cxhub/shared/lib/constants.ts",
+      "cxhub/shared/lib/datamart/conferenciaServer.ts",
+      "cxhub/shared/lib/datamart/pedido.ts",
       "cxhub/shared/lib/airflow/contrato.ts",
       "cxhub/shared/lib/fila/estado.ts",
       "cxhub/shared/lib/fila/client.ts",
@@ -3159,7 +3422,8 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/shared/lib/backendDireto.ts",
       "api/roteador.ts",
       "cxhub/__tests__/integration/api-sheets-append.test.ts",
-      "cxhub/__tests__/reenvios/processResend.test.ts"
+      "cxhub/__tests__/reenvios/processResend.test.ts",
+      "cxhub/__tests__/reenvios/conferenciaDoReenvio.test.ts"
     ]
   },
   {
@@ -3167,7 +3431,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/reenvio/bot",
     "tag": "Reenvio",
     "summary": "Reenvio pedido pelo Typebot: busca o pedido, aplica as guardas e registra, executando no Cosmos quando tudo confere.",
-    "description": "Confere o x-bot-secret, busca o pedido real (no Cosmos para lescent, kokeshi, bysamia, aua, barbours e rituaria; na Shopify pelo integrations-gateway para apice, yenzah, denavita e gobeaute) e monta o reenvio do pedido inteiro ou dos itens de reshipment.items; se todas as guardas passam, executa POST /resend no Cosmos e registra na fila do Metabase e na planilha da marca, e qualquer dúvida degrada para registro sem automação com o motivo em reason (recusa do Cosmos também: a linha é garantida por uma segunda postagem). Vale o dedup de 24 h por marca e pedido; testMode: true percorre o caminho inteiro sem chamar o Cosmos nem gravar nada e devolve apiPreview. O orçamento interno da rota é de 150 s.",
+    "description": "Confere o x-bot-secret, busca o pedido real (no Cosmos para lescent, kokeshi, bysamia, aua, barbours e rituaria; na Shopify pelo integrations-gateway para apice, yenzah, denavita e gobeaute) e monta o reenvio do pedido inteiro ou dos itens de reshipment.items; se todas as guardas passam, executa POST /resend no Cosmos e registra na fila do Metabase e na planilha da marca, e qualquer dúvida degrada para registro sem automação com o motivo em reason (recusa do Cosmos também: a linha é garantida por uma segunda postagem). Na apice, na yenzah e na denavita o registro confere o pedido no Data Mart (ADR-018): a NF, o CD e o valor da NF de reenvio vêm de lá, e o pedido sem NF de venda volta 422 ORDER_NOT_INVOICED, sem gravar nada. Vale o dedup de 24 h por marca e pedido; testMode: true percorre o caminho inteiro sem chamar o Cosmos nem gravar nada e devolve apiPreview. O orçamento interno da rota é de 150 s.",
     "routeHeader": "x-bot-secret",
     "params": [
       {
@@ -3565,11 +3829,12 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "reason",
             "type": "string",
             "required": true,
-            "description": "Por que não executou, em nome estável para o Typebot ramificar (nunca pelo message); se o registro também falhou, o reason do registro (SHEET_WRITE_FAILED, ROW_UNCERTAIN, RECORD_UNAVAILABLE) prevalece sobre o da guarda. Todos os valores de AlertReason:\n- GATE_CLOSED: o BOT_RESEND_SECRET falta no ambiente; só vai ao aviso do Slack, porque o 503 da porta fechada não traz reason.\n- INVALID_PAYLOAD: corpo inválido (JSON torto, marca ausente ou não aceita, testMode não booleano, sem order.ecommerceOrderId fora do teste), respondido com 400 e solicitação descartada, então corrija e reenvie.\n- INVALID_ITEMS: reenvio parcial com lista vazia ou itens que não conferem com o pedido, respondido com 422 sem gravar nada, então corrija os itens e reenvie.\n- COSMOS_UNAVAILABLE: o Cosmos ficou inacessível ou mal configurado depois das retentativas, a solicitação foi registrada sem automação e o time foi avisado.\n- SHOPIFY_UNAVAILABLE: marca sem Cosmos e o integrations-gateway falhou, a solicitação foi registrada com o que o bot mandou e o time foi avisado.\n- ORDER_NOT_FOUND: o pedido não foi achado no Cosmos (ou, nas marcas sem Cosmos, na Shopify nem no Data Mart), a linha ficou para tratativa manual e não há aviso, então confirme o número com a cliente.\n- NOT_ELIGIBLE: o pedido não é elegível à automação (pedido da Shopify, só brindes ou extras que não são brinde) e foi registrado sem automação, sem aviso.\n- CARRIER_UNRESOLVED: a transportadora não está no mapa da marca e o pedido não trouxe ID de transportadora, registrado sem automação com aviso ao time.\n- AUTOMATION_DATA_MISSING: os dados para o Cosmos não foram montados a partir do pedido, registrado sem automação com aviso ao time.\n- CARRIER_ID_MISSING: a transportadora ficou sem ID no Cosmos, registrado sem automação com aviso ao time.\n- NO_RESEND_ITEMS: nenhum item de reenvio foi resolvido no pedido, registrado sem automação com aviso ao time.\n- PRODUCT_ID_MISSING: um item ficou sem ID de produto no Cosmos (SKU sem cadastro), registrado sem automação com aviso ao time.\n- ORDER_ADDRESS_NO_CEP: o endereço do próprio pedido está sem CEP, registrado sem automação com aviso ao time.\n- NEW_ADDRESS_INCOMPLETE: troca de endereço com campo faltando (o message diz qual), registrado sem automação e sem aviso, porque é dado a coletar com a cliente.\n- NEW_ADDRESS_CEP_INVALID: troca de endereço com CEP que não tem 8 dígitos, registrado sem automação e sem aviso, então peça o CEP de novo.\n- AUTOMATION_OFF: a execução está desligada (BOT_RESEND_EXECUTE=off no ambiente ou executeResend false no corpo), registrado sem automação e sem aviso.\n- INTERNAL_ERROR: exceção inesperada no CX Hub, que com 200 foi registrada sem automação e com 500 não gravou nada, com aviso ao time nos dois casos.\n- ERP_REFUSED: o Cosmos recusou o reenvio ou não respondeu (aí a remessa pode ter saído), e o CX Hub garantiu a linha sem automação e avisou o time, então não repita.\n- ROW_UNCERTAIN: a linha entrou na planilha mas a entrada na fila do Metabase não foi confirmada (na gobeaute, só a fila ficou incerta), então não repita.\n- RECORD_UNAVAILABLE: o registro não foi feito (fila ou planilha sem configuração, dedup sem leitura ou fila recusou), e com sentToAPI false pode repetir, com true a remessa já saiu e não deve repetir.\n- TEST_MODE_VIOLATION: o modo de teste recebeu resposta de fluxo real, respondido com 502, e um reenvio pode ter saído, então pare e avise o time.\n- GOLD_UPDATE_FAILED: só existe nos avisos de outras rotas (atualização da gold) e não aparece nesta resposta.\n- GOLD_UPDATE_NO_CASE: só existe nos avisos de outras rotas (nenhum caso na gold casou com o pedido) e não aparece nesta resposta.\n- SHEET_WRITE_FAILED: a solicitação entrou (ou pode ter entrado) na fila do Metabase mas a linha não chegou à planilha, e o suporte repõe, então não repita.\n- SHEET_ROW_NOT_FOUND: só existe nos avisos da gestão de reembolso e não aparece nesta resposta.",
+            "description": "Por que não executou, em nome estável para o Typebot ramificar (nunca pelo message); se o registro também falhou, o reason do registro (SHEET_WRITE_FAILED, ROW_UNCERTAIN, RECORD_UNAVAILABLE) prevalece sobre o da guarda. Todos os valores de AlertReason:\n- GATE_CLOSED: o BOT_RESEND_SECRET falta no ambiente; só vai ao aviso do Slack, porque o 503 da porta fechada não traz reason.\n- INVALID_PAYLOAD: corpo inválido (JSON torto, marca ausente ou não aceita, testMode não booleano, sem order.ecommerceOrderId fora do teste), respondido com 400 e solicitação descartada, então corrija e reenvie.\n- INVALID_ITEMS: reenvio parcial com lista vazia ou itens que não conferem com o pedido, respondido com 422 sem gravar nada, então corrija os itens e reenvie.\n- ORDER_NOT_INVOICED: apice, yenzah ou denavita, e o Data Mart respondeu que o pedido não tem NF de venda (ADR-018), respondido com 422 sem gravar nada e sem aviso ao time, então diga à cliente que o pedido ainda não foi faturado.\n- COSMOS_UNAVAILABLE: o Cosmos ficou inacessível ou mal configurado depois das retentativas, a solicitação foi registrada sem automação e o time foi avisado.\n- SHOPIFY_UNAVAILABLE: marca sem Cosmos e o integrations-gateway falhou, a solicitação foi registrada com o que o bot mandou e o time foi avisado.\n- ORDER_NOT_FOUND: o pedido não foi achado no Cosmos (ou, nas marcas sem Cosmos, na Shopify nem no Data Mart), a linha ficou para tratativa manual e não há aviso, então confirme o número com a cliente.\n- NOT_ELIGIBLE: o pedido não é elegível à automação (pedido da Shopify, só brindes ou extras que não são brinde) e foi registrado sem automação, sem aviso.\n- CARRIER_UNRESOLVED: a transportadora não está no mapa da marca e o pedido não trouxe ID de transportadora, registrado sem automação com aviso ao time.\n- AUTOMATION_DATA_MISSING: os dados para o Cosmos não foram montados a partir do pedido, registrado sem automação com aviso ao time.\n- CARRIER_ID_MISSING: a transportadora ficou sem ID no Cosmos, registrado sem automação com aviso ao time.\n- NO_RESEND_ITEMS: nenhum item de reenvio foi resolvido no pedido, registrado sem automação com aviso ao time.\n- PRODUCT_ID_MISSING: um item ficou sem ID de produto no Cosmos (SKU sem cadastro), registrado sem automação com aviso ao time.\n- ORDER_ADDRESS_NO_CEP: o endereço do próprio pedido está sem CEP, registrado sem automação com aviso ao time.\n- NEW_ADDRESS_INCOMPLETE: troca de endereço com campo faltando (o message diz qual), registrado sem automação e sem aviso, porque é dado a coletar com a cliente.\n- NEW_ADDRESS_CEP_INVALID: troca de endereço com CEP que não tem 8 dígitos, registrado sem automação e sem aviso, então peça o CEP de novo.\n- AUTOMATION_OFF: a execução está desligada (BOT_RESEND_EXECUTE=off no ambiente ou executeResend false no corpo), registrado sem automação e sem aviso.\n- INTERNAL_ERROR: exceção inesperada no CX Hub, que com 200 foi registrada sem automação e com 500 não gravou nada, com aviso ao time nos dois casos.\n- ERP_REFUSED: o Cosmos recusou o reenvio ou não respondeu (aí a remessa pode ter saído), e o CX Hub garantiu a linha sem automação e avisou o time, então não repita.\n- ROW_UNCERTAIN: a linha entrou na planilha mas a entrada na fila do Metabase não foi confirmada (na gobeaute, só a fila ficou incerta), então não repita.\n- RECORD_UNAVAILABLE: o registro não foi feito (fila ou planilha sem configuração, dedup sem leitura ou fila recusou), e com sentToAPI false pode repetir, com true a remessa já saiu e não deve repetir.\n- TEST_MODE_VIOLATION: o modo de teste recebeu resposta de fluxo real, respondido com 502, e um reenvio pode ter saído, então pare e avise o time.\n- GOLD_UPDATE_FAILED: só existe nos avisos de outras rotas (atualização da gold) e não aparece nesta resposta.\n- GOLD_UPDATE_NO_CASE: só existe nos avisos de outras rotas (nenhum caso na gold casou com o pedido) e não aparece nesta resposta.\n- SHEET_WRITE_FAILED: a solicitação entrou (ou pode ter entrado) na fila do Metabase mas a linha não chegou à planilha, e o suporte repõe, então não repita.\n- SHEET_ROW_NOT_FOUND: só existe nos avisos da gestão de reembolso e não aparece nesta resposta.",
             "enum": [
               "GATE_CLOSED",
               "INVALID_PAYLOAD",
               "INVALID_ITEMS",
+              "ORDER_NOT_INVOICED",
               "COSMOS_UNAVAILABLE",
               "SHOPIFY_UNAVAILABLE",
               "ORDER_NOT_FOUND",
@@ -4075,6 +4340,48 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
+        "status": 422,
+        "description": "Só apice, yenzah e denavita (ADR-018): o Data Mart respondeu que o pedido não tem NF de venda (na Intelipost e, na apice, no Tiny). Nada é gravado e o time não é avisado: é dado do pedido, não sistema quebrado. Diga à cliente que o pedido ainda não foi faturado; a NF pode levar algumas horas para chegar ao Data Mart. O Data Mart fora do ar nunca dá esta recusa.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Sempre UNKNOWN_ERROR.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "Diz o pedido, onde a NF foi procurada e que nada foi registrado; não ramifique nela."
+          },
+          {
+            "name": "sentToAPI",
+            "type": "boolean",
+            "required": true,
+            "description": "Sempre false."
+          },
+          {
+            "name": "reason",
+            "type": "string",
+            "required": true,
+            "description": "O pedido ainda não foi faturado.",
+            "enum": [
+              "ORDER_NOT_INVOICED"
+            ]
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "O pedido SH1234567YE não tem NF de venda na Intelipost: não dá para solicitar reenvio ainda. Nada foi registrado. Se a NF acabou de sair, ela pode levar algumas horas para chegar ao Data Mart.",
+          "sentToAPI": false,
+          "reason": "ORDER_NOT_INVOICED"
+        }
+      },
+      {
         "status": 500,
         "description": "Exceção inesperada antes de haver o que registrar; pelo comentário do código nenhuma linha foi gravada e o time é avisado; pode repetir.",
         "fields": [
@@ -4255,7 +4562,8 @@ export const ENDPOINTS: Endpoint[] = [
       "Campos opcionais do corpo aceitam null, que vale como ausente; token e cosmosToken no corpo são ignorados (o token do Cosmos é gerado no servidor).",
       "O dedup roda também no modo de teste (um reenvio real do mesmo pedido em 24 h devolve DUPLICATE_RESEND no ensaio), e o ensaio não grava nada: o guia docs/qa-reenvio-bot.md do CX Hub, que fala em aba TESTE e em 504 API_TIMEOUT, está desatualizado nesses pontos.",
       "O 503 da porta fechada não traz reason: GATE_CLOSED só aparece no aviso ao time.",
-      "Avisos ao time vão ao Slack só nos reasons que são do time; dado da cliente (ORDER_NOT_FOUND, NEW_ADDRESS_*, NOT_ELIGIBLE, AUTOMATION_OFF, INVALID_ITEMS) não gera aviso.",
+      "Avisos ao time vão ao Slack só nos reasons que são do time; dado da cliente ou do pedido (ORDER_NOT_FOUND, ORDER_NOT_INVOICED, NEW_ADDRESS_*, NOT_ELIGIBLE, AUTOMATION_OFF, INVALID_ITEMS) não gera aviso.",
+      "Na apice, na yenzah e na denavita, o registro confere o pedido no Data Mart (ADR-018, o mesmo do /api/sheets/append): a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que o bot mandou, e o pedido sem NF de venda volta 422 ORDER_NOT_INVOICED. O /api/datamart/order-context mostra o mesmo antes de pedir.",
       "Tempo: o orçamento é de 150 s (a fase de busca do pedido recebe 150 s menos 2×TIMEOUT, 5 s da rota dados, 16 s da fila, 25 s da planilha, 2,5 s do aviso e 5 s de folga, com piso de 8 s, e cada postagem tem teto de min(TIMEOUT, 44,25 s)); o GoDeploy não impõe maxDuration, então configure o Typebot para esperar pelo menos 150 s.",
       "Não confirmado: o que acontece com o registro se quem chama desistir da conexão antes da resposta (se o Worker segue até gravar).",
       "Não confirmado: o comportamento do dedup e da busca no modo de teste sem order.ecommerceOrderId (pelo código, o pedido não é achado e a resposta degrada com ORDER_NOT_FOUND).",
@@ -4271,8 +4579,10 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/modules/reenvios/actions/marcasDoBot.ts",
       "cxhub/modules/reenvios/actions/postResendWebhook.ts",
       "cxhub/modules/reenvios/actions/processResend.ts",
+      "cxhub/modules/reenvios/actions/conferenciaDoReenvio.ts",
       "cxhub/modules/reenvios/actions/cosmosResend.ts",
       "cxhub/modules/reenvios/types/sheets.ts",
+      "cxhub/shared/lib/datamart/conferenciaServer.ts",
       "cxhub/shared/lib/alerts/types.ts",
       "cxhub/shared/lib/alerts/policy.ts",
       "cxhub/shared/lib/constants.ts",
@@ -4299,7 +4609,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/refund/submit",
     "tag": "Reembolso",
     "summary": "Registra uma solicitação de reembolso",
-    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. Não existe modo de teste: toda chamada válida registra de verdade.",
+    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. Na apice, na yenzah e na denavita (ADR-018), a chave Pix é validada pelo tipo e gravada normalizada, e, junto do dedup, o pedido é conferido no Data Mart: pedido sem NF de venda é recusado com 422, e a NF e o CD do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). Não existe modo de teste: toda chamada válida registra de verdade.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -4357,7 +4667,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.originWarehouse",
           "type": "string",
           "required": true,
-          "description": "CD de origem do pedido."
+          "description": "CD de origem do pedido. Na apice, na yenzah e na denavita vale o do Data Mart (CD ES, CD RJ ou CD MG); o que veio só fica quando o Data Mart não respondeu."
         },
         {
           "name": "data.customerName",
@@ -4369,7 +4679,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.invoiceNumber",
           "type": "string",
           "required": true,
-          "description": "Número da NF do pedido."
+          "description": "Número da NF do pedido. Na apice, na yenzah e na denavita a planilha grava a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando o Data Mart não respondeu."
         },
         {
           "name": "data.nfeAccessKey",
@@ -4453,13 +4763,26 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.notes",
           "type": "string | null",
           "required": false,
-          "description": "Observações do agente; vão só para a planilha, nunca para a fila."
+          "description": "Observações do agente; vão só para a planilha, nunca para a fila. Na apice, o que o Data Mart não respondeu a tempo ganha uma nota na frente, como [CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]; a planilha de reembolso da yenzah e da denavita não tem observações, e a nota fica só no log."
         },
         {
           "name": "data.pixKey",
           "type": "string | null",
           "required": false,
-          "description": "Chave Pix da cliente; só é gravada na planilha de apice, yenzah e denavita, e a rota não confere o formato."
+          "description": "Chave Pix da cliente; só é gravada na planilha de apice, yenzah e denavita. Nessas marcas ela é validada pelo tipo (CPF e CNPJ com os dígitos verificadores, e-mail, celular com DDD, chave aleatória 8-4-4-4-12) e gravada normalizada: CPF e CNPJ só com dígitos, e-mail em minúsculas, celular +55…, aleatória em minúsculas com hífens. Inválida dá 422. Vazia passa, a não ser que a env CHAVE_PIX_OBRIGATORIA esteja on (desligada neste app)."
+        },
+        {
+          "name": "data.pixKeyType",
+          "type": "string | null",
+          "required": false,
+          "description": "O tipo da chave Pix (ADR-018). Com ele, a chave só vale como aquele tipo (um CPF com um dígito trocado é recusado, em vez de virar celular). Sem ele, o tipo é inferido pelo formato, e 11 dígitos são CPF quando o verificador fecha, senão celular.",
+          "enum": [
+            "cpf",
+            "cnpj",
+            "email",
+            "celular",
+            "aleatoria"
+          ]
         }
       ],
       "example": {
@@ -4729,6 +5052,56 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
+        "status": 422,
+        "description": "UNKNOWN_ERROR, só apice, yenzah e denavita: a chave Pix não vale para o tipo (ou o pixKeyType é desconhecido), ou falta a chave com CHAVE_PIX_OBRIGATORIA on. Recusado antes de qualquer leitura; nada registrado. A mensagem nunca repete a chave.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Resultado.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "O problema da chave, seguido de \"Nada foi registrado.\"."
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "CPF da chave Pix inválido (confira os 11 dígitos). Nada foi registrado."
+        }
+      },
+      {
+        "status": 422,
+        "description": "UNKNOWN_ERROR, só apice, yenzah e denavita (ADR-018): o Data Mart respondeu e o pedido não tem NF de venda (na Intelipost e, na apice, no Tiny). Nada registrado; pode repetir quando a NF chegar ao Data Mart, que tem atraso de carga. O Data Mart fora do ar nunca dá esta recusa: o registro segue com o que veio e a nota de não conferido.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Resultado.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "Diz o pedido, onde a NF foi procurada e que nada foi registrado."
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "O pedido SH1234567AP não tem NF de venda no Tiny nem na Intelipost: não dá para solicitar reembolso ainda. Nada foi registrado. Se a NF acabou de sair, ela pode levar algumas horas para chegar ao Data Mart."
+        }
+      },
+      {
         "status": 503,
         "description": "UNKNOWN_ERROR: falta configuração do app (fila ou planilha da marca); recusado antes do dedup, nada registrado, pode repetir depois de configurar.",
         "fields": [
@@ -4780,7 +5153,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 500,
-        "description": "UNKNOWN_ERROR: corpo que não é JSON ou exceção inesperada; se a exceção veio de um campo com tipo errado depois da fila (ex.: pixKey que não é texto), o caso pode já estar na fila, então confira a lista antes de repetir.",
+        "description": "UNKNOWN_ERROR: corpo que não é JSON ou exceção inesperada; se a exceção veio de um campo com tipo errado depois da fila, o caso pode já estar na fila, então confira a lista antes de repetir.",
         "fields": [
           {
             "name": "code",
@@ -4813,16 +5186,21 @@ export const ENDPOINTS: Endpoint[] = [
       "Guarde o idSolicitacao: é o id que /api/refund/complete e /api/refund/sync pedem.",
       "handledBy = \"Bot\": entrega também um caso CANCELAMENTO (tratativa Reembolso) à fila e, nas 6 marcas do Cosmos, grava a linha na planilha de cancelamento.",
       "apice, yenzah e denavita gravam a pixKey só na planilha (dado sensível: não vai à fila nem ao log); a planilha delas recebe fórmulas de prazo e SLA, e é daí que vem a variante \"sem as fórmulas\" do SHEET_WRITE_FAILED.",
+      "Ordem nas sem Cosmos com planilha (ADR-018): chave Pix (422) → configuração → dedup de 24 h, com a conferência no Data Mart junto (teto de 12 s) → pedido sem NF de venda (422) → fila → planilha. A conferência nunca impede o registro: o que não foi lido a tempo fica com o valor que veio. As 6 marcas do Cosmos e a gobeaute não passam por ela.",
+      "A chave Pix só é obrigatória com a env CHAVE_PIX_OBRIGATORIA=on, desligada neste app até a Central de Tickets e o reembolso do Bot mandarem a chave.",
       "Pior caso calculado no código ≈ 73 s (dedup + fila até 16 s + planilha até 25 s); a rota declara maxDuration de 120 s, então use um timeout de cliente de pelo menos 120 s.",
       "Método diferente de POST responde 405 {\"code\": \"METHOD_NOT_ALLOWED\", \"message\": \"Use POST nesta rota.\"} (roteador)."
     ],
     "sources": [
       "cxhub/app/api/refund/submit/route.ts",
       "cxhub/modules/reembolsos/actions/processRefund.ts",
+      "cxhub/modules/reembolsos/actions/conferenciaDoReembolso.ts",
       "cxhub/modules/reembolsos/actions/validateRefundBody.ts",
       "cxhub/modules/reembolsos/types/submission.ts",
       "cxhub/modules/reembolsos/actions/casoDoReembolso.ts",
       "cxhub/modules/reembolsos/actions/buildRefundRow.ts",
+      "cxhub/shared/lib/pix.ts",
+      "cxhub/shared/lib/datamart/conferenciaServer.ts",
       "cxhub/shared/lib/constants.ts",
       "cxhub/shared/lib/backendDireto.ts",
       "cxhub/shared/lib/fila/client.ts",

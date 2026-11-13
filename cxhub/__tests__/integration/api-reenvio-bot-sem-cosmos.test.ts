@@ -213,6 +213,40 @@ describe('POST /api/reenvio/bot — marca sem Cosmos', () => {
         expect(mFetchOrder).not.toHaveBeenCalled();
     });
 
+    it('pedido sem NF de venda no Data Mart ⇒ 422 ORDER_NOT_INVOICED, nada registrado e sem aviso (ADR-018)', async () => {
+        gateway({ 'name:SH1724179AP': [no('SH1724179AP')] });
+        const recusa = {
+            code: 'UNKNOWN_ERROR' as const,
+            message: 'O pedido SH1724179AP não tem NF de venda no Tiny nem na Intelipost: não dá para solicitar reenvio ainda. Nada foi registrado.',
+            sentToAPI: false,
+            reason: 'ORDER_NOT_INVOICED' as const,
+        };
+        mPost.mockResolvedValue({ body: recusa, status: 422 });
+
+        const res = await post(corpo('apice'));
+
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual(recusa);
+        expect(mAlerta).not.toHaveBeenCalled();
+    });
+
+    it('gateway fora e o pedido sem NF ⇒ a recusa responde sozinha, sem o "registrado com o que o bot informou"', async () => {
+        gateway({}, { status: 401, json: { error: 'invalid_key' } });
+        const recusa = {
+            code: 'UNKNOWN_ERROR' as const,
+            message: 'O pedido SH1724179AP não tem NF de venda no Tiny nem na Intelipost: não dá para solicitar reenvio ainda. Nada foi registrado.',
+            sentToAPI: false,
+            reason: 'ORDER_NOT_INVOICED' as const,
+        };
+        mPost.mockResolvedValue({ body: recusa, status: 422 });
+
+        const res = await post(corpo('apice'));
+
+        expect(res.status).toBe(422);
+        expect(await res.json()).toEqual(recusa);
+        expect(mAlerta).not.toHaveBeenCalled();
+    });
+
     it('pedido não achado no gateway nem no Data Mart ⇒ registra com o que o bot mandou, ORDER_NOT_FOUND e sem aviso', async () => {
         gateway({});
 

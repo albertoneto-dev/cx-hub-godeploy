@@ -1,12 +1,12 @@
 # Origem desta pasta
 
-Cópia do backend do CX Hub (repositório `rpaiagogroup/cx-hub`), commit `8a1b1a9cbd7db6662f9673df303116e42d1bf68f`, feita por
-`ferramentas/portar-do-cxhub.mjs`: o fecho de imports das 23 rotas que rodam na Vercel e os testes que só
+Cópia do backend do CX Hub (repositório `rpaiagogroup/cx-hub`), commit `11cebffcaeb745df32bcb6e7091ff0fec309b462`, feita por
+`ferramentas/portar-do-cxhub.mjs`: o fecho de imports das 24 rotas de app/api do CX Hub e os testes que só
 dependem dele, com os mesmos caminhos relativos do CX Hub. O script só troca especificadores de import no código
 (aliases → caminho relativo; `next/server` → `api/next-server.ts`); as adaptações ao Worker vieram à mão, depois.
 Para ver só elas: rode o script com `--saida <pasta vazia>` e compare com `diff -r <pasta>/cxhub cxhub`.
 
-Código (136 arquivos) e testes (95 arquivos). Testes que ficaram de fora (dependem de
+Código (145 arquivos) e testes (102 arquivos). Testes que ficaram de fora (dependem de
 código que não roda no servidor):
 
 - __tests__/integration/api-datamart-products.test.ts: shared/lib/datamart/index.ts, shared/lib/datamart/client.ts, shared/lib/auth/index.ts
@@ -42,6 +42,7 @@ código que não roda no servidor):
 - __tests__/shared/gobeaute.test.ts: modules/reembolsos/actions/buildRefundSubmissionData.ts, modules/reembolsos/actions/calculateRefundValue.ts
 - __tests__/shared/listarSolicitacoes.test.ts: shared/lib/solicitacoes/index.ts, shared/lib/solicitacoes/client.ts, shared/lib/auth/index.ts
 - __tests__/shared/marcasSemCosmos.test.ts: modules/reembolsos/actions/validateSteps.ts, modules/reembolsos/actions/refundList.ts, modules/reembolsos/actions/refundManagementForm.ts
+- __tests__/shared/pedidoSemCosmos.test.ts: shared/lib/datamart/index.ts, shared/lib/datamart/client.ts, shared/lib/auth/index.ts
 - __tests__/shared/shopifyAdapter.test.ts: modules/reembolsos/actions/calculateRefundValue.ts
 - __tests__/shared/solicitacoesClient.test.ts: shared/lib/solicitacoes/index.ts, shared/lib/solicitacoes/client.ts, shared/lib/auth/index.ts
 - __tests__/shared/solicitacoesPaginacao.test.ts: shared/lib/solicitacoes/index.ts, shared/lib/solicitacoes/client.ts, shared/lib/auth/index.ts
@@ -97,6 +98,14 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `ORDER_NOT_FOUND` do bot diz "na Shopify nem no Data Mart". Vale para Ápice, Yenzah, Denavita e Rituária; a Gobeaute
   não está no Data Mart. A tela do CX Hub ainda diz "a busca alcança só os pedidos dos últimos 60 dias" quando nada é
   achado: é texto do navegador, que não está nesta cópia.
+- A cópia é do `11cebff` (ADR-018), o último commit do repositório antigo do CX Hub, na branch
+  `feat/regras-sem-cosmos-no-servidor`, que nunca foi para a `main` de lá. Em 2026-11-13 o repositório antigo foi
+  encerrado e **este passou a ser o CX Hub**: não há mais commit de lá para trazer. O motivo de trazer a ADR-018: o
+  `GET /api/datamart/order-context` respondia 404 aqui, e o reembolso da Ápice, da Yenzah e da Denavita chegava à
+  planilha com a NF que a Central de Tickets mandava ("-"). A `main` de lá e a Vercel ficaram sem ela: só aqui o reenvio
+  e o reembolso dessas três marcas conferem o pedido no Data Mart (NF, CD e valor da NF de reenvio; pedido sem NF ⇒ 422)
+  e validam a chave Pix pelo tipo. O código da ADR-018 entrou sem adaptação ao Worker: nenhum `cache`, `Buffer` ou
+  `node:*`, e o `CHAVE_PIX_OBRIGATORIA` é lido a cada chamada.
 
 ## Testes
 
@@ -122,6 +131,9 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `shared/buscarPedidoNoGatewayOuNoDataMart.test.ts`, um caso em `integration/api-marcas-sem-cosmos.test.ts` (o pedido
   fora dos 60 dias vem do Data Mart) e um em `integration/api-reenvio-bot-sem-cosmos.test.ts` (o bot registra com os
   dados do pedido do Data Mart). O caso do `ORDER_NOT_FOUND` do bot passou a esperar "na Shopify nem no Data Mart".
+- Trazido à mão (ADR-018): `shared/pedidoSemCosmos`, as regras puras de `shared/lib/datamart/pedido.ts` (com o pedido
+  real SH1731559AP). Só o import mudou: o barrel `shared/lib/datamart`, que traz o cliente do navegador, deu lugar a
+  `shared/lib/datamart/pedido` e `shared/lib/datamart/pedidoTipos`.
 
 ## Atualizar para um commit novo do CX Hub
 
@@ -141,3 +153,15 @@ Do `e8fe51c` para o `8a1b1a9`, em 2026-11-11, foi feito assim:
 
 Nessa atualização houve um conflito só, em `shared/lib/sheets/server.ts`: o CX Hub renomeou a variável do `catch` e
 este app tinha tirado o `cache: 'no-store'`. Ficaram as duas mudanças.
+
+Do `8a1b1a9` para o `11cebff` (ADR-018), em 2026-11-13, pelo mesmo roteiro, com a rota
+`app/api/datamart/order-context/route.ts` acrescentada ao `ROTAS` do script:
+- 9 arquivos de código novos e 14 mudados. Três deles tinham adaptação daqui e mesclaram sem conflito:
+  `shared/lib/metabase/client.ts` e `modules/reenvios/actions/processResend.ts` (sem o `cache: 'no-store'`) e
+  `app/api/reenvio/bot/route.ts` (o `x-bot-secret` sem `node:crypto`, o Slack e o Data Mart de reserva da v11);
+- 7 testes novos e 6 mudados. Um conflito, em `integration/api-reenvio-bot-sem-cosmos.test.ts`: a ADR pôs dois casos
+  novos (`ORDER_NOT_INVOICED`) logo antes do caso do `ORDER_NOT_FOUND`, que a v11 tinha renomeado. Ficaram os dois casos
+  novos e o título daqui;
+- o `shared/pedidoSemCosmos` foi trazido à mão (acima);
+- a rota nova entrou em `api/roteador.ts`, `testes/api.test.ts`, `docs/api.md` e na página `/docs`, e o
+  `CHAVE_PIX_OBRIGATORIA` no `.env.example`.
