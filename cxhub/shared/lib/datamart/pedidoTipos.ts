@@ -63,8 +63,13 @@ export interface PedidoNoTiny {
     idPedido: string;
     /** `id_nota_fiscal`; `'0'` e vazio viram `null` */
     idNotaFiscal: string | null;
-    /** `data_pedido` (`aaaa-mm-dd`): desempata o pedido achado nos dois CDs (vale o mais recente) */
+    /** `data_pedido` (`aaaa-mm-dd`): um dos desempates quando a busca acha mais de um pedido (`pedidoEscolhidoNoTiny`) */
     dataPedido: string | null;
+    /**
+     * `situacao` com "cancel" (`Cancelado`). Muito pedido cancelado é refeito, e então vale o refeito: 12.441 dos 30.654
+     * cancelados no ES de 01/10 a 09/11/2026 foram refeitos no RJ. O CD e a NF nunca saem do pedido cancelado.
+     */
+    cancelado: boolean;
     /** `codigo_rastreamento` não vazio */
     temRastreio: boolean;
     /** Os itens como o Tiny os tem: o kit é uma linha só, com o SKU do kit */
@@ -103,17 +108,34 @@ export interface LeiturasDoPedido {
     /** `null`: o pedido não está na `fct_shopify_orders` */
     shopify: Leitura<PedidoNaShopify | null>;
     explodidas: Leitura<LinhaExplodida[]>;
-    /** Só na Ápice: os pedidos achados no Tiny — 0, 1, ou 2 quando o mesmo pedido está no ES e no RJ */
+    /**
+     * Só na Ápice: os pedidos achados no Tiny — 0, 1, ou mais quando o mesmo número aparece de novo (nos dois CDs,
+     * cancelado e refeito, ou importado outra vez)
+     */
     tiny?: Leitura<PedidoNoTiny[]>;
     /**
      * Só na Ápice: a NF de venda do pedido escolhido no Tiny. `null` quando não há NF a ler (o pedido não está no Tiny,
-     * ou está sem o id da NF e a Intelipost não deu o número para a busca por faixa) ou quando a busca não a achou.
+     * está cancelado, ou está sem o id da NF e a Intelipost não deu o número para a busca por faixa) ou quando a busca
+     * não a achou (inclusive a NF que o Tiny já emitiu e ainda não chegou à tabela de NFs).
      */
     nota?: Leitura<NotaNoTiny | null>;
 }
 
-/** `achada`: há NF de venda; `ausente`: o Data Mart respondeu e não há; `desconhecida`: uma leitura falhou. */
+/**
+ * `achada`: há NF de venda. `ausente`: o Data Mart prova que o pedido não foi faturado (o pedido ativo sem o id da NF, a
+ * NF achada e cancelada, ou o pedido em lugar nenhum), e o servidor recusa a solicitação. `desconhecida`: não dá para
+ * afirmar; o motivo vem junto (`MotivoDoNaoConferido`).
+ */
 export type EstadoDaNf = 'achada' | 'ausente' | 'desconhecida';
+
+/**
+ * Por que a NF ou o CD ficaram sem conferência no Data Mart. Vai na nota da planilha e no `nfMotivo` da order-context:
+ * - `sem_resposta`: uma leitura falhou ou passou do prazo;
+ * - `nf_fora_do_data_mart`: o pedido ativo no Tiny já tem o id da NF, e a NF ainda não chegou à tabela de NFs (ela
+ *   chega em lotes, horas depois);
+ * - `pedido_cancelado_no_tiny`: o Tiny só tem o pedido cancelado, que pode ter sido refeito fora do que a busca alcança.
+ */
+export type MotivoDoNaoConferido = 'sem_resposta' | 'nf_fora_do_data_mart' | 'pedido_cancelado_no_tiny';
 
 /** Um kit do pedido e a composição dele: os componentes e as unidades de cada um em UM kit. */
 export interface KitDoPedido {
@@ -138,10 +160,16 @@ export interface ContextoDoPedido {
     numero: string;
     /** O número como a planilha o guarda: `SH1731559AP` */
     pedido: string;
-    /** `numero` só com `estado: 'achada'` */
-    nf: { estado: EstadoDaNf; numero: string | null };
-    /** `CD ES`, `CD RJ` ou `CD MG`; `null` quando não se sabe. `conferido: false` quando foi porque uma leitura falhou. */
-    cd: { valor: string | null; conferido: boolean };
+    /** `numero` só com `estado: 'achada'`, e o `motivo` só com `desconhecida` */
+    nf:
+        | { estado: 'achada'; numero: string }
+        | { estado: 'ausente'; numero: null }
+        | { estado: 'desconhecida'; numero: null; motivo: MotivoDoNaoConferido };
+    /**
+     * `CD ES`, `CD RJ` ou `CD MG`; `null` quando não se sabe. Sem conferência (`conferido: false`), vem o motivo:
+     * uma leitura falhou, ou o Tiny só tem o pedido cancelado e a Intelipost não deu a UF.
+     */
+    cd: { valor: string | null; conferido: true } | { valor: null; conferido: false; motivo: MotivoDoNaoConferido };
     /** Um dos `STATUS_OPTIONS`, ou `null` */
     statusSugerido: string | null;
     avisos: string[];
@@ -168,8 +196,11 @@ export type Conferencia =
     | { tipo: 'nao_conferido'; motivo: string }
     | { tipo: 'lido'; contexto: ContextoDoPedido };
 
-/** O que não pôde ser conferido no Data Mart: vai para a nota nas observações (`notaDeNaoConferido`). */
+/** O que não pôde ser conferido no Data Mart: vai para a nota nas observações (`notaDeNaoConferido`), com o motivo. */
 export type CampoConferido = 'cd' | 'nf' | 'valor';
+
+/** O motivo de cada campo sem conferência; o campo que não está aqui ficou sem resposta do Data Mart. */
+export type MotivoPorCampo = Partial<Record<CampoConferido, MotivoDoNaoConferido>>;
 
 /** O "Valor da NF de reenvio (R$)" de uma solicitação. */
 export type ValorDaNfDeReenvio =

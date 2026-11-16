@@ -1,17 +1,18 @@
 import type { MarcaSemCosmosComPlanilha } from '../../../shared/lib/constants';
-import { nfDiverge, notaDeNaoConferido } from '../../../shared/lib/datamart/pedido';
-import type { CampoConferido, Conferencia } from '../../../shared/lib/datamart/pedidoTipos';
+import { motivosDoNaoConferido, nfDiverge, notaDeNaoConferido } from '../../../shared/lib/datamart/pedido';
+import type { CampoConferido, Conferencia, MotivoPorCampo } from '../../../shared/lib/datamart/pedidoTipos';
 import { normalizarChavePix } from '../../../shared/lib/pix';
 import type { RefundSubmissionData } from '../types/index';
 
 /**
  * O que a conferência do pedido no Data Mart muda no reembolso de Ápice, Yenzah e Denavita (ADR-018), antes da fila e da
  * planilha, em qualquer entrada:
- * - **NF:** o Data Mart respondeu e o pedido não tem NF de venda ⇒ recusa, nada é gravado; tem ⇒ vale a do Data Mart
- *   (a que veio, se difere, só vai para o log);
+ * - **NF:** o Data Mart prova que o pedido não tem NF de venda (`ausente`) ⇒ recusa, nada é gravado; tem ⇒ vale a do
+ *   Data Mart (a que veio, se difere, só vai para o log); não dá para afirmar (`desconhecida`: sem resposta, a NF ainda
+ *   fora do Data Mart, o pedido cancelado no Tiny) ⇒ vale a que veio;
  * - **CD:** o do Data Mart, no lugar do que veio;
- * - o que não pôde ser conferido fica com o que veio, e a nota vai na frente das observações. Só a planilha da Ápice tem
- *   a coluna "Observações" no reembolso: na Yenzah e na Denavita a nota fica só no log.
+ * - o que não pôde ser conferido fica com o que veio, e a nota, com o motivo, vai na frente das observações. Só a
+ *   planilha da Ápice tem a coluna "Observações" no reembolso: na Yenzah e na Denavita a nota fica só no log.
  */
 export type ConferenciaDoReembolso =
     | { tipo: 'recusado'; mensagem: string }
@@ -29,8 +30,8 @@ const ONDE_A_NF_FOI_PROCURADA: Record<MarcaSemCosmosComPlanilha, string> = {
     denavita: 'na Intelipost',
 };
 
-function comNota(notas: string | null, naoConferidos: CampoConferido[]): string {
-    return [notaDeNaoConferido(naoConferidos), notas ?? ''].filter(Boolean).join(' | ');
+function comNota(notas: string | null, naoConferidos: CampoConferido[], motivos: MotivoPorCampo = {}): string {
+    return [notaDeNaoConferido(naoConferidos, motivos), notas ?? ''].filter(Boolean).join(' | ');
 }
 
 export function aplicarConferenciaAoReembolso(
@@ -67,7 +68,7 @@ export function aplicarConferenciaAoReembolso(
     if (contexto.cd.valor) novo.originWarehouse = contexto.cd.valor;
     else if (!contexto.cd.conferido) naoConferidos.push('cd');
 
-    if (naoConferidos.length > 0) novo.notes = comNota(data.notes, naoConferidos);
+    if (naoConferidos.length > 0) novo.notes = comNota(data.notes, naoConferidos, motivosDoNaoConferido(contexto));
     return { tipo: 'aplicado', data: novo, nfDivergente, naoConferidos };
 }
 

@@ -106,6 +106,31 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   e o reembolso dessas três marcas conferem o pedido no Data Mart (NF, CD e valor da NF de reenvio; pedido sem NF ⇒ 422)
   e validam a chave Pix pelo tipo. O código da ADR-018 entrou sem adaptação ao Worker: nenhum `cache`, `Buffer` ou
   `node:*`, e o `CHAVE_PIX_OBRIGATORIA` é lido a cada chamada.
+- A NF da Ápice só é recusada com prova de que o pedido não foi faturado (2026-11-16). O SH1832330AP, cancelado no ES e
+  refeito no RJ no mesmo dia, levou dois 422 ("não tem NF de venda") com a NF já emitida, e a order-context mostrou o CD
+  ES. As causas: sem a Intelipost no gold (~1 h depois da NF), a busca no Tiny por data procurava só o `numero_ecommerce`,
+  que vem vazio em todo pedido do RJ; o pedido cancelado do ES podia ser o escolhido; e não achar a NF no Data Mart valia
+  como prova de que ela não existe. O que mudou:
+  - `shared/lib/datamart/pedido.ts`: o `derivarContextoDoPedido` só dá `ausente` com prova (o pedido ativo sem o id da
+    NF, a NF achada e cancelada, ou o pedido em lugar nenhum). Na dúvida, dá `desconhecida` com o motivo e o aviso dele:
+    `sem_resposta` (como antes), `nf_fora_do_data_mart` (o pedido ativo já tem o id da NF, que ainda não chegou à tabela
+    de NFs) ou `pedido_cancelado_no_tiny` (o Tiny só tem o pedido cancelado). O `pedidoEscolhidoNoTiny` prefere o ativo,
+    depois o que tem o id da NF, depois o mais recente, depois o ES. O CD e a NF nunca saem de pedido cancelado: dos
+    cancelados com NF autorizada, os 20 do RJ de 03 a 07/11 e 42 dos 56 do ES de 05 e 06/11 tinham sido refeitos com
+    outra NF. O `notaDeNaoConferido` diz o motivo real, e o `motivosDoNaoConferido` o tira do contexto;
+  - `shared/lib/datamart/pedidoServer.ts`: o Tiny lê a `situacao`. A busca por data procura o número no
+    `numero_ordem_compra` ou no `numero_ecommerce`, nos dois CDs: no ES, 2,6% dos pedidos só têm o primeiro. A janela do
+    RJ vai a 60 dias, e a do ES fica em 12. A NF do pedido cancelado não é lida. As medidas estão nos comentários;
+  - `shared/lib/datamart/pedidoTipos.ts`: o `PedidoNoTiny.cancelado`, o `MotivoDoNaoConferido`, o `MotivoPorCampo`, e o
+    motivo na NF `desconhecida` e no CD sem conferência;
+  - `modules/{reembolsos,reenvios}/actions/conferenciaDo*.ts`: a nota leva o motivo, como
+    `[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]` ou `[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY]`;
+  - `app/api/datamart/order-context/route.ts`: o campo novo `nfMotivo`, só com `nfStatus: 'desconhecida'`, para a
+    Central de Tickets deixar de dizer "o Data Mart não respondeu" em toda NF desconhecida. O aviso "O Data Mart não
+    respondeu a tempo" fica só para o que ficou sem resposta. Nada do que a resposta já tinha mudou.
+
+  Yenzah e Denavita ficaram como estavam: a única prova delas é a Intelipost, e o atraso de ~1 h até a remessa chegar ao
+  gold também as bloqueia (a NF fica `ausente`, e o registro, recusado, até lá).
 
 ## Testes
 
@@ -134,6 +159,18 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
 - Trazido à mão (ADR-018): `shared/pedidoSemCosmos`, as regras puras de `shared/lib/datamart/pedido.ts` (com o pedido
   real SH1731559AP). Só o import mudou: o barrel `shared/lib/datamart`, que traz o cliente do navegador, deu lugar a
   `shared/lib/datamart/pedido` e `shared/lib/datamart/pedidoTipos`.
+- Novos (2026-11-16, a NF da Ápice só recusada com prova), 35 casos:
+  - `shared/pedidoSemCosmos`: o pedido real SH1832330AP, sem e com a Intelipost, só com o ES cancelado, cancelado nos
+    dois CDs, com a NF autorizada de um pedido cancelado, com o pedido ativo sem NF, com a NF cancelada, com a falta de
+    resposta antes dos outros motivos, e o desempate pela NF. Também a escolha do pedido no Tiny e a nota com o motivo;
+  - `shared/pedidoNoDataMart`: a busca pelo `numero_ordem_compra`, a `situacao`, a janela de 60 dias do RJ e a NF do
+    pedido cancelado, que não é lida;
+  - `reembolsos/conferenciaDoReembolso`, `reenvios/conferenciaDoReenvio` e `reembolsos/processSemCosmos`: a NF que veio
+    é gravada com a nota do motivo, e o `ausente` continua recusado;
+  - `integration/api-datamart-order-context`: o `nfMotivo`, e o aviso de sem resposta só quando foi falta de resposta.
+
+  Mudaram: os testes do `ausente` usam um pedido do Tiny sem o id da NF (com o id, agora é `nf_fora_do_data_mart`), e as
+  fixtures da NF `desconhecida` e do CD sem conferência levam o motivo.
 
 ## Atualizar para um commit novo do CX Hub
 

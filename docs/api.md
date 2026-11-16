@@ -51,7 +51,7 @@ não é `gdk_`.
 | POST | `/api/cosmos/resends/{id}/cancel?brand=` | Cancela um reenvio no Cosmos (sem volta); o cancelamento vai à gold pela fila |
 | GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify: pelo REST da loja (Lescent, Kokeshi, BySamia, Auá, Barbours) ou pelo integrations-gateway (Rituária, Ápice, Yenzah, Denavita, Gobeaute) |
 | GET | `/api/datamart/products?brand=apice\|yenzah\|denavita` | O catálogo de produtos avulsos da marca no Data Mart, no formato dos produtos do Cosmos: o mimo e a troca do reenvio das marcas sem Cosmos. Guardado por 6 h em memória |
-| GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, `ausente` ou `desconhecida`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
+| GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, `ausente` ou `desconhecida`, esta com o `nfMotivo`: `sem_resposta`, `nf_fora_do_data_mart` ou `pedido_cancelado_no_tiny`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
 | POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h (com a conferência no Data Mart junto, nas três sem Cosmos com planilha), Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava |
 | POST | `/api/reenvio/bot` | O reenvio do Typebot: busca o pedido, aplica as guardas e registra; toda dúvida vira registro sem automação. `testMode: true` não grava |
@@ -88,23 +88,43 @@ quer dizer "registrado, não repita", e o chamador depende disso.
 - **ADR-018 (do `11cebff`, o último commit do repositório antigo do CX Hub, encerrado em 2026-11-13; a Vercel não a
   tem):** o reenvio e o reembolso da Ápice, da Yenzah e da Denavita conferem o pedido no Data Mart, em toda entrada
   (tela, Central de Tickets, bot):
-  - a NF de venda (a da primeira remessa da Intelipost; na Ápice, sem ela, a do Tiny que não está cancelada) e o CD (Ápice:
-    a tabela do Tiny; Yenzah: a UF de origem da Intelipost; Denavita: `CD MG`) entram no lugar dos que vieram. A NF que
-    veio e difere vai para o log;
-  - o Data Mart respondeu e o pedido não tem NF ⇒ `422 UNKNOWN_ERROR`, nada gravado (no bot, `reason: ORDER_NOT_INVOICED`,
-    sem aviso);
+  - a NF de venda (a da primeira remessa da Intelipost; na Ápice, sem ela, a NF não cancelada do pedido ativo no Tiny) e o
+    CD (Ápice: a tabela do Tiny do pedido ativo; Yenzah: a UF de origem da Intelipost; Denavita: `CD MG`) entram no lugar
+    dos que vieram. A NF que veio e difere vai para o log;
+  - o Data Mart prova que o pedido não foi faturado ⇒ `422 UNKNOWN_ERROR`, nada gravado (no bot,
+    `reason: ORDER_NOT_INVOICED`, sem aviso). O que conta como prova está no item seguinte;
   - o "Valor da NF de reenvio (R$)" é calculado; na Ápice e na Yenzah vai para a coluna da operação (AC), junto com as
     fórmulas;
   - a chave Pix do reembolso é validada pelo tipo e gravada normalizada; obrigatória só com `CHAVE_PIX_OBRIGATORIA=on`,
     desligada neste app;
-  - o registro nunca depende do Data Mart: a conferência corre junto do dedup, com teto de 12 s, e o que não foi lido fica
-    com o valor que veio e a nota `[… NÃO CONFERIDOS: DATA MART SEM RESPOSTA]`.
+  - o registro nunca depende do Data Mart: a conferência corre junto do dedup, com teto de 12 s, e o que não foi
+    conferido fica com o valor que veio e a nota do motivo (`[… NÃO CONFERIDOS: DATA MART SEM RESPOSTA]` e as do item
+    seguinte).
 
   A leitura usa a mesma chave do Metabase (banco 43): `gold.fct_intelipost_orders`, `gold.fct_shopify_orders`,
   `gold.vw_shopify_order_items_exploded_priced_enriched` e, na Ápice, `api.tiny_pedidos_ap_cosmetics_{es,rj}` e
   `api.tiny_nfe_ap_cosmetics_{es,rj}` (com os `_itens`). Cada registro dessas marcas faz de 3 a 7 consultas. As 6 marcas
   do Cosmos e a Gobeaute não mudam. Código: `cxhub/shared/lib/datamart/{pedidoServer,pedido,conferenciaServer}.ts` e
   `cxhub/modules/*/actions/conferenciaDo*.ts`.
+- **A NF da Ápice só é recusada com prova (2026-11-16, decisão deste app):** a ADR-018 recusava como "sem NF" todo pedido
+  que o Data Mart ainda não mostrava inteiro. O SH1832330AP, cancelado no ES e refeito no RJ, levou dois 422 com a NF já
+  emitida: a Intelipost só chega ao gold cerca de 1 h depois da NF, e a busca no Tiny por data procurava só o
+  `numero_ecommerce`, que no RJ vem sempre vazio. Agora:
+  - a NF fica `ausente` (422) só com prova de que o pedido não foi faturado: o pedido ativo no Tiny sem o id da NF, a NF
+    achada e cancelada, ou o pedido em lugar nenhum;
+  - na dúvida, a NF fica `desconhecida`, a tela pede a NF, e o registro grava a que veio com a nota do motivo:
+    - `nf_fora_do_data_mart`, `[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]`: o pedido ativo já tem o id da NF no Tiny,
+      e a tabela de NFs, que chega em lotes horas depois, ainda não a tem;
+    - `pedido_cancelado_no_tiny`, `[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY]`: o Tiny só tem o pedido cancelado.
+      O CD nunca sai dele: vale a UF da Intelipost, se houver.
+
+    A falta de resposta (`sem_resposta`) vem antes dos dois. A `order-context` diz o motivo no `nfMotivo`;
+  - o pedido escolhido no Tiny é o ativo antes do cancelado; entre eles, o que tem o id da NF (a cópia "Em aberto"
+    importada de novo não derruba o pedido faturado), depois o mais recente, depois o do ES. A NF do pedido cancelado não
+    vale, nem é lida: o cancelado com NF autorizada quase sempre foi refeito com outra NF;
+  - sem a Intelipost no gold, a busca no Tiny por data procura o número no `numero_ordem_compra` ou no
+    `numero_ecommerce`, nos dois CDs. A janela vai de 1 dia antes da criação na Shopify a 12 dias depois no ES e a 60
+    no RJ, que recebe os pedidos cancelados no ES e refeitos lá. As medidas estão no comentário de `sqlDoTinyPorData`.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.

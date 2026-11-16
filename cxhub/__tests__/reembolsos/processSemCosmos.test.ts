@@ -68,12 +68,32 @@ function contexto(parcial: Partial<ContextoDoPedido> = {}): ContextoDoPedido {
 
 /** O Data Mart fora do ar: nenhuma leitura respondeu. */
 const SEM_RESPOSTA: Partial<ContextoDoPedido> = {
-    nf: { estado: 'desconhecida', numero: null },
-    cd: { valor: null, conferido: false },
+    nf: { estado: 'desconhecida', numero: null, motivo: 'sem_resposta' },
+    cd: { valor: null, conferido: false, motivo: 'sem_resposta' },
     statusSugerido: null,
     kits: [],
     baseDoValor: null,
     baseConferida: false,
+    unidadesDoPedido: {},
+};
+
+/**
+ * O caso SH1832330AP antes de a Intelipost chegar ao gold: cancelado no ES, refeito no RJ, e a NF do RJ emitida no Tiny,
+ * mas ainda fora da tabela de NFs.
+ */
+const NF_FORA_DO_DATA_MART: Partial<ContextoDoPedido> = {
+    pedido: 'SH1832330AP',
+    nf: { estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' },
+    cd: { valor: 'CD RJ', conferido: true },
+    baseDoValor: null,
+    unidadesDoPedido: {},
+};
+
+/** O Tiny só tem o pedido cancelado, e a Intelipost ainda não tem a remessa: nem a NF nem o CD dá para afirmar. */
+const SO_CANCELADO_NO_TINY: Partial<ContextoDoPedido> = {
+    nf: { estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' },
+    cd: { valor: null, conferido: false, motivo: 'pedido_cancelado_no_tiny' },
+    baseDoValor: null,
     unidadesDoPedido: {},
 };
 
@@ -301,6 +321,30 @@ describe('processResend — a conferência do pedido no Data Mart (ADR-018)', ()
         expect(linha.linha).toContain('[CD/NF/VALOR NÃO CONFERIDOS: DATA MART SEM RESPOSTA] | Cliente pediu urgência');
     });
 
+    it('a NF emitida que ainda não chegou ao Data Mart não recusa: vale a NF que veio, o CD RJ, e a nota diz por quê', async () => {
+        conferir.mockResolvedValue({ tipo: 'lido', contexto: contexto(NF_FORA_DO_DATA_MART) });
+
+        const { body, status } = await processResend({ brand: 'apice', data: { ...REENVIO, numeroPedido: 'SH1832330AP', numeroNF: '183916' }, agora: AGORA });
+
+        expect(status).toBe(200);
+        expect(body.code).toBe('SUCCESS_SHEETS_ONLY');
+        const [caso] = enfileirar.mock.calls[0][0];
+        // Sem a NF na tabela, o valor fica em branco para o backoffice, como quando a NF original não é achada.
+        expect(caso).toMatchObject({ nf: '183916', cd_origem: 'CD RJ', valor: '' });
+        expect(planilhas.mock.calls[0][0][0].linha).toContain('[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] | Cliente pediu urgência');
+    });
+
+    it('só o pedido cancelado no Tiny: registra com a NF e o CD que vieram, e a nota diz por quê', async () => {
+        conferir.mockResolvedValue({ tipo: 'lido', contexto: contexto(SO_CANCELADO_NO_TINY) });
+
+        const { status } = await processResend({ brand: 'apice', data: REENVIO, agora: AGORA });
+
+        expect(status).toBe(200);
+        const [caso] = enfileirar.mock.calls[0][0];
+        expect(caso).toMatchObject({ nf: '10157988', cd_origem: 'CD ES' });
+        expect(planilhas.mock.calls[0][0][0].linha).toContain('[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY] | Cliente pediu urgência');
+    });
+
     it('as marcas do Cosmos e a Gobeaute não passam pela conferência', async () => {
         await processResend({ brand: 'lescent', data: { ...RESEND_DATA, automacao: '' }, agora: AGORA });
         await processResend({ brand: 'gobeaute', data: { ...REENVIO, numeroPedido: 'SH1001GB' }, agora: AGORA });
@@ -341,6 +385,34 @@ describe('processRefund — a conferência do pedido no Data Mart e a chave Pix 
         const [caso] = enfileirar.mock.calls[0][0];
         expect(caso).toMatchObject({ nf: '-', cd_origem: 'CD ES' });
         expect(planilhas.mock.calls[0][0][0].linha).toContain('[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA] | Cliente sem retorno');
+    });
+
+    it('o caso SH1832330AP: a NF que ainda não chegou ao Data Mart não recusa; grava a NF digitada com a nota e o CD RJ', async () => {
+        conferir.mockResolvedValue({ tipo: 'lido', contexto: contexto(NF_FORA_DO_DATA_MART) });
+        const pedido = { ...REEMBOLSO, ecommerceOrderId: 'SH1832330AP', invoiceNumber: '183916', notes: 'Cliente sem retorno' };
+
+        const { body, status } = await processRefund('apice', pedido, { agora: AGORA });
+
+        expect(status).toBe(200);
+        expect(body.code).toBe('SUCCESS');
+        const [caso] = enfileirar.mock.calls[0][0];
+        expect(caso).toMatchObject({ nf: '183916', cd_origem: 'CD RJ' });
+        const esperado = prepararReembolso(
+            { ...pedido, originWarehouse: 'CD RJ', notes: '[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] | Cliente sem retorno' },
+            '05/11/2026 15:00:00',
+        );
+        expect(planilhas.mock.calls[0][0][0].linha).toEqual(buildRefundRow('apice', esperado));
+    });
+
+    it('só o pedido cancelado no Tiny: vale o que veio, e a nota diz por quê', async () => {
+        conferir.mockResolvedValue({ tipo: 'lido', contexto: contexto(SO_CANCELADO_NO_TINY) });
+
+        const { status } = await processRefund('apice', { ...REEMBOLSO, notes: 'Cliente sem retorno' }, { agora: AGORA });
+
+        expect(status).toBe(200);
+        const [caso] = enfileirar.mock.calls[0][0];
+        expect(caso).toMatchObject({ nf: '-', cd_origem: 'CD ES' });
+        expect(planilhas.mock.calls[0][0][0].linha).toContain('[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY] | Cliente sem retorno');
     });
 
     it('a chave Pix vai normalizada para a linha, e nunca para a fila', async () => {

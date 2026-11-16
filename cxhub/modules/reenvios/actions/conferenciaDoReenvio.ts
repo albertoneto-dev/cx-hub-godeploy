@@ -1,19 +1,26 @@
 import type { MarcaSemCosmosComPlanilha } from '../../../shared/lib/constants';
-import { itensOriginaisDoReenvio, nfDiverge, notaDeNaoConferido, valorDaNfDeReenvio } from '../../../shared/lib/datamart/pedido';
-import type { CampoConferido, Conferencia } from '../../../shared/lib/datamart/pedidoTipos';
+import {
+    itensOriginaisDoReenvio,
+    motivosDoNaoConferido,
+    nfDiverge,
+    notaDeNaoConferido,
+    valorDaNfDeReenvio,
+} from '../../../shared/lib/datamart/pedido';
+import type { CampoConferido, Conferencia, MotivoPorCampo } from '../../../shared/lib/datamart/pedidoTipos';
 import type { ResendSubmissionData } from '../types/index';
 
 /**
  * O que a conferência do pedido no Data Mart muda no reenvio de Ápice, Yenzah e Denavita (ADR-018), antes da fila e da
  * planilha — em qualquer entrada (a tela, a Central de Tickets e o bot passam todos pelo `processResend`):
- * - **NF:** o Data Mart respondeu e o pedido não tem NF de venda ⇒ recusa, nada é gravado; tem ⇒ vale a do Data Mart
- *   (a que veio de quem chamou, se difere, só vai para o log);
+ * - **NF:** o Data Mart prova que o pedido não tem NF de venda (`ausente`) ⇒ recusa, nada é gravado; tem ⇒ vale a do
+ *   Data Mart (a que veio de quem chamou, se difere, só vai para o log); não dá para afirmar (`desconhecida`: sem
+ *   resposta, a NF ainda fora do Data Mart, o pedido cancelado no Tiny) ⇒ vale a que veio;
  * - **CD:** o do Data Mart, no lugar do que veio (a tela fixa ES na Ápice e na Yenzah, e ~9% da Ápice sai do RJ);
  * - **"Valor da NF de reenvio (R$)":** o calculado pelos itens originais (o substituto herda o preço, o mimo não entra);
  *   o Data Mart respondeu mas não dá para calcular ⇒ em branco, e o backoffice preenche. Na Ápice e na Yenzah a coluna é
  *   da operação, e o valor vai para ela junto com as fórmulas (`valorNaOperacao`); na Denavita é do formulário;
- * - o que não pôde ser conferido (leitura que falhou ou demorou) fica com o valor de quem chamou, e uma nota vai na frente
- *   das observações: `[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]`.
+ * - o que não pôde ser conferido fica com o valor de quem chamou, e uma nota com o motivo vai na frente das observações:
+ *   `[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]`, `[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]`…
  */
 export type ConferenciaDoReenvio =
     | { tipo: 'recusado'; mensagem: string }
@@ -45,8 +52,8 @@ function valorEmTexto(valor: number): string {
 }
 
 /** A nota do que não foi conferido vai na frente das observações, como as notas do app antigo (`[CEP NÃO CONFERIDO…]`). */
-function comNota(comentarios: string, naoConferidos: CampoConferido[]): string {
-    return [notaDeNaoConferido(naoConferidos), comentarios].filter(Boolean).join(' | ');
+function comNota(comentarios: string, naoConferidos: CampoConferido[], motivos: MotivoPorCampo = {}): string {
+    return [notaDeNaoConferido(naoConferidos, motivos), comentarios].filter(Boolean).join(' | ');
 }
 
 export function aplicarConferenciaAoReenvio(
@@ -105,6 +112,6 @@ export function aplicarConferenciaAoReenvio(
         naoConferidos.push('valor');
     }
 
-    if (naoConferidos.length > 0) novo.comentarios = comNota(data.comentarios, naoConferidos);
+    if (naoConferidos.length > 0) novo.comentarios = comNota(data.comentarios, naoConferidos, motivosDoNaoConferido(contexto));
     return { tipo: 'aplicado', data: novo, valorNaOperacao, nfDivergente, valorEmBranco, naoConferidos };
 }

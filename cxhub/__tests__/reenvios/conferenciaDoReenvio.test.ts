@@ -112,7 +112,11 @@ describe('aplicarConferenciaAoReenvio', () => {
     it('cada leitura que falhou vale o que veio e entra na nota; o CD conferido mas desconhecido fica como veio, sem nota', () => {
         const r = aplicado(aplicarConferenciaAoReenvio('apice', DATA, {
             tipo: 'lido',
-            contexto: contexto({ nf: { estado: 'desconhecida', numero: null }, cd: { valor: null, conferido: true }, baseConferida: false }),
+            contexto: contexto({
+                nf: { estado: 'desconhecida', numero: null, motivo: 'sem_resposta' },
+                cd: { valor: null, conferido: true },
+                baseConferida: false,
+            }),
         }));
         expect(r.data).toMatchObject({ numeroNF: '10157987', cdOrigem: 'CD ES', valorReenvio: '189,90' });
         expect(r.naoConferidos).toEqual(['nf', 'valor']);
@@ -121,8 +125,50 @@ describe('aplicarConferenciaAoReenvio', () => {
 
     it('a nota vai sozinha quando não há observações', () => {
         const r = aplicado(aplicarConferenciaAoReenvio('apice', { ...DATA, comentarios: '' }, {
-            tipo: 'lido', contexto: contexto({ cd: { valor: null, conferido: false } }),
+            tipo: 'lido', contexto: contexto({ cd: { valor: null, conferido: false, motivo: 'sem_resposta' } }),
         }));
         expect(r.data.comentarios).toBe('[CD NÃO CONFERIDO: DATA MART SEM RESPOSTA]');
+    });
+
+    it('a NF emitida que ainda não chegou ao Data Mart não recusa: vale a NF que veio, o CD do Data Mart e o valor em branco', () => {
+        const r = aplicado(aplicarConferenciaAoReenvio('apice', DATA, {
+            tipo: 'lido',
+            contexto: contexto({
+                pedido: 'SH1832330AP',
+                nf: { estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' },
+                cd: { valor: 'CD RJ', conferido: true },
+                baseDoValor: null,
+                unidadesDoPedido: {},
+            }),
+        }));
+        expect(r.data).toMatchObject({
+            numeroNF: '10157987',
+            cdOrigem: 'CD RJ',
+            valorReenvio: '',
+            comentarios: '[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] | Obs da agente',
+        });
+        expect(r.naoConferidos).toEqual(['nf']);
+        expect(r.valorEmBranco).toBe('sem a NF original no Tiny');
+    });
+
+    it('só o pedido cancelado no Tiny: a nota diz por quê, na NF e no CD', () => {
+        const r = aplicado(aplicarConferenciaAoReenvio('apice', DATA, {
+            tipo: 'lido',
+            contexto: contexto({
+                nf: { estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' },
+                cd: { valor: null, conferido: false, motivo: 'pedido_cancelado_no_tiny' },
+            }),
+        }));
+        expect(r.data).toMatchObject({ numeroNF: '10157987', cdOrigem: 'CD ES' });
+        expect(r.data.comentarios).toBe('[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY] | Obs da agente');
+    });
+
+    it('motivos diferentes viram uma nota cada: a NF fora do Data Mart e o valor sem resposta', () => {
+        const r = aplicado(aplicarConferenciaAoReenvio('apice', DATA, {
+            tipo: 'lido',
+            contexto: contexto({ nf: { estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' }, baseConferida: false }),
+        }));
+        expect(r.naoConferidos).toEqual(['nf', 'valor']);
+        expect(r.data.comentarios).toBe('[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] [VALOR NÃO CONFERIDO: DATA MART SEM RESPOSTA] | Obs da agente');
     });
 });

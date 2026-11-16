@@ -32,10 +32,6 @@ const LOG = '[Pedido no Data Mart]';
 /** Abaixo disto a consulta nem sai: o Metabase não responde a tempo, e o timeout só gastaria o prazo que sobra. */
 const MIN_PRAZO_DA_CONSULTA_MS = 500;
 
-/** Quanto o Tiny deixa entre a criação do pedido na Shopify e a do pedido dele: de 1 dia antes a 12 depois. */
-const DIAS_ANTES_NO_TINY = 1;
-const DIAS_DEPOIS_NO_TINY = 12;
-
 /**
  * As larguras da busca da NF por faixa de `id_nota`, da menor para a maior: o id da NF nasce depois do id do pedido, na
  * mesma sequência do Tiny, a até ~1,5 milhão de ids dele (6 milhões nos casos mais lentos).
@@ -43,6 +39,16 @@ const DIAS_DEPOIS_NO_TINY = 12;
 const LARGURAS_DA_FAIXA = [1_500_000, 6_000_000];
 
 type Cd = 'es' | 'rj';
+
+/** Quanto o Tiny deixa entre a criação do pedido na Shopify e a do pedido dele: de 1 dia antes a `DIAS_DEPOIS_NO_TINY`. */
+const DIAS_ANTES_NO_TINY = 1;
+
+/**
+ * O RJ vai mais longe porque recebe os pedidos cancelados no ES e refeitos lá: dos 18.794 refeitos de 01/08 a
+ * 15/10/2026, 99,5% saíram em até 12 dias da criação e 99,99% em até 60 (o mais tardio, em 66). A tabela do RJ é pequena
+ * (~550 pedidos por dia), e os 60 dias custam pouco (as medidas estão em `sqlDoTinyPorData`).
+ */
+const DIAS_DEPOIS_NO_TINY: Record<Cd, number> = { es: 12, rj: 60 };
 
 export interface OpcoesDaConsulta {
     timeoutMs?: number;
@@ -84,7 +90,7 @@ order by e.line_item_id, e.effective_sku`;
  * sobre `p`, já com os literais.
  */
 function sqlDoTinyDoCd(cd: Cd, filtro: string): string {
-    return `select '${cd}' as cd, p.id_pedido, p.id_nota_fiscal, p.data_pedido, coalesce(p.codigo_rastreamento, '') <> '' as tem_rastreio, i.codigo_produto, i.descricao_produto, i.quantidade_produto
+    return `select '${cd}' as cd, p.id_pedido, p.id_nota_fiscal, p.data_pedido, coalesce(p.codigo_rastreamento, '') <> '' as tem_rastreio, i.codigo_produto, i.descricao_produto, i.quantidade_produto, p.situacao
 from api.tiny_pedidos_ap_cosmetics_${cd} p left join api.tiny_pedidos_ap_cosmetics_${cd}_itens i on i.id_pedido = p.id_pedido
 where ${filtro}`;
 }
@@ -98,11 +104,20 @@ ${sqlDoTinyDoCd('rj', filtro)}`;
 }
 
 /**
- * O pedido do Tiny de um CD pela data e pelo `numero_ecommerce`. A data é obrigatória: só pelo `numero_ecommerce` a
- * consulta varre a tabela inteira. Uma consulta por CD: o `union all` dos dois levou 15,3 s, e cada um sozinho, menos.
+ * O pedido do Tiny de um CD pela data e pelo número da Shopify, que vem no `numero_ordem_compra` ou no
+ * `numero_ecommerce`. No RJ o `numero_ecommerce` vem sempre vazio (os 4.401 pedidos de 09 a 16/11/2026), e no ES, em
+ * 2,6% deles (1.094 de 41.343); o `numero_ordem_compra` traz o número em quase todos esses, e quando os dois vêm, são
+ * iguais. A data é obrigatória: só pelo número a consulta varre a tabela inteira. Uma consulta por CD: o `union all` dos
+ * dois levou 15,3 s pelo Metabase, e cada um sozinho, menos.
+ *
+ * Medida em 16/11/2026 com o pedido 1832330 e outros de datas sem cache, pelo `runQuery` do GoRag (o tempo do Postgres,
+ * sem o do Metabase): a janela de 14 dias leva 11 ms no ES e 17 ms no RJ com a cache quente, e 628 ms e 149 ms com ela
+ * fria; a de 60 dias do RJ, 17 ms quente e de 198 a 435 ms fria. Só pelo `numero_ecommerce`, o ES levava 7 ms quente e
+ * 78 ms frio: o `or` lê a janela inteira, e é isso que acha o pedido que só tem o `numero_ordem_compra`.
  */
 export function sqlDoTinyPorData(cd: Cd, de: string, ate: string, numero: string): string {
-    return sqlDoTinyDoCd(cd, `p.data_pedido >= ${literalSql(de)} and p.data_pedido <= ${literalSql(ate)} and p.numero_ecommerce = ${literalSql(numero)}`);
+    const n = literalSql(numero);
+    return sqlDoTinyDoCd(cd, `p.data_pedido >= ${literalSql(de)} and p.data_pedido <= ${literalSql(ate)} and (p.numero_ordem_compra = ${n} or p.numero_ecommerce = ${n})`);
 }
 
 /** A NF com os itens, na tabela do CD; o `filtro` é o `where` sobre `n`. */
@@ -191,7 +206,7 @@ function idDaNotaNoPedido(valor: unknown): string | null {
  */
 function pedidosNoTiny(linhas: unknown[][]): PedidoNoTiny[] {
     const pedidos = new Map<string, PedidoNoTiny>();
-    for (const [cd, idPedido, idNota, data, rastreio, codigo, descricao, quantidade] of linhas) {
+    for (const [cd, idPedido, idNota, data, rastreio, codigo, descricao, quantidade, situacao] of linhas) {
         if (cd !== 'es' && cd !== 'rj') continue;
         const id = String(idPedido).trim();
         const chave = `${cd}|${id}`;
@@ -202,6 +217,7 @@ function pedidosNoTiny(linhas: unknown[][]): PedidoNoTiny[] {
                 idPedido: id,
                 idNotaFiscal: idDaNotaNoPedido(idNota),
                 dataPedido: texto(data)?.slice(0, 10) ?? null,
+                cancelado: /cancel/i.test(texto(situacao) ?? ''),
                 temRastreio: rastreio === true,
                 itens: [],
             };
@@ -264,8 +280,9 @@ interface Contexto {
 }
 
 /**
- * Uma consulta com o que sobra do prazo: o teto é o de 5 s do cliente ou o que resta, o que for menor. As lentas (o Tiny
- * por data e a NF por faixa, medidas em 15,3 s e 7,9 s) pedem `semTeto` e levam tudo o que resta. Sobrando menos de 500 ms, não sai.
+ * Uma consulta com o que sobra do prazo: o teto é o de 5 s do cliente ou o que resta, o que for menor. As que leem uma
+ * faixa (o Tiny por data e a NF por faixa; as medidas estão nelas) pedem `semTeto` e levam tudo o que resta. Sobrando
+ * menos de 500 ms, não sai.
  */
 async function ler<T>(
     ctx: Contexto,
@@ -302,13 +319,15 @@ async function lerPedidoNoTiny(
         if (shopify.dados === null) return { ok: true, dados: [] };
         const criado = shopify.dados.criadoEm?.slice(0, 10) ?? '';
         const de = somarDias(criado, -DIAS_ANTES_NO_TINY);
-        const ate = somarDias(criado, DIAS_DEPOIS_NO_TINY);
-        if (de !== null && ate !== null) {
-            // Sem o teto de 5 s, só o prazo: medidos pelo Metabase, o ES e o RJ juntos levaram 15,3 s; um por vez, em
-            // paralelo, cabem no prazo da rota. Só é `ok` se os dois CDs responderem: um que falta pode ser o do pedido.
-            const [es, rj] = await Promise.all((['es', 'rj'] as const).map(
-                (cd) => ler(ctx, `tiny ${cd}`, sqlDoTinyPorData(cd, de, ate, numeroDoPedido), pedidosNoTiny, { semTeto: true }),
-            ));
+        const ateNoEs = somarDias(criado, DIAS_DEPOIS_NO_TINY.es);
+        const ateNoRj = somarDias(criado, DIAS_DEPOIS_NO_TINY.rj);
+        if (de !== null && ateNoEs !== null && ateNoRj !== null) {
+            // Sem o teto de 5 s, só o prazo, e um CD por consulta, em paralelo (as medidas estão em `sqlDoTinyPorData`).
+            // Só é `ok` se os dois CDs responderem: um que falta pode ser o do pedido.
+            const [es, rj] = await Promise.all([
+                ler(ctx, 'tiny es', sqlDoTinyPorData('es', de, ateNoEs, numeroDoPedido), pedidosNoTiny, { semTeto: true }),
+                ler(ctx, 'tiny rj', sqlDoTinyPorData('rj', de, ateNoRj, numeroDoPedido), pedidosNoTiny, { semTeto: true }),
+            ]);
             if (!es.ok) return es;
             if (!rj.ok) return rj;
             return { ok: true, dados: [...es.dados, ...rj.dados] };
@@ -317,7 +336,10 @@ async function lerPedidoNoTiny(
     return falhou(ctx, 'tiny', 'sem o id do Tiny nem a data da Shopify');
 }
 
-/** A NF de venda do pedido escolhido no Tiny: pelo id da NF, ou por faixa com o número da NF da Intelipost. */
+/**
+ * A NF de venda do pedido escolhido no Tiny: pelo id da NF, ou por faixa com o número da NF da Intelipost. A do pedido
+ * cancelado não é lida: ela não vale (`derivarContextoDoPedido`).
+ */
 async function lerNota(
     ctx: Contexto,
     rem0: RemessaIntelipost | undefined,
@@ -325,7 +347,7 @@ async function lerNota(
 ): Promise<Leitura<NotaNoTiny | null>> {
     if (!tiny.ok) return falhou(ctx, 'nota', 'o pedido do Tiny não foi lido');
     const escolhido = pedidoEscolhidoNoTiny(tiny.dados);
-    if (!escolhido) return { ok: true, dados: null };
+    if (!escolhido || escolhido.cancelado) return { ok: true, dados: null };
 
     const idDaNota = idNumerico(escolhido.idNotaFiscal);
     if (idDaNota) {

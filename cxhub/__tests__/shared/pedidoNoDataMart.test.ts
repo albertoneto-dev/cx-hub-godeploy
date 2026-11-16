@@ -115,6 +115,8 @@ describe('lerPedidoNoDataMart — o caso real da Ápice (pedido 1731559)', () =>
                 idPedido: '1061809849',
                 idNotaFiscal: '1061811664',
                 dataPedido: '2026-10-20',
+                // Sem a coluna da situação (as linhas deste caso são de antes dela), o pedido não está cancelado.
+                cancelado: false,
                 temRastreio: true,
                 itens: [
                     { sku: '40132', descricao: 'Kit Hidratação', quantidade: 1 },
@@ -174,24 +176,40 @@ describe('lerPedidoNoDataMart — o caso real da Ápice (pedido 1731559)', () =>
 describe('lerPedidoNoDataMart — o pedido no Tiny', () => {
     const SEM_ID = [['10157987', 'ES', null, null, null, true]];
 
-    it('sem o external_erp_id, busca por data (criação −1 dia a +12 dias) e pelo numero_ecommerce, sem o teto de 5 s', async () => {
+    it('sem o external_erp_id, busca por data e pelo número no numero_ordem_compra ou no numero_ecommerce, sem o teto de 5 s', async () => {
         const m = mundo({ intelipost: SEM_ID, shopify: SHOPIFY, tinyPedido: soDoEs, nota: NOTA });
 
         const leituras = await lerPedidoNoDataMart('apice', '1731559', PRAZO, m);
 
-        // Duas consultas, uma por CD, cada uma com o mesmo filtro; nenhuma é um union all.
+        // Duas consultas, uma por CD, com o mesmo número; nenhuma é um union all.
         const tiny = sobre(m.chamadas, 'api.tiny_pedidos_');
         expect(tiny).toHaveLength(2);
         for (const consulta of tiny) {
-            expect(consulta.sql).toContain("p.data_pedido >= '2026-10-19' and p.data_pedido <= '2026-11-01' and p.numero_ecommerce = '1731559'");
+            expect(consulta.sql).toContain("and (p.numero_ordem_compra = '1731559' or p.numero_ecommerce = '1731559')");
             expect(consulta.sql).not.toContain('p.id_pedido =');
             expect(consulta.sql).not.toContain('union all');
             // Sem o teto de 5 s: o que sobra do prazo.
             expect(consulta.timeoutMs).toBe(60_000);
         }
+        // A janela: da criação na Shopify (20/10) −1 dia a +12 no ES, e a +60 no RJ, que recebe os refeitos do ES.
         expect(tiny[0].sql).toContain("select 'es' as cd");
+        expect(tiny[0].sql).toContain("p.data_pedido >= '2026-10-19' and p.data_pedido <= '2026-11-01'");
         expect(tiny[1].sql).toContain("select 'rj' as cd");
+        expect(tiny[1].sql).toContain("p.data_pedido >= '2026-10-19' and p.data_pedido <= '2026-12-19'");
         expect(leituras.tiny?.ok && leituras.tiny.dados.map((p) => p.cd)).toEqual(['es']);
+    });
+
+    it('a situação marca o pedido cancelado; outra situação, ou nenhuma, não', async () => {
+        const tiny = [
+            ['es', '10', '0', '2026-10-20', false, null, null, null, 'Cancelado'],
+            ['rj', '11', '0', '2026-10-21', false, null, null, null, 'Enviado'],
+            ['rj', '12', '0', '2026-10-21', false, null, null, null, null],
+        ];
+        const m = mundo({ intelipost: INTELIPOST, shopify: SHOPIFY, tinyPedido: tiny });
+
+        const leituras = await lerPedidoNoDataMart('apice', '1731559', PRAZO, m);
+
+        expect(leituras.tiny?.ok && leituras.tiny.dados.map((p) => [p.idPedido, p.cancelado])).toEqual([['10', true], ['11', false], ['12', false]]);
     });
 
     it('as duas consultas por data saem em paralelo, e juntas na ordem ES e depois RJ', async () => {
@@ -295,6 +313,49 @@ describe('lerPedidoNoDataMart — o pedido no Tiny', () => {
         expect(nota).toContain('api.tiny_nfe_ap_cosmetics_rj n');
         expect(nota).toContain("n.id_nota = '777'");
         expect(nota).not.toContain('cosmetics_es');
+    });
+
+    it('o caso real SH1832330AP sem a Intelipost: acha o RJ pelo numero_ordem_compra e lê a NF dele, não a do ES cancelado', async () => {
+        // As colunas: cd, id_pedido, id_nota_fiscal, data_pedido, tem_rastreio, codigo_produto, descricao_produto,
+        // quantidade_produto e situacao. No RJ o numero_ecommerce vem vazio: só o numero_ordem_compra tem o número.
+        const es = [
+            ['es', '1063282732', '0', '2026-11-16', false, '20585', 'COND ACQUACREAM 100ML', '1.0000', 'Cancelado'],
+            ['es', '1063282732', '0', '2026-11-16', false, '20574', 'Kit Nutri Waves', '1.0000', 'Cancelado'],
+        ];
+        const rj = [
+            ['rj', '858035694', '858039410', '2026-11-16', true, '20574', 'Kit Nutri Waves', '1.0000', 'Enviado'],
+            ['rj', '858035694', '858039410', '2026-11-16', true, '20585', 'COND ACQUACREAM 100ML', '1.0000', 'Enviado'],
+        ];
+        const m = mundo({
+            intelipost: [],
+            shopify: [['7874560426206', '2026-11-16T11:52:05+00:00', 189.81, 0, false, true]],
+            tinyPedido: (sql) => (sql.includes("select 'rj'") ? rj : es),
+            // A NF 858039410 ainda não chegou à tabela de NFs do RJ.
+            nota: [],
+        });
+
+        const leituras = await lerPedidoNoDataMart('apice', '1832330', PRAZO, m);
+
+        expect(leituras.tiny?.ok && leituras.tiny.dados.map((p) => [p.cd, p.idPedido, p.idNotaFiscal, p.cancelado, p.itens.length])).toEqual([
+            ['es', '1063282732', null, true, 2],
+            ['rj', '858035694', '858039410', false, 2],
+        ]);
+        const notas = sobre(m.chamadas, 'api.tiny_nfe_');
+        expect(notas).toHaveLength(1);
+        expect(notas[0].sql).toContain('from api.tiny_nfe_ap_cosmetics_rj n');
+        expect(notas[0].sql).toContain("n.id_nota = '858039410'");
+        expect(leituras.nota).toEqual({ ok: true, dados: null });
+    });
+
+    it('só o pedido cancelado: a NF dele não é lida, nem pelo id nem por faixa', async () => {
+        const cancelado = [['es', '1063282732', '1063290000', '2026-11-16', false, '20585', 'COND', '1', 'Cancelado']];
+        const m = mundo({ intelipost: [['183916', 'ES', '1063282732', null, null, true]], shopify: SHOPIFY, tinyPedido: cancelado, nota: NOTA });
+
+        const leituras = await lerPedidoNoDataMart('apice', '1832330', PRAZO, m);
+
+        expect(leituras.tiny?.ok && leituras.tiny.dados.map((p) => p.cancelado)).toEqual([true]);
+        expect(sobre(m.chamadas, 'api.tiny_nfe_')).toHaveLength(0);
+        expect(leituras.nota).toEqual({ ok: true, dados: null });
     });
 
     it('id_nota_fiscal 0 ou vazio vira null, e o pedido sem itens (left join) entra com a lista vazia', async () => {
@@ -569,11 +630,17 @@ describe('os montadores de SQL', () => {
         expect(sql).not.toContain('_sp');
     });
 
-    it('o Tiny por data leva a janela e o numero_ecommerce, e escapa as aspas', () => {
+    it('o Tiny por data leva a janela e procura o número no numero_ordem_compra ou no numero_ecommerce, e escapa as aspas', () => {
         const sql = sqlDoTinyPorData('rj', '2026-10-19', '2026-11-01', "17'31");
-        expect(sql).toContain("where p.data_pedido >= '2026-10-19' and p.data_pedido <= '2026-11-01' and p.numero_ecommerce = '17''31'");
+        expect(sql).toContain("where p.data_pedido >= '2026-10-19' and p.data_pedido <= '2026-11-01' and (p.numero_ordem_compra = '17''31' or p.numero_ecommerce = '17''31')");
         expect(sql).toContain('api.tiny_pedidos_ap_cosmetics_rj p left join api.tiny_pedidos_ap_cosmetics_rj_itens i');
         expect(sql).not.toContain('_es');
+    });
+
+    it('o Tiny lê a situação do pedido, pelo id e por data', () => {
+        for (const sql of [sqlDoTinyPorId('1061809849'), sqlDoTinyPorData('es', '2026-10-19', '2026-11-01', '1731559')]) {
+            expect(sql).toContain('i.quantidade_produto, p.situacao\nfrom api.tiny_pedidos_ap_cosmetics_');
+        }
     });
 
     it('a NF vem da tabela do CD, por id ou por faixa com o número da NF', () => {

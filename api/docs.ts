@@ -402,11 +402,14 @@ const GUIA_HTML = `
         encontrado. A Gobeaute não está no Data Mart e continua com o limite.</td></tr>
       <tr><td>Reenvio e reembolso da Ápice, Yenzah e Denavita (<code>/api/sheets/append</code>, <code>/api/refund/submit</code>
         e o bot)</td><td>O servidor confere o pedido no <strong>Data Mart</strong> (ADR-018). A NF de venda, o CD de origem e
-        o valor da NF de reenvio vêm de lá, no lugar dos que vieram. Pedido <strong>sem NF de venda</strong> é recusado com
-        <span class="status s4xx">422</span>, sem gravar nada (no bot, <code>reason: ORDER_NOT_INVOICED</code>). Com o
-        Data Mart fora, o registro segue com o que veio, e uma nota <code>[… NÃO CONFERIDOS: DATA MART SEM RESPOSTA]</code>
-        vai nas observações. A chave Pix do reembolso é validada pelo tipo. O <code>GET /api/datamart/order-context</code>
-        mostra antes o que vai ser gravado. Na Vercel, valia o que a tela mandava.</td></tr>
+        o valor da NF de reenvio vêm de lá, no lugar dos que vieram. Pedido que o Data Mart <strong>prova não
+        faturado</strong> (na Ápice, o pedido ativo no Tiny sem NF, a NF cancelada, ou o pedido em lugar nenhum) é recusado
+        com <span class="status s4xx">422</span>, sem gravar nada (no bot, <code>reason: ORDER_NOT_INVOICED</code>). Quando
+        a NF não dá para conferir (o Data Mart fora, a NF já emitida que ainda não chegou a ele, o pedido só cancelado no
+        Tiny), o registro segue com o que veio, e uma nota com o motivo vai nas observações, como
+        <code>[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]</code>. A chave Pix do reembolso é validada pelo tipo. O
+        <code>GET /api/datamart/order-context</code> mostra antes o que vai ser gravado, com o motivo em
+        <code>nfMotivo</code>. Na Vercel, valia o que a tela mandava.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.
         Para ensaiar, use <code>testMode: true</code>.</td></tr>
       <tr><td>Tempo de execução</td><td>Não há o <code>maxDuration</code> da Vercel. O bot continua planejando o trabalho para
@@ -532,9 +535,11 @@ const GUIA_HTML = `
         fora do ar (o Data Mart leva horas para receber)</td><td>Confira o número e a marca; na Rituária, busque também pelo
         Cosmos (<code>/api/cosmos/orders</code>)</td></tr>
       <tr><td><code>422</code> "não tem NF de venda" no reenvio ou no reembolso da Ápice, Yenzah ou Denavita</td><td>O Data
-        Mart respondeu e o pedido não tem NF de venda: não foi faturado, ou foi há poucas horas e a NF ainda não chegou
-        lá</td><td>Confira no <code>GET /api/datamart/order-context</code> (<code>nfStatus</code>) e tente de novo quando a
-        NF aparecer</td></tr>
+        Mart prova que o pedido não foi faturado: na Ápice, o pedido do Tiny está ativo e sem NF, ou a NF foi cancelada,
+        ou o pedido não aparece em lugar nenhum; na Yenzah e na Denavita, a Intelipost ainda não tem a NF (ela chega lá
+        cerca de 1 h depois). A NF da Ápice já emitida que ainda não chegou ao Data Mart não dá esta recusa</td><td>Confira
+        no <code>GET /api/datamart/order-context</code> (<code>nfStatus</code>) e tente de novo quando a NF
+        aparecer</td></tr>
     </tbody>
   </table></div>
 </section>`;

@@ -4,6 +4,7 @@ import {
     digitosDoPedido,
     itensDoProdutoReenviar,
     itensOriginaisDoReenvio,
+    motivosDoNaoConferido,
     nfDiverge,
     notaDeNaoConferido,
     pedidoDaPlanilha,
@@ -67,6 +68,7 @@ const TINY: PedidoNoTiny = {
     idPedido: '1061809849',
     idNotaFiscal: '1061811664',
     dataPedido: '2026-10-27',
+    cancelado: false,
     temRastreio: true,
     itens: [
         { sku: '40132', descricao: 'Kit Cachos - Shampoo, Condicionador, Gelatina, Máscara e Ativador (5 ITENS)', quantidade: 1 },
@@ -123,6 +125,71 @@ function leiturasDenavita(sobre: Partial<LeiturasDoPedido> = {}): LeiturasDoPedi
     };
 }
 
+// ── O caso real SH1832330AP (16/11/2026): cancelado no ES e refeito no RJ ────────────────────────────────────────────
+
+const ITENS_1832330 = [
+    { sku: '20574', descricao: 'Kit Nutri Waves - Shampoo, Condicionador, Gelatina, Máscara e Creme de Pentear (5 ITENS)', quantidade: 1 },
+    { sku: '20585', descricao: 'COND ACQUACREAM 100ML', quantidade: 1 },
+];
+
+/** No ES o pedido foi cancelado antes de faturar. */
+const ES_CANCELADO: PedidoNoTiny = {
+    cd: 'es',
+    idPedido: '1063282732',
+    idNotaFiscal: null,
+    dataPedido: '2026-11-16',
+    cancelado: true,
+    temRastreio: false,
+    itens: ITENS_1832330,
+};
+
+/** No RJ ele foi refeito no mesmo dia, e já tem o id da NF, que ainda não chegou à tabela de NFs do RJ. */
+const RJ_REFEITO: PedidoNoTiny = {
+    cd: 'rj',
+    idPedido: '858035694',
+    idNotaFiscal: '858039410',
+    dataPedido: '2026-11-16',
+    cancelado: false,
+    temRastreio: true,
+    itens: ITENS_1832330,
+};
+
+/** A remessa que chegou ao gold às 14h06, cerca de 1 h depois de criada na Intelipost. */
+const REMESSA_1832330: RemessaIntelipost = {
+    nf: '183916',
+    ufOrigem: 'RJ',
+    idPedidoTiny: '858035694',
+    despachadaEm: null,
+    entregueEm: null,
+    temRastreio: true,
+};
+
+const EXPLODIDAS_1832330: LinhaExplodida[] = [
+    linha('20585', '20585', 29.9, { componenteDeKit: false }),
+    linha('20574', '20563', 43.46),
+    linha('20574', '20566', 25.68),
+    linha('20574', '20568', 32.79),
+    linha('20574', '20569', 28.84),
+    linha('20574', '20570', 39.13),
+];
+
+/** O pedido como o Data Mart o tinha das 13h04 às 14h06: sem a Intelipost, o ES cancelado e a NF do RJ fora da tabela. */
+function leituras1832330(sobre: Partial<LeiturasDoPedido> = {}): LeiturasDoPedido {
+    return {
+        marca: 'apice',
+        numero: '1832330',
+        intelipost: { ok: true, dados: [] },
+        shopify: { ok: true, dados: { ...SHOPIFY, orderId: '7874560426206', criadoEm: '2026-11-16T11:52:05+00:00', total: 189.81 } },
+        explodidas: { ok: true, dados: EXPLODIDAS_1832330 },
+        tiny: { ok: true, dados: [ES_CANCELADO, RJ_REFEITO] },
+        nota: { ok: true, dados: null },
+        ...sobre,
+    };
+}
+
+/** A NF 183916 do RJ, quando chegar à tabela de NFs. */
+const NOTA_183916: NotaNoTiny = { ...NOTA, numero: '183916' };
+
 describe('digitosDoPedido e pedidoDaPlanilha', () => {
     it('só os dígitos, entre 3 e 9', () => {
         expect(digitosDoPedido('SH1731559AP')).toBe('1731559');
@@ -142,12 +209,31 @@ describe('digitosDoPedido e pedidoDaPlanilha', () => {
 });
 
 describe('pedidoEscolhidoNoTiny', () => {
-    it('vale o mais recente, e no empate o primeiro', () => {
+    it('vale o mais recente, e no empate o ES, em qualquer ordem', () => {
         const es = { ...TINY, cd: 'es' as const, dataPedido: '2026-10-01' };
         const rj = { ...TINY, cd: 'rj' as const, dataPedido: '2026-10-05' };
         expect(pedidoEscolhidoNoTiny([es, rj])?.cd).toBe('rj');
         expect(pedidoEscolhidoNoTiny([es, { ...rj, dataPedido: '2026-10-01' }])?.cd).toBe('es');
+        expect(pedidoEscolhidoNoTiny([{ ...rj, dataPedido: '2026-10-01' }, es])?.cd).toBe('es');
         expect(pedidoEscolhidoNoTiny([])).toBeNull();
+    });
+
+    it('o cancelado perde para o ativo, mesmo mais recente e com NF', () => {
+        expect(pedidoEscolhidoNoTiny([ES_CANCELADO, RJ_REFEITO])).toBe(RJ_REFEITO);
+        const canceladoDepois = { ...ES_CANCELADO, dataPedido: '2026-11-20', idNotaFiscal: '1063290000' };
+        expect(pedidoEscolhidoNoTiny([canceladoDepois, { ...RJ_REFEITO, idNotaFiscal: null }])?.cd).toBe('rj');
+    });
+
+    it('entre os ativos, o que tem NF vale antes do mais recente (a cópia "Em aberto" importada depois não tem)', () => {
+        const copiaSemNf = { ...RJ_REFEITO, idPedido: '858100000', idNotaFiscal: null, dataPedido: '2026-12-01' };
+        expect(pedidoEscolhidoNoTiny([copiaSemNf, RJ_REFEITO])).toBe(RJ_REFEITO);
+        expect(pedidoEscolhidoNoTiny([RJ_REFEITO, copiaSemNf])).toBe(RJ_REFEITO);
+    });
+
+    it('só cancelados: o melhor deles, que quem usa reconhece pelo cancelado', () => {
+        expect(pedidoEscolhidoNoTiny([ES_CANCELADO])).toBe(ES_CANCELADO);
+        const rjCancelado = { ...RJ_REFEITO, cancelado: true };
+        expect(pedidoEscolhidoNoTiny([ES_CANCELADO, rjCancelado])).toBe(rjCancelado);
     });
 });
 
@@ -205,22 +291,126 @@ describe('derivarContextoDoPedido — NF', () => {
         expect(cancelada.unidadesDoPedido).toEqual({});
     });
 
-    it('ausente quando todas responderam e nenhuma tem NF; desconhecida quando uma falhou', () => {
+    it('ausente quando todas responderam e o pedido ativo não tem NF; desconhecida, sem resposta, quando uma falhou', () => {
         const sem = { ok: true as const, dados: [] };
-        const base = { intelipost: sem, nota: { ok: true as const, dados: null } };
+        const base = { intelipost: sem, tiny: { ok: true as const, dados: [{ ...TINY, idNotaFiscal: null }] }, nota: { ok: true as const, dados: null } };
         const ausente = derivarContextoDoPedido(leiturasApice(base));
         expect(ausente.nf).toEqual({ estado: 'ausente', numero: null });
         expect(ausente.avisos).toContain('O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.');
-        expect(derivarContextoDoPedido(leiturasApice({ ...base, nota: FALHA })).nf.estado).toBe('desconhecida');
-        expect(derivarContextoDoPedido(leiturasApice({ ...base, tiny: FALHA })).nf.estado).toBe('desconhecida');
-        expect(derivarContextoDoPedido(leiturasApice({ ...base, intelipost: FALHA })).nf.estado).toBe('desconhecida');
+        const semResposta = { estado: 'desconhecida', numero: null, motivo: 'sem_resposta' };
+        expect(derivarContextoDoPedido(leiturasApice({ ...base, nota: FALHA })).nf).toEqual(semResposta);
+        expect(derivarContextoDoPedido(leiturasApice({ ...base, tiny: FALHA })).nf).toEqual(semResposta);
+        expect(derivarContextoDoPedido(leiturasApice({ ...base, intelipost: FALHA })).nf).toEqual(semResposta);
+    });
+
+    it('o pedido em lugar nenhum (nem no Tiny, nem na Intelipost): ausente', () => {
+        const c = derivarContextoDoPedido(leiturasApice({ intelipost: { ok: true, dados: [] }, tiny: { ok: true, dados: [] }, nota: { ok: true, dados: null } }));
+        expect(c.nf).toEqual({ estado: 'ausente', numero: null });
     });
 
     it('Yenzah e Denavita: ausente se a Intelipost respondeu, senão desconhecida', () => {
         const ausente = derivarContextoDoPedido(leiturasDenavita({ intelipost: { ok: true, dados: [] } }));
         expect(ausente.nf).toEqual({ estado: 'ausente', numero: null });
         expect(ausente.avisos).toContain('A Intelipost ainda não tem a NF deste pedido (pedido pode não ter sido faturado).');
-        expect(derivarContextoDoPedido(leiturasDenavita({ intelipost: FALHA })).nf.estado).toBe('desconhecida');
+        expect(derivarContextoDoPedido(leiturasDenavita({ intelipost: FALHA })).nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'sem_resposta' });
+    });
+});
+
+describe('derivarContextoDoPedido — o pedido refeito em outro CD (o caso real SH1832330AP)', () => {
+    const AVISO_NF_FORA = 'A NF deste pedido já foi emitida no Tiny do CD RJ, mas ainda não chegou ao Data Mart. Confira o número na Intelipost.';
+    const AVISO_DOIS_CDS = 'Pedido encontrado em mais de um CD (ES cancelado, RJ); usando o CD RJ.';
+    const AVISO_CANCELADO = 'O pedido está cancelado no Tiny do CD ES e pode ter sido refeito em outro CD.';
+
+    it('sem a Intelipost: a NF do RJ, emitida e fora da tabela, não é "sem NF" — desconhecida, CD RJ e o aviso', () => {
+        const c = derivarContextoDoPedido(leituras1832330());
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' });
+        expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
+        expect(c.avisos).toEqual([AVISO_NF_FORA, AVISO_DOIS_CDS]);
+        // Sem a NF na tabela, o valor da NF de reenvio fica em branco para o backoffice, como hoje.
+        expect(c.baseDoValor).toBeNull();
+        expect(c.baseConferida).toBe(true);
+    });
+
+    it('com a Intelipost: vale a NF 183916 dela, e o CD RJ', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ intelipost: { ok: true, dados: [REMESSA_1832330] } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
+        expect(c.avisos).toEqual([AVISO_DOIS_CDS]);
+    });
+
+    it('a NF do RJ já na tabela, ainda sem a Intelipost: achada pelo Tiny', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ nota: { ok: true, dados: NOTA_183916 } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
+    });
+
+    it('só o ES cancelado (o refeito fora da busca): desconhecida, e o CD não sai do pedido cancelado', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO] } }));
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' });
+        expect(c.cd).toEqual({ valor: null, conferido: false, motivo: 'pedido_cancelado_no_tiny' });
+        expect(c.avisos).toEqual([`${AVISO_CANCELADO} Confira a NF na Intelipost.`]);
+    });
+
+    it('só cancelados, com a Intelipost: o CD é o da UF dela; com a NF dela, a NF também', () => {
+        // Remessa sem NF: hoje toda remessa da Ápice tem NF, mas a regra cobre a que vier sem.
+        const semNf = derivarContextoDoPedido(leituras1832330({
+            tiny: { ok: true, dados: [ES_CANCELADO] },
+            intelipost: { ok: true, dados: [{ ...REMESSA_1832330, nf: null }] },
+        }));
+        expect(semNf.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' });
+        expect(semNf.cd).toEqual({ valor: 'CD RJ', conferido: true });
+
+        const comNf = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO] }, intelipost: { ok: true, dados: [REMESSA_1832330] } }));
+        expect(comNf.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(comNf.cd).toEqual({ valor: 'CD RJ', conferido: true });
+        // O aviso do cancelamento fica, sem pedir a NF, que já foi achada.
+        expect(comNf.avisos).toEqual([AVISO_CANCELADO]);
+    });
+
+    it('cancelado nos dois CDs: o aviso cita os dois', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO, { ...RJ_REFEITO, cancelado: true }] } }));
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' });
+        expect(c.avisos).toEqual(['O pedido está cancelado no Tiny dos CDs ES e RJ. Confira a NF na Intelipost.']);
+    });
+
+    it('só cancelados e a Intelipost fora: sem resposta vale antes do cancelamento, na NF e no CD', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO] }, intelipost: FALHA }));
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'sem_resposta' });
+        expect(c.cd).toEqual({ valor: null, conferido: false, motivo: 'sem_resposta' });
+    });
+
+    it('a NF autorizada de um pedido cancelado não vale: ele quase sempre foi refeito com outra NF', () => {
+        const comNf = { ...ES_CANCELADO, idNotaFiscal: '1063290000' };
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [comNf] }, nota: { ok: true, dados: NOTA } }));
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' });
+        expect(c.baseDoValor).toBeNull();
+        expect(c.unidadesDoPedido).toEqual({});
+    });
+
+    it('pedido ativo sem o id da NF: ausente, mesmo com um cancelado ao lado', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO, { ...RJ_REFEITO, idNotaFiscal: null }] } }));
+        expect(c.nf).toEqual({ estado: 'ausente', numero: null });
+        expect(c.avisos[0]).toBe('O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.');
+    });
+
+    it('NF achada e cancelada: ausente', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ nota: { ok: true, dados: { ...NOTA_183916, situacao: 'Cancelada' } } }));
+        expect(c.nf).toEqual({ estado: 'ausente', numero: null });
+    });
+
+    it('uma leitura que falhou vale antes da NF fora da tabela: sem resposta, e o CD ainda sai do RJ', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ intelipost: FALHA }));
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'sem_resposta' });
+        expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
+        expect(derivarContextoDoPedido(leituras1832330({ nota: FALHA })).nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'sem_resposta' });
+    });
+
+    it('no desempate, ganha o pedido com NF: a cópia sem NF, mais recente, não vira "sem NF"', () => {
+        const copiaSemNf = { ...RJ_REFEITO, idPedido: '858100000', idNotaFiscal: null, dataPedido: '2026-12-01' };
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [RJ_REFEITO, copiaSemNf] }, nota: { ok: true, dados: NOTA_183916 } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916' });
+        // Os dois no mesmo CD: o aviso não diz "mais de um CD".
+        expect(c.avisos).toEqual(['Pedido encontrado mais de uma vez no Tiny (RJ, RJ); usando o CD RJ.']);
     });
 });
 
@@ -236,7 +426,7 @@ describe('derivarContextoDoPedido — CD', () => {
         const sem = derivarContextoDoPedido(leiturasDenavita({ ...base, intelipost: rem(null) }));
         expect(sem.cd).toEqual({ valor: null, conferido: true });
         expect(sem.avisos).toContain('Não encontrei o CD de origem na Intelipost.');
-        expect(derivarContextoDoPedido(leiturasDenavita({ ...base, intelipost: FALHA })).cd).toEqual({ valor: null, conferido: false });
+        expect(derivarContextoDoPedido(leiturasDenavita({ ...base, intelipost: FALHA })).cd).toEqual({ valor: null, conferido: false, motivo: 'sem_resposta' });
     });
 
     it('Ápice: a tabela do Tiny manda, a Intelipost é a reserva', () => {
@@ -253,8 +443,9 @@ describe('derivarContextoDoPedido — CD', () => {
         const aviso = derivarContextoDoPedido(leiturasApice({ tiny: { ok: true, dados: [] }, intelipost: semUf }));
         expect(aviso.cd).toEqual({ valor: null, conferido: true });
         expect(aviso.avisos).toContain('Não encontrei o CD de origem no Tiny nem na Intelipost.');
-        expect(derivarContextoDoPedido(leiturasApice({ tiny: FALHA, intelipost: semUf })).cd).toEqual({ valor: null, conferido: false });
-        expect(derivarContextoDoPedido(leiturasApice({ tiny: { ok: true, dados: [] }, intelipost: FALHA })).cd).toEqual({ valor: null, conferido: false });
+        const semResposta = { valor: null, conferido: false, motivo: 'sem_resposta' };
+        expect(derivarContextoDoPedido(leiturasApice({ tiny: FALHA, intelipost: semUf })).cd).toEqual(semResposta);
+        expect(derivarContextoDoPedido(leiturasApice({ tiny: { ok: true, dados: [] }, intelipost: FALHA })).cd).toEqual(semResposta);
     });
 
     it('pedido nos dois CDs: usa o mais recente e avisa', () => {
@@ -331,7 +522,7 @@ describe('derivarContextoDoPedido — avisos', () => {
             leiturasApice({
                 intelipost: { ok: true, dados: [{ ...REMESSA, nf: null }, { ...REMESSA, nf: null }] },
                 nota: { ok: true, dados: null },
-                tiny: { ok: true, dados: [{ ...TINY, cd: 'es' as const }, { ...TINY, cd: 'rj' as const }] },
+                tiny: { ok: true, dados: [{ ...TINY, cd: 'es' as const, idNotaFiscal: null }, { ...TINY, cd: 'rj' as const, idNotaFiscal: null }] },
                 shopify: { ok: true, dados: null },
             }),
         );
@@ -578,5 +769,33 @@ describe('notaDeNaoConferido', () => {
         expect(notaDeNaoConferido(['nf', 'cd'])).toBe('[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]');
         expect(notaDeNaoConferido(['valor', 'nf', 'cd', 'cd'])).toBe('[CD/NF/VALOR NÃO CONFERIDOS: DATA MART SEM RESPOSTA]');
         expect(notaDeNaoConferido(['nf', 'nf'])).toBe('[NF NÃO CONFERIDA: DATA MART SEM RESPOSTA]');
+    });
+
+    it('o motivo de cada campo: os de motivo igual vão juntos, e o campo sem motivo é "sem resposta"', () => {
+        expect(notaDeNaoConferido(['nf'], { nf: 'nf_fora_do_data_mart' })).toBe('[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]');
+        expect(notaDeNaoConferido(['nf'], { nf: 'pedido_cancelado_no_tiny' })).toBe('[NF NÃO CONFERIDA: PEDIDO CANCELADO NO TINY]');
+        expect(notaDeNaoConferido(['nf', 'cd'], { cd: 'pedido_cancelado_no_tiny', nf: 'pedido_cancelado_no_tiny' }))
+            .toBe('[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY]');
+        expect(notaDeNaoConferido(['cd', 'nf'], { nf: 'sem_resposta' })).toBe('[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]');
+    });
+
+    it('motivos diferentes viram uma nota cada, na ordem do primeiro campo de cada uma', () => {
+        expect(notaDeNaoConferido(['valor', 'nf'], { nf: 'nf_fora_do_data_mart' }))
+            .toBe('[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] [VALOR NÃO CONFERIDO: DATA MART SEM RESPOSTA]');
+        expect(notaDeNaoConferido(['cd', 'nf', 'valor'], { cd: 'pedido_cancelado_no_tiny', nf: 'pedido_cancelado_no_tiny' }))
+            .toBe('[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY] [VALOR NÃO CONFERIDO: DATA MART SEM RESPOSTA]');
+        // O motivo de um campo que não está na lista não entra.
+        expect(notaDeNaoConferido(['valor'], { nf: 'nf_fora_do_data_mart' })).toBe('[VALOR NÃO CONFERIDO: DATA MART SEM RESPOSTA]');
+    });
+});
+
+describe('motivosDoNaoConferido', () => {
+    it('o motivo da NF desconhecida e o do CD não conferido; o que foi conferido não entra', () => {
+        expect(motivosDoNaoConferido(derivarContextoDoPedido(leiturasApice()))).toEqual({});
+        expect(motivosDoNaoConferido(derivarContextoDoPedido(leituras1832330()))).toEqual({ nf: 'nf_fora_do_data_mart' });
+        expect(motivosDoNaoConferido(derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO] } }))))
+            .toEqual({ nf: 'pedido_cancelado_no_tiny', cd: 'pedido_cancelado_no_tiny' });
+        expect(motivosDoNaoConferido(derivarContextoDoPedido(leiturasApice({ tiny: FALHA, intelipost: FALHA, nota: FALHA }))))
+            .toEqual({ nf: 'sem_resposta', cd: 'sem_resposta' });
     });
 });

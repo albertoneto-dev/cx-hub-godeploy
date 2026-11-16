@@ -80,13 +80,53 @@ describe('aplicarConferenciaAoReembolso', () => {
 
     it('o que não foi lido fica como veio, com a nota na frente das observações', () => {
         const r = aplicarConferenciaAoReembolso('apice', DATA, {
-            tipo: 'lido', contexto: { ...CONTEXTO, nf: { estado: 'desconhecida', numero: null }, cd: { valor: null, conferido: false } },
+            tipo: 'lido',
+            contexto: {
+                ...CONTEXTO,
+                nf: { estado: 'desconhecida', numero: null, motivo: 'sem_resposta' },
+                cd: { valor: null, conferido: false, motivo: 'sem_resposta' },
+            },
         });
         expect(r).toMatchObject({
             tipo: 'aplicado',
             data: { invoiceNumber: '10157987', originWarehouse: 'CD ES', notes: '[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA] | Obs' },
             naoConferidos: ['nf', 'cd'],
         });
+    });
+
+    it('a NF emitida que ainda não chegou ao Data Mart não recusa: vale a NF que veio, o CD do Data Mart, e a nota diz por quê', () => {
+        const r = aplicarConferenciaAoReembolso('apice', { ...DATA, invoiceNumber: '183916' }, {
+            tipo: 'lido', contexto: { ...CONTEXTO, pedido: 'SH1832330AP', nf: { estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' } },
+        });
+        expect(r).toEqual({
+            tipo: 'aplicado',
+            data: { ...DATA, invoiceNumber: '183916', originWarehouse: 'CD RJ', notes: '[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] | Obs' },
+            nfDivergente: null,
+            naoConferidos: ['nf'],
+        });
+    });
+
+    it('só o pedido cancelado no Tiny: vale a NF e o CD que vieram, e a nota diz por quê', () => {
+        const r = aplicarConferenciaAoReembolso('apice', DATA, {
+            tipo: 'lido',
+            contexto: {
+                ...CONTEXTO,
+                nf: { estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' },
+                cd: { valor: null, conferido: false, motivo: 'pedido_cancelado_no_tiny' },
+            },
+        });
+        expect(r).toMatchObject({
+            tipo: 'aplicado',
+            data: { invoiceNumber: '10157987', originWarehouse: 'CD ES', notes: '[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY] | Obs' },
+            naoConferidos: ['nf', 'cd'],
+        });
+    });
+
+    it('a nota vai sozinha quando não há observações', () => {
+        const r = aplicarConferenciaAoReembolso('apice', { ...DATA, notes: null }, {
+            tipo: 'lido', contexto: { ...CONTEXTO, nf: { estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' } },
+        });
+        expect(r.tipo === 'aplicado' && r.data.notes).toBe('[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]');
     });
 });
 

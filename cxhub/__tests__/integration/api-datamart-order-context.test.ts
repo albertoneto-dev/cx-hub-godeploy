@@ -112,10 +112,11 @@ describe('GET /api/datamart/order-context', () => {
         const corpo = await (await pedir('brand=apice&order=SH1731559AP')).json();
 
         expect(corpo).toMatchObject({ nf: null, nfStatus: 'ausente', naoConferidos: [] });
+        expect(corpo).not.toHaveProperty('nfMotivo');
         expect(corpo.avisos).toContain('O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.');
     });
 
-    it('o Data Mart fora do ar: 200 com o que não foi conferido e o aviso de que a gravação confere de novo', async () => {
+    it('o Data Mart fora do ar: 200 com o que não foi conferido, o motivo e o aviso de que a gravação confere de novo', async () => {
         instalarFetch();
         respostaMetabase = () => new Response('erro', { status: 503 });
 
@@ -123,8 +124,60 @@ describe('GET /api/datamart/order-context', () => {
 
         expect(res.status).toBe(200);
         const corpo = await res.json();
-        expect(corpo).toMatchObject({ order: 'SH5478YE', nf: null, nfStatus: 'desconhecida', cd: null, naoConferidos: ['nf', 'cd'] });
+        expect(corpo).toMatchObject({ order: 'SH5478YE', nf: null, nfStatus: 'desconhecida', nfMotivo: 'sem_resposta', cd: null, naoConferidos: ['nf', 'cd'] });
         expect(corpo.avisos).toEqual(['O Data Mart não respondeu a tempo para conferir a NF e o CD; ao gravar, o servidor confere de novo.']);
+    });
+
+    describe('o caso real SH1832330AP: cancelado no ES e refeito no RJ, antes de a Intelipost chegar ao gold', () => {
+        // O Tiny tem as colunas cd, id_pedido, id_nota_fiscal, data_pedido, tem_rastreio, codigo_produto, descricao_produto,
+        // quantidade_produto e situacao.
+        const ES = ['es', '1063282732', '0', '2026-11-16', false, '20585', 'COND ACQUACREAM 100ML', '1.0000', 'Cancelado'];
+        const RJ = ['rj', '858035694', '858039410', '2026-11-16', true, '20585', 'COND ACQUACREAM 100ML', '1.0000', 'Enviado'];
+
+        function dataMart(tinyRj: unknown[][]) {
+            return (sql: string): Response => {
+                if (sql.includes('vw_shopify_order_items_exploded_priced_enriched')) return linhas([]);
+                if (sql.includes('gold.fct_intelipost_orders')) return linhas([]);
+                if (sql.includes('gold.fct_shopify_orders')) return linhas([['7874560426206', '2026-11-16T11:52:05+00:00', 189.81, 0, false, true]]);
+                if (sql.includes("select 'es' as cd")) return linhas([ES]);
+                if (sql.includes("select 'rj' as cd")) return linhas(tinyRj);
+                // A NF 858039410 ainda não chegou à tabela de NFs do RJ.
+                if (sql.includes('tiny_nfe_ap_cosmetics_rj')) return linhas([]);
+                throw new Error(`SQL inesperado: ${sql.slice(0, 80)}`);
+            };
+        }
+
+        it('a NF emitida e ainda fora do Data Mart: desconhecida, com o motivo, o CD RJ e o aviso, sem dizer que o Data Mart não respondeu', async () => {
+            instalarFetch();
+            respostaMetabase = dataMart([RJ]);
+
+            const res = await pedir('brand=apice&order=SH1832330AP');
+
+            expect(res.status).toBe(200);
+            const corpo = await res.json();
+            expect(corpo).toMatchObject({
+                order: 'SH1832330AP',
+                nf: null,
+                nfStatus: 'desconhecida',
+                nfMotivo: 'nf_fora_do_data_mart',
+                cd: 'CD RJ',
+                naoConferidos: ['nf'],
+            });
+            expect(corpo.avisos).toEqual([
+                'A NF deste pedido já foi emitida no Tiny do CD RJ, mas ainda não chegou ao Data Mart. Confira o número na Intelipost.',
+                'Pedido encontrado em mais de um CD (ES cancelado, RJ); usando o CD RJ.',
+            ]);
+        });
+
+        it('só o pedido cancelado no ES: desconhecida pelo cancelamento, e o CD também, sem dizer que o Data Mart não respondeu', async () => {
+            instalarFetch();
+            respostaMetabase = dataMart([]);
+
+            const corpo = await (await pedir('brand=apice&order=SH1832330AP')).json();
+
+            expect(corpo).toMatchObject({ nfStatus: 'desconhecida', nfMotivo: 'pedido_cancelado_no_tiny', cd: null, naoConferidos: ['nf', 'cd'] });
+            expect(corpo.avisos).toEqual(['O pedido está cancelado no Tiny do CD ES e pode ter sido refeito em outro CD. Confira a NF na Intelipost.']);
+        });
     });
 
     it('marca fora das três (inclusive a Gobeaute) e número inválido: 400, sem consultar nada', async () => {

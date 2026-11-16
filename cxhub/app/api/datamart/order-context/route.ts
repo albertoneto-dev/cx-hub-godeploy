@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from '../../../../../api/next-server';
 import { BRAND_TO_ORG_ID, ehMarcaSemCosmosComPlanilha } from '../../../../shared/lib/constants';
 import { conferirTokenNoCosmos } from '../../../../shared/lib/cosmos/http';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../../shared/lib/datamart/conferenciaServer';
-import { digitosDoPedido } from '../../../../shared/lib/datamart/pedido';
-import type { CampoConferido, EstadoDaNf, KitDoPedido } from '../../../../shared/lib/datamart/pedidoTipos';
+import { digitosDoPedido, motivosDoNaoConferido } from '../../../../shared/lib/datamart/pedido';
+import type { CampoConferido, EstadoDaNf, KitDoPedido, MotivoDoNaoConferido } from '../../../../shared/lib/datamart/pedidoTipos';
 
 /** A conferência do token no Cosmos e a leitura do pedido no Data Mart (até `JANELA_CONFERENCIA_MS`, 12 s). */
 export const maxDuration = 30;
@@ -14,15 +14,24 @@ export interface ContextoDoPedidoNaResposta {
     order: string;
     /** A NF de venda que o servidor grava; `null` quando não há (`nfStatus: 'ausente'`) ou não se sabe */
     nf: string | null;
-    /** `ausente`: o Data Mart respondeu e não há NF — o servidor recusa a solicitação. `desconhecida`: não respondeu. */
+    /**
+     * `ausente`: o Data Mart prova que o pedido não foi faturado — o servidor recusa a solicitação. `desconhecida`: não
+     * dá para afirmar (`nfMotivo`); a tela pede a NF, e o servidor grava a que vier com a nota do motivo.
+     */
     nfStatus: EstadoDaNf;
+    /**
+     * Só com `nfStatus: 'desconhecida'`: `sem_resposta` (o Data Mart não respondeu a tempo), `nf_fora_do_data_mart` (o
+     * Tiny já emitiu a NF, e ela ainda não chegou ao Data Mart) ou `pedido_cancelado_no_tiny` (o Tiny só tem o pedido
+     * cancelado, que pode ter sido refeito em outro CD).
+     */
+    nfMotivo?: MotivoDoNaoConferido;
     /** `CD ES`, `CD RJ`, `CD MG`, ou `null` quando não se sabe */
     cd: string | null;
     statusSugerido: string | null;
     avisos: string[];
     /** A composição de cada kit do pedido: os componentes e as unidades de cada um em UM kit */
     kits: KitDoPedido[];
-    /** O que o Data Mart não respondeu a tempo: ao gravar, o servidor confere de novo */
+    /** O que o Data Mart não conferiu (o motivo da NF vem no `nfMotivo`): ao gravar, o servidor confere de novo */
     naoConferidos: CampoConferido[];
 }
 
@@ -76,8 +85,11 @@ export async function GET(request: NextRequest): Promise<NextResponse<Resposta>>
     const naoConferidos: CampoConferido[] = [];
     if (contexto.nf.estado === 'desconhecida') naoConferidos.push('nf');
     if (!contexto.cd.conferido) naoConferidos.push('cd');
-    const avisos = naoConferidos.length > 0
-        ? [...contexto.avisos, `O Data Mart não respondeu a tempo para conferir ${oQueNaoFoiConferido(naoConferidos)}; ao gravar, o servidor confere de novo.`]
+    // Só o que ficou sem resposta ganha este aviso: os outros motivos já vêm com o aviso deles, das regras.
+    const motivos = motivosDoNaoConferido(contexto);
+    const semResposta = naoConferidos.filter((campo) => (motivos[campo] ?? 'sem_resposta') === 'sem_resposta');
+    const avisos = semResposta.length > 0
+        ? [...contexto.avisos, `O Data Mart não respondeu a tempo para conferir ${oQueNaoFoiConferido(semResposta)}; ao gravar, o servidor confere de novo.`]
         : contexto.avisos;
 
     return NextResponse.json<Resposta>({
@@ -85,6 +97,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<Resposta>>
         order: contexto.pedido,
         nf: contexto.nf.numero,
         nfStatus: contexto.nf.estado,
+        ...(contexto.nf.estado === 'desconhecida' ? { nfMotivo: contexto.nf.motivo } : {}),
         cd: contexto.cd.valor,
         statusSugerido: contexto.statusSugerido,
         avisos,

@@ -2,11 +2,14 @@ import { repartirPeloMaiorResto } from '../centavos';
 import { SUFIXO_DO_PEDIDO, type MarcaSemCosmosComPlanilha } from '../constants';
 import type {
     BaseDoValorDaNf,
+    CampoConferido,
     ContextoDoPedido,
     ItemReenviado,
     KitDoPedido,
     LeiturasDoPedido,
     LinhaExplodida,
+    MotivoDoNaoConferido,
+    MotivoPorCampo,
     NotaNoTiny,
     PedidoNoTiny,
     ValorDaNfDeReenvio,
@@ -22,16 +25,29 @@ import type {
 const r2 = (v: number) => Math.round((v + Number.EPSILON) * 100) / 100;
 
 /**
- * O pedido do Tiny que vale quando ele está nos dois CDs (acontece com pedido refeito): o de `data_pedido` mais recente,
- * e no empate o primeiro da lista (o ES vem antes do RJ). `null` sem pedido. O leitor usa esta mesma escolha para ler a
- * NF, então as duas pontas nunca divergem.
+ * O pedido do Tiny que vale quando a busca acha mais de um com o mesmo número (o cancelado e o refeito, nos dois CDs ou
+ * no mesmo, ou a cópia importada de novo): o ativo antes do cancelado; entre eles, o que tem o id da NF (a cópia "Em
+ * aberto" importada dias depois não tem, e não pode derrubar o pedido faturado); depois o de `data_pedido` mais recente;
+ * e no empate, o do ES. `null` sem pedido. O escolhido só sai cancelado quando todos estão. O leitor usa esta mesma
+ * escolha para ler a NF, então as duas pontas nunca divergem.
  */
 export function pedidoEscolhidoNoTiny(pedidos: readonly PedidoNoTiny[]): PedidoNoTiny | null {
     let escolhido: PedidoNoTiny | null = null;
     for (const pedido of pedidos) {
-        if (escolhido === null || (pedido.dataPedido ?? '') > (escolhido.dataPedido ?? '')) escolhido = pedido;
+        if (escolhido === null || valeMaisQue(pedido, escolhido)) escolhido = pedido;
     }
     return escolhido;
+}
+
+/** `a` vale mais que `b` (`pedidoEscolhidoNoTiny`)? No empate em tudo, fica `b`, que veio antes. */
+function valeMaisQue(a: PedidoNoTiny, b: PedidoNoTiny): boolean {
+    if (a.cancelado !== b.cancelado) return !a.cancelado;
+    const aTemNf = a.idNotaFiscal !== null;
+    if (aTemNf !== (b.idNotaFiscal !== null)) return aTemNf;
+    const dataA = a.dataPedido ?? '';
+    const dataB = b.dataPedido ?? '';
+    if (dataA !== dataB) return dataA > dataB;
+    return a.cd === 'es' && b.cd !== 'es';
 }
 
 /** Só os dígitos do número do pedido; `null` quando não sobram entre 3 e 9 (não é número de pedido da Shopify). */
@@ -98,8 +114,11 @@ function baseDoPago(total: number, frete: number, linhas: readonly LinhaExplodid
 
 /**
  * O que se deriva das leituras do pedido: NF, CD, status sugerido, avisos, kits e a base do valor da NF de reenvio.
- * Leitura que falhou nunca vira "ausente": a NF e o CD ficam `desconhecida` e `conferido: false`, para a tela e a
- * planilha dizerem "não conferido" em vez de afirmar que o pedido não tem NF ou CD.
+ *
+ * A NF só fica `ausente`, e o servidor recusa a solicitação, com prova de que o pedido não foi faturado: o pedido ativo
+ * sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum. Na dúvida, fica `desconhecida` com o motivo: a
+ * tela pede a NF, e o servidor grava a que veio com a nota do motivo. Leitura que falhou nunca vira "ausente": a NF e o
+ * CD ficam sem conferência, para a tela e a planilha dizerem "não conferido" em vez de afirmar que não há NF ou CD.
  */
 export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoPedido {
     const { marca, numero, intelipost: ip, shopify, explodidas } = leituras;
@@ -110,42 +129,65 @@ export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoP
     const tinyOk = tiny?.ok === true;
     const pedidosNoTiny = tiny?.ok ? tiny.dados : [];
     const escolhido = pedidoEscolhidoNoTiny(pedidosNoTiny);
+    // O escolhido só sai cancelado quando todos estão: o pedido pode ter sido refeito fora do que a busca alcança.
+    const soCancelados = escolhido?.cancelado === true;
+    const ativo = soCancelados ? null : escolhido;
     const nota = ehApice ? leituras.nota : undefined;
     const notaDados = nota?.ok ? nota.dados : null;
-    const notaValida = notaDados && !/cancel/i.test(notaDados.situacao ?? '') ? notaDados : null;
+    // A NF de pedido cancelado não vale, nem como NF nem como base do valor (o leitor nem a lê): o cancelado com NF
+    // autorizada quase sempre foi refeito com outra NF (os 20 do RJ de 03 a 07/11/2026; 42 dos 56 do ES de 05 e 06/11).
+    const notaValida = ativo && notaDados && !/cancel/i.test(notaDados.situacao ?? '') ? notaDados : null;
     const pedidoNaShopify = shopify.ok ? shopify.dados : null;
     const linhas = explodidas.ok ? explodidas.dados : [];
 
     // NF: a da Intelipost vale primeiro; a Ápice tem o Tiny como reserva.
     let nf: ContextoDoPedido['nf'];
+    let avisoDaNf: string | null = null;
+    const respondeuTudo = ehApice ? ip.ok && tinyOk && nota?.ok === true : ip.ok;
     if (rem0?.nf) {
         nf = { estado: 'achada', numero: rem0.nf };
     } else if (notaValida) {
         nf = { estado: 'achada', numero: notaValida.numero };
+    } else if (!respondeuTudo) {
+        nf = { estado: 'desconhecida', numero: null, motivo: 'sem_resposta' };
+    } else if (ativo?.idNotaFiscal && notaDados === null) {
+        // O Tiny já deu o id da NF ao pedido; a tabela de NFs, que chega em lotes horas depois, ainda não a tem.
+        nf = { estado: 'desconhecida', numero: null, motivo: 'nf_fora_do_data_mart' };
+        avisoDaNf = `A NF deste pedido já foi emitida no Tiny do CD ${ativo.cd.toUpperCase()}, mas ainda não chegou ao Data Mart. `
+            + 'Confira o número na Intelipost.';
+    } else if (soCancelados) {
+        nf = { estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' };
     } else {
-        const respondeuTudo = ehApice ? ip.ok && tinyOk && nota?.ok === true : ip.ok;
-        nf = { estado: respondeuTudo ? 'ausente' : 'desconhecida', numero: null };
+        nf = { estado: 'ausente', numero: null };
+        avisoDaNf = ehApice
+            ? 'O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.'
+            : 'A Intelipost ainda não tem a NF deste pedido (pedido pode não ter sido faturado).';
     }
 
-    // CD e os avisos que ele gera.
+    // CD e os avisos que ele gera. O CD nunca sai de pedido cancelado: o refeito pode estar no outro CD.
     const avisosDoCd: string[] = [];
     const uf = rem0?.ufOrigem ? `CD ${rem0.ufOrigem.trim().toUpperCase()}` : null;
     let cd: ContextoDoPedido['cd'];
     if (marca === 'denavita') {
         cd = { valor: 'CD MG', conferido: true };
-    } else if (ehApice && escolhido) {
-        cd = { valor: `CD ${escolhido.cd.toUpperCase()}`, conferido: true };
+    } else if (ehApice && ativo) {
+        const cdDoAtivo = ativo.cd.toUpperCase();
+        cd = { valor: `CD ${cdDoAtivo}`, conferido: true };
         if (pedidosNoTiny.length > 1) {
-            const cds = pedidosNoTiny.map((p) => p.cd.toUpperCase()).join(', ');
-            avisosDoCd.push(`Pedido encontrado em mais de um CD (${cds}); usando o CD ${escolhido.cd.toUpperCase()}.`);
+            const achados = pedidosNoTiny.map((p) => `${p.cd.toUpperCase()}${p.cancelado ? ' cancelado' : ''}`).join(', ');
+            avisosDoCd.push(new Set(pedidosNoTiny.map((p) => p.cd)).size > 1
+                ? `Pedido encontrado em mais de um CD (${achados}); usando o CD ${cdDoAtivo}.`
+                : `Pedido encontrado mais de uma vez no Tiny (${achados}); usando o CD ${cdDoAtivo}.`);
         }
     } else if (uf) {
         cd = { valor: uf, conferido: true };
+    } else if (soCancelados && ip.ok) {
+        cd = { valor: null, conferido: false, motivo: 'pedido_cancelado_no_tiny' };
     } else if (ehApice ? tinyOk && ip.ok : ip.ok) {
         cd = { valor: null, conferido: true };
         avisosDoCd.push(ehApice ? 'Não encontrei o CD de origem no Tiny nem na Intelipost.' : 'Não encontrei o CD de origem na Intelipost.');
     } else {
-        cd = { valor: null, conferido: false };
+        cd = { valor: null, conferido: false, motivo: 'sem_resposta' };
     }
 
     const kits = explodidas.ok ? kitsDasLinhas(explodidas.dados) : [];
@@ -182,12 +224,12 @@ export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoP
     }
 
     const avisos: string[] = [];
-    if (nf.estado === 'ausente') {
-        avisos.push(
-            ehApice
-                ? 'O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.'
-                : 'A Intelipost ainda não tem a NF deste pedido (pedido pode não ter sido faturado).',
-        );
+    if (avisoDaNf) avisos.push(avisoDaNf);
+    if (soCancelados) {
+        const cds = [...new Set(pedidosNoTiny.map((p) => p.cd.toUpperCase()))];
+        const onde = cds.length > 1 ? `dos CDs ${cds.join(' e ')}` : `do CD ${cds[0]} e pode ter sido refeito em outro CD`;
+        // Sem a NF, a tela a pede: a do refeito está na Intelipost assim que ele sai.
+        avisos.push(`O pedido está cancelado no Tiny ${onde}.${nf.estado === 'desconhecida' ? ' Confira a NF na Intelipost.' : ''}`);
     }
     avisos.push(...avisosDoCd);
     if (ip.ok && remessas.length > 1) {
@@ -341,12 +383,38 @@ export function nfDiverge(digitada: string | null | undefined, derivada: string)
     return digitos !== '' && digitos !== semZerosAEsquerda(derivada);
 }
 
-/** A nota que vai na célula quando o Data Mart não respondeu: `[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]`. */
-export function notaDeNaoConferido(campos: ReadonlyArray<'cd' | 'nf' | 'valor'>): string {
-    const rotulos = (['cd', 'nf', 'valor'] as const).filter((c) => campos.includes(c));
-    if (rotulos.length === 0) return '';
-    const nomes = { cd: 'CD', nf: 'NF', valor: 'VALOR' };
-    const concordancia =
-        rotulos.length > 1 ? 'NÃO CONFERIDOS' : rotulos[0] === 'nf' ? 'NÃO CONFERIDA' : 'NÃO CONFERIDO';
-    return `[${rotulos.map((c) => nomes[c]).join('/')} ${concordancia}: DATA MART SEM RESPOSTA]`;
+const NOME_DO_CAMPO: Record<CampoConferido, string> = { cd: 'CD', nf: 'NF', valor: 'VALOR' };
+
+/** O que a nota diz depois dos campos: por que eles não foram conferidos. */
+const TEXTO_DO_MOTIVO: Record<MotivoDoNaoConferido, string> = {
+    sem_resposta: 'DATA MART SEM RESPOSTA',
+    nf_fora_do_data_mart: 'AINDA FORA DO DATA MART',
+    pedido_cancelado_no_tiny: 'PEDIDO CANCELADO NO TINY',
+};
+
+/**
+ * A nota que vai na célula com o que não foi conferido e o porquê: `[CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA]`.
+ * Os campos vão na ordem CD, NF, valor, sem repetir; o campo sem motivo em `motivos` ficou sem resposta. Motivos
+ * diferentes viram uma nota cada: `[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] [VALOR NÃO CONFERIDO: DATA MART SEM RESPOSTA]`.
+ */
+export function notaDeNaoConferido(campos: ReadonlyArray<CampoConferido>, motivos: MotivoPorCampo = {}): string {
+    const porMotivo = new Map<MotivoDoNaoConferido, CampoConferido[]>();
+    for (const campo of (['cd', 'nf', 'valor'] as const).filter((c) => campos.includes(c))) {
+        const motivo = motivos[campo] ?? 'sem_resposta';
+        porMotivo.set(motivo, [...(porMotivo.get(motivo) ?? []), campo]);
+    }
+    return [...porMotivo]
+        .map(([motivo, grupo]) => {
+            const concordancia = grupo.length > 1 ? 'NÃO CONFERIDOS' : grupo[0] === 'nf' ? 'NÃO CONFERIDA' : 'NÃO CONFERIDO';
+            return `[${grupo.map((c) => NOME_DO_CAMPO[c]).join('/')} ${concordancia}: ${TEXTO_DO_MOTIVO[motivo]}]`;
+        })
+        .join(' ');
+}
+
+/** O motivo da NF `desconhecida` e o do CD sem conferência: para a nota da planilha e para a order-context. */
+export function motivosDoNaoConferido(contexto: ContextoDoPedido): MotivoPorCampo {
+    const motivos: MotivoPorCampo = {};
+    if (contexto.nf.estado === 'desconhecida') motivos.nf = contexto.nf.motivo;
+    if (!contexto.cd.conferido) motivos.cd = contexto.cd.motivo;
+    return motivos;
 }
