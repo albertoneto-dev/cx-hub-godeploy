@@ -42,7 +42,7 @@ export interface RefundRowSource {
      * (ADR-013): as 6 do Cosmos seguem o `devolvido` do n8n.
      */
     devolucaoInformada: 'Sim' | 'Não';
-    /** Só nas marcas sem Cosmos (ADR-013). Dado pessoal sensível: nunca vai ao log (`COLUNA_DA_CHAVE_PIX`). */
+    /** Em toda marca com planilha (as do Cosmos desde 16/11/2026). Dado pessoal sensível: nunca vai ao log (`COLUNA_DA_CHAVE_PIX`). */
     chavePix: string | null;
 }
 
@@ -89,35 +89,39 @@ const BUILDERS: Record<MarcaComPlanilha, (s: RefundRowSource) => SheetCell[]> = 
         v(s.carimbo), v(s.responsavel), v(s.nomeCliente), v(s.motivo), v(s.numeroPedido), v(s.escopo), null,
         v(s.origem), v(s.idAtendimento), v(s.valor), v(s.cdOrigem), v(s.numeroNF), v(s.chaveNF),
         v(s.transportadora), v(s.statusPedido), v(s.lote), v(s.devolvido), v(s.ticketTransportadora),
-        v(s.observacoes), v(s.pedidoCompleto), v(s.excecaoPolitica),
+        v(s.observacoes), v(s.pedidoCompleto), v(s.excecaoPolitica), null, v(s.chavePix),
     ],
     bysamia: (s) => [
         v(s.carimbo), null, v(s.responsavel), v(s.origem), v(s.idAtendimento), v(s.cdOrigem), v(s.nomeCliente),
-        v(s.numeroNF), v(s.chaveNF), v(s.numeroPedido), null, v(s.valor), null, v(s.motivo), v(s.lote),
+        v(s.numeroNF), v(s.chaveNF), v(s.numeroPedido), null, v(s.valor), v(s.chavePix), v(s.motivo), v(s.lote),
         v(s.transportadora), v(s.escopo), v(s.statusPedido), null, v(s.observacoes), v(s.devolvido),
         v(s.ticketTransportadora), v(s.pedidoCompleto), v(s.excecaoPolitica),
     ],
+    // Kokeshi (16/11/2026): a planilha dela está deslocada. O cabeçalho diz Devolvido(R), Ticket(S), Observações(T),
+    // Completo(U), Exceção(V) e Chave Pix(W), mas este layout (e as linhas reais, desde antes do CX Hub) põe um `null` a
+    // mais, e a coluna W guarda a "Exceção". Corrigir muda a planilha da dona: fica para combinar com ela. Até lá, a
+    // chave vai no fim da célula de Observações, só na linha da planilha.
     kokeshi: (s) => [
         v(s.carimbo), null, v(s.responsavel), v(s.nomeCliente), v(s.numeroPedido), v(s.motivo), v(s.escopo), null,
         v(s.origem), v(s.valor), v(s.idAtendimento), v(s.cdOrigem), v(s.numeroNF), v(s.chaveNF),
         v(s.transportadora), v(s.statusPedido), null, null, v(s.devolvido), v(s.ticketTransportadora),
-        v(s.observacoes), v(s.pedidoCompleto), v(s.excecaoPolitica),
+        observacoesDaKokeshi(s), v(s.pedidoCompleto), v(s.excecaoPolitica),
     ],
     aua: (s) => [
         v(s.carimbo), null, v(s.responsavel), v(s.origem), v(s.idAtendimento), v(s.cdOrigem), v(s.nomeCliente),
-        v(s.numeroNF), v(s.chaveNF), v(s.numeroPedido), v(s.valor), null, v(s.motivo), v(s.lote), v(s.devolvido),
+        v(s.numeroNF), v(s.chaveNF), v(s.numeroPedido), v(s.valor), v(s.chavePix), v(s.motivo), v(s.lote), v(s.devolvido),
         v(s.transportadora), v(s.escopo), v(s.statusPedido), v(s.observacoes), v(s.ticketTransportadora),
         v(s.pedidoCompleto), v(s.excecaoPolitica),
     ],
     barbours: (s) => [
         v(s.carimbo), null, v(s.responsavel), v(s.origem), v(s.idAtendimento), v(s.cdOrigem), v(s.nomeCliente),
         v(s.numeroPedido), v(s.numeroNF), v(s.chaveNF), null, v(s.valor), v(s.transportadora), v(s.motivo),
-        v(s.escopo), v(s.statusPedido), null, v(s.observacoes), v(s.lote), v(s.devolvido),
+        v(s.escopo), v(s.statusPedido), v(s.chavePix), v(s.observacoes), v(s.lote), v(s.devolvido),
         v(s.ticketTransportadora), v(s.pedidoCompleto), v(s.excecaoPolitica),
     ],
     rituaria: (s) => [
         v(s.carimbo), null, v(s.responsavel), v(s.origem), v(s.idAtendimento), v(s.cdOrigem), v(s.numeroNF),
-        v(s.chaveNF), v(s.numeroPedido), null, null, v(s.motivo), v(s.lote), v(s.transportadora), v(s.escopo),
+        v(s.chaveNF), v(s.numeroPedido), null, v(s.chavePix), v(s.motivo), v(s.lote), v(s.transportadora), v(s.escopo),
         v(s.statusPedido), v(s.observacoes), null, null, null, v(s.nomeCliente), v(s.valor),
         v(s.ticketTransportadora), v(s.pedidoCompleto), v(s.excecaoPolitica), null,
     ],
@@ -153,8 +157,19 @@ const BUILDERS: Record<MarcaComPlanilha, (s: RefundRowSource) => SheetCell[]> = 
  */
 export const DIAS_UTEIS_DO_REEMBOLSO: Record<MarcaSemCosmosComPlanilha, number> = { apice: 3, yenzah: 5, denavita: 5 };
 
-/** A coluna (0-based) da chave Pix em cada layout: é ela que o log da linha que falhou mascara. */
-export const COLUNA_DA_CHAVE_PIX: Record<MarcaSemCosmosComPlanilha, number> = { apice: 21, yenzah: 21, denavita: 11 };
+/**
+ * A coluna (0-based) da chave Pix em cada layout: é ela que o log da linha que falhou mascara. Na Kokeshi não há
+ * coluna de chave (a planilha está deslocada, veja o builder): é a célula de Observações, onde a chave vai no fim.
+ */
+export const COLUNA_DA_CHAVE_PIX: Record<MarcaComPlanilha, number> = {
+    lescent: 22, kokeshi: 20, bysamia: 12, aua: 11, barbours: 16, rituaria: 10, apice: 21, yenzah: 21, denavita: 11,
+};
+
+/** As Observações da Kokeshi com a chave Pix no fim, em outra linha da célula (só se houver chave). */
+function observacoesDaKokeshi(s: RefundRowSource): string | null {
+    const chave = s.chavePix ? `Chave Pix: ${s.chavePix}` : null;
+    return [s.observacoes, chave].filter(Boolean).join('\n') || null;
+}
 
 /** O pedido das marcas sem Cosmos só vem da Shopify (ADR-013): é o "Origem do pedido" de quase todas as linhas delas. */
 const ORIGEM_DO_PEDIDO = 'Shopify';

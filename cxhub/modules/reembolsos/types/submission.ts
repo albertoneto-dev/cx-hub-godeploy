@@ -23,15 +23,14 @@ export interface RefundSubmissionData {
     isFullRefund: boolean;
     notes: string | null;
     /**
-     * Chave Pix da cliente, para o financeiro pagar: só nas marcas sem Cosmos (ADR-013), cuja planilha tem a coluna
-     * "Recebimento - Chave Pix". **Dado pessoal sensível**: vai só para a planilha — nunca para a fila, a gold ou o log.
-     * O servidor a valida pelo tipo e grava normalizada (ADR-018, `normalizarChavePix`).
+     * Chave Pix da cliente, para o financeiro pagar, como a agente digitou: lida em toda marca com planilha (as do
+     * Cosmos desde 16/11/2026) e aceita com qualquer texto. **Dado pessoal sensível**: vai só para a planilha (na
+     * Kokeshi, no fim das Observações da linha) — nunca para a fila, a gold ou o log.
      */
     pixKey?: string | null;
     /**
-     * O tipo da chave Pix (`cpf`, `cnpj`, `email`, `celular` ou `aleatoria`), opcional (ADR-018). Sem ele, o servidor
-     * infere pelo formato — e 11 dígitos são CPF quando o dígito verificador fecha, senão celular. Com ele, a chave só
-     * vale como aquele tipo (um CPF com um dígito trocado é recusado em vez de virar celular).
+     * O tipo da chave Pix (`cpf`, `cnpj`, `email`, `celular` ou `aleatoria`), opcional (ADR-018). Se vier e a chave valer
+     * para ele, o servidor a grava normalizada; em qualquer outro caso grava o texto como veio, sem recusar.
      */
     pixKeyType?: string | null;
 }

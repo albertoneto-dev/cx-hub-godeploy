@@ -106,6 +106,24 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   e o reembolso dessas três marcas conferem o pedido no Data Mart (NF, CD e valor da NF de reenvio; pedido sem NF ⇒ 422)
   e validam a chave Pix pelo tipo. O código da ADR-018 entrou sem adaptação ao Worker: nenhum `cache`, `Buffer` ou
   `node:*`, e o `CHAVE_PIX_OBRIGATORIA` é lido a cada chamada.
+- A chave Pix em todas as marcas, aceita como vier (2026-11-16, v14). A Maria pediu "coletar chave Pix aceitando qualquer
+  valor" em todas as marcas: as agentes digitavam a chave nas Observações à mão, porque nas 6 do Cosmos o servidor nem a
+  lia e a coluna "Recebimento - Chave Pix" ficava vazia. Mudou:
+  - `chavePixDoReembolso` nunca recusa por formato: com `pixKeyType` e chave válida para ele grava a normalizada (outros
+    clientes ainda mandam o tipo); sem tipo, tipo desconhecido ou chave fora do formato, grava o texto com `trim()`.
+    A Central de Tickets manda o texto sem tipo. O 422 por chave inválida deixou de existir; o 422 por chave que falta
+    continua só na Ápice, Yenzah e Denavita com `CHAVE_PIX_OBRIGATORIA=on`;
+  - `processRefund` lê a chave em toda marca com planilha (a Gobeaute não a lê). Nas 6 do Cosmos é sempre opcional: o
+    bot e a tela antiga do CX Hub não a mandam;
+  - `buildRefundRow` grava a chave na coluna "Recebimento - Chave Pix" (índice 0 = A): Lescent W (22, com um `null` na V,
+    "Origem do pedido"), BySamia M (12), Auá L (11), Barbours Q (16), Rituária K (10);
+  - **Kokeshi:** a planilha está deslocada. O cabeçalho diz Devolvido(R), Ticket(S), Observações(T), Completo(U),
+    Exceção(V) e Chave Pix(W), mas o builder (e as linhas reais, desde antes do CX Hub) põe um `null` a mais, e a coluna
+    W guarda a "Exceção". Corrigir muda a planilha da dona: fica para combinar com ela. Até lá, a chave vai no fim da
+    célula de Observações da **linha da planilha** (`obs` + quebra de linha + `Chave Pix: <chave>`); o caso da fila e a
+    gold seguem sem ela;
+  - `COLUNA_DA_CHAVE_PIX` cobre as 9 marcas (na Kokeshi, é a célula de Observações): a linha que falhou vai ao log com
+    essa coluna omitida. A chave nunca vai à fila, à gold, ao log nem ao Chat.
 - A NF da Ápice só é recusada com prova de que o pedido não foi faturado (2026-11-16). O SH1832330AP, cancelado no ES e
   refeito no RJ no mesmo dia, levou dois 422 ("não tem NF de venda") com a NF já emitida, e a order-context mostrou o CD
   ES. As causas: sem a Intelipost no gold (~1 h depois da NF), a busca no Tiny por data procurava só o `numero_ecommerce`,

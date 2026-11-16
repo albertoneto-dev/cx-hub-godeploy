@@ -283,6 +283,33 @@ describe('gravarNasPlanilhas — marcas sem Cosmos', () => {
         expect(logs.some((log) => log.includes('NOME'))).toBe(false);
     });
 
+    it.each(['lescent', 'kokeshi', 'bysamia', 'aua', 'barbours', 'rituaria'] as const)(
+        '%s (Cosmos, 16/11/2026): a linha que falhou vai ao log SEM a chave Pix (na Kokeshi, ela está nas Observações)',
+        async (marca) => {
+            const dados: RefundSubmissionData = {
+                brand: marca, data_criacao: '20/10/2026', handledBy: 'Ana', sourceChannel: 'Chat Atendimento',
+                supportTicketId: 'T-1', originWarehouse: 'SP', customerName: 'Cliente', invoiceNumber: '555',
+                nfeAccessKey: 'CHAVE', batchNumber: 'L1', ecommerceOrderId: PEDIDO, policyException: false, refundAmount: 94.82,
+                refundReason: 'Ruptura de Estoque', refundScope: 'Frete', requiresReturn: false, carrierTicketId: null,
+                carrierName: 'J&T', orderStatus: 'Pedido não foi enviado', isFullRefund: false, notes: 'obs da agente',
+                pixKey: 'chave.secreta@exemplo.com',
+            };
+            const linha = buildRefundRow(marca, prepararReembolso(dados, CARIMBO));
+            const aba = instalarGoogleFalso(cabecalhoDoLayout('reembolso', marca));
+            aba.appends.push({ status: 403, json: { error: { message: 'sem permissão' } } });
+
+            await gravarNasPlanilhas(
+                [{ fluxo: 'reembolso', marca, linha, ...CASO, colunasSensiveis: [COLUNA_DA_CHAVE_PIX[marca]] }],
+                CONTEXTO, prazo(), semEspera);
+
+            const logs = vi.mocked(console.error).mock.calls.map((chamada) => chamada.join(' ')).join('\n');
+            expect(logs).toContain('linha não gravada');
+            expect(logs).toContain('Ruptura de Estoque');
+            expect(logs).not.toContain('chave.secreta@exemplo.com');
+            expect(JSON.stringify(alerta.mock.calls)).not.toContain('chave.secreta@exemplo.com');
+        },
+    );
+
     it('a linha que falhou vai ao log para repor à mão, mas SEM a chave Pix', async () => {
         const dados: RefundSubmissionData = {
             brand: 'apice', data_criacao: '20/10/2026', handledBy: 'Ana', sourceChannel: 'Chat Atendimento',

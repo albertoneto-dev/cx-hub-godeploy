@@ -407,7 +407,7 @@ const GUIA_HTML = `
         com <span class="status s4xx">422</span>, sem gravar nada (no bot, <code>reason: ORDER_NOT_INVOICED</code>). Quando
         a NF não dá para conferir (o Data Mart fora, a NF já emitida que ainda não chegou a ele, o pedido só cancelado no
         Tiny), o registro segue com o que veio, e uma nota com o motivo vai nas observações, como
-        <code>[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]</code>. A chave Pix do reembolso é validada pelo tipo. O
+        <code>[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]</code>. A chave Pix do reembolso é gravada como veio, sem recusa por formato. O
         <code>GET /api/datamart/order-context</code> mostra antes o que vai ser gravado, com o motivo em
         <code>nfMotivo</code>. Na Vercel, valia o que a tela mandava.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.

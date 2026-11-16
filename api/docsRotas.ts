@@ -4643,7 +4643,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/refund/submit",
     "tag": "Reembolso",
     "summary": "Registra uma solicitação de reembolso",
-    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. Na apice, na yenzah e na denavita (ADR-018), a chave Pix é validada pelo tipo e gravada normalizada, e, junto do dedup, o pedido é conferido no Data Mart: pedido sem NF de venda é recusado com 422, e a NF e o CD do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). Não existe modo de teste: toda chamada válida registra de verdade.",
+    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. A chave Pix (pixKey) é gravada na planilha de toda marca com planilha, como veio (nunca recusada por formato); só vai normalizada quando vem o pixKeyType e a chave bate com ele. Na apice, na yenzah e na denavita (ADR-018), junto do dedup, o pedido é conferido no Data Mart: pedido sem NF de venda é recusado com 422, e a NF e o CD do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). Não existe modo de teste: toda chamada válida registra de verdade.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -4803,13 +4803,13 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.pixKey",
           "type": "string | null",
           "required": false,
-          "description": "Chave Pix da cliente; só é gravada na planilha de apice, yenzah e denavita. Nessas marcas ela é validada pelo tipo (CPF e CNPJ com os dígitos verificadores, e-mail, celular com DDD, chave aleatória 8-4-4-4-12) e gravada normalizada: CPF e CNPJ só com dígitos, e-mail em minúsculas, celular +55…, aleatória em minúsculas com hífens. Inválida dá 422. Vazia passa, a não ser que a env CHAVE_PIX_OBRIGATORIA esteja on (desligada neste app)."
+          "description": "Chave Pix da cliente, como a agente digitou. É gravada só na planilha, em toda marca com planilha (todas menos a gobeaute, que não a lê), e nunca vai à fila nem ao log. Aceita qualquer texto: com trim() e sem recusa por formato. Só é normalizada quando vem o pixKeyType e a chave vale para ele (CPF e CNPJ só com dígitos, e-mail em minúsculas, celular +55…, aleatória em minúsculas com hífens). Na lescent, bysamia, aua, barbours e rituaria vai para a coluna \"Recebimento - Chave Pix\"; na kokeshi, cuja planilha está deslocada, vai no fim da célula de Observações da linha (\"Chave Pix: …\"). Vazia passa, a não ser na apice, yenzah e denavita com a env CHAVE_PIX_OBRIGATORIA on (desligada neste app); nas 6 marcas do Cosmos é sempre opcional."
         },
         {
           "name": "data.pixKeyType",
           "type": "string | null",
           "required": false,
-          "description": "O tipo da chave Pix (ADR-018). Com ele, a chave só vale como aquele tipo (um CPF com um dígito trocado é recusado, em vez de virar celular). Sem ele, o tipo é inferido pelo formato, e 11 dígitos são CPF quando o verificador fecha, senão celular.",
+          "description": "O tipo da chave Pix (ADR-018), opcional. Se vier e a chave valer para ele, a chave é gravada normalizada. Sem ele, com um tipo desconhecido ou com a chave fora do formato do tipo (um CPF com um dígito trocado), a chave é gravada como veio, sem recusa e sem inferir o tipo.",
           "enum": [
             "cpf",
             "cnpj",
@@ -5087,7 +5087,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 422,
-        "description": "UNKNOWN_ERROR, só apice, yenzah e denavita: a chave Pix não vale para o tipo (ou o pixKeyType é desconhecido), ou falta a chave com CHAVE_PIX_OBRIGATORIA on. Recusado antes de qualquer leitura; nada registrado. A mensagem nunca repete a chave.",
+        "description": "UNKNOWN_ERROR, só apice, yenzah e denavita: falta a chave Pix com CHAVE_PIX_OBRIGATORIA on. Recusado antes de qualquer leitura; nada registrado. A chave não é mais recusada por formato (desde 16/11/2026, v14).",
         "fields": [
           {
             "name": "code",
@@ -5102,12 +5102,12 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "message",
             "type": "string",
             "required": true,
-            "description": "O problema da chave, seguido de \"Nada foi registrado.\"."
+            "description": "O motivo, seguido de \"Nada foi registrado.\"."
           }
         ],
         "example": {
           "code": "UNKNOWN_ERROR",
-          "message": "CPF da chave Pix inválido (confira os 11 dígitos). Nada foi registrado."
+          "message": "Informe a chave Pix da cliente: o reembolso desta marca é pago por Pix. Nada foi registrado."
         }
       },
       {
@@ -5219,9 +5219,9 @@ export const ENDPOINTS: Endpoint[] = [
       "Dedup: mesmo tipo (REEMBOLSO), mesma marca e mesmos dígitos do pedido, criado nas últimas 24 h, na fila ou na raw; um reembolso já cancelado não conta.",
       "Guarde o idSolicitacao: é o id que /api/refund/complete e /api/refund/sync pedem.",
       "handledBy = \"Bot\": entrega também um caso CANCELAMENTO (tratativa Reembolso) à fila e, nas 6 marcas do Cosmos, grava a linha na planilha de cancelamento.",
-      "apice, yenzah e denavita gravam a pixKey só na planilha (dado sensível: não vai à fila nem ao log); a planilha delas recebe fórmulas de prazo e SLA, e é daí que vem a variante \"sem as fórmulas\" do SHEET_WRITE_FAILED.",
-      "Ordem nas sem Cosmos com planilha (ADR-018): chave Pix (422) → configuração → dedup de 24 h, com a conferência no Data Mart junto (teto de 12 s) → pedido que o Data Mart prova não faturado (422) → fila → planilha. A conferência nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai nas observações. As 6 marcas do Cosmos e a gobeaute não passam por ela.",
-      "A chave Pix só é obrigatória com a env CHAVE_PIX_OBRIGATORIA=on, desligada neste app até a Central de Tickets e o reembolso do Bot mandarem a chave.",
+      "Toda marca com planilha grava a pixKey só na planilha (dado sensível: não vai à fila nem ao log); na kokeshi ela vai no fim das Observações da linha, porque a planilha dela está deslocada. A planilha da apice, yenzah e denavita recebe fórmulas de prazo e SLA, e é daí que vem a variante \"sem as fórmulas\" do SHEET_WRITE_FAILED.",
+      "Ordem nas sem Cosmos com planilha (ADR-018): chave Pix obrigatória que faltou (422) → configuração → dedup de 24 h, com a conferência no Data Mart junto (teto de 12 s) → pedido que o Data Mart prova não faturado (422) → fila → planilha. A conferência nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai nas observações. As 6 marcas do Cosmos e a gobeaute não passam por ela.",
+      "A chave Pix só é obrigatória (apice, yenzah e denavita) com a env CHAVE_PIX_OBRIGATORIA=on, desligada neste app até a Central de Tickets e o reembolso do Bot mandarem a chave. Nas 6 marcas do Cosmos é sempre opcional.",
       "Pior caso calculado no código ≈ 73 s (dedup + fila até 16 s + planilha até 25 s); a rota declara maxDuration de 120 s, então use um timeout de cliente de pelo menos 120 s.",
       "Método diferente de POST responde 405 {\"code\": \"METHOD_NOT_ALLOWED\", \"message\": \"Use POST nesta rota.\"} (roteador)."
     ],

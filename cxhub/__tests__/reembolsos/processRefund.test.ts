@@ -20,7 +20,7 @@ import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '@sha
 import { MetabaseError } from '@shared/lib/metabase';
 import { gravarNasPlanilhas } from '@shared/lib/sheets/gravarLinha';
 import { processRefund } from '@modules/reembolsos/actions/processRefund';
-import { buildRefundRow, prepararReembolso } from '@modules/reembolsos/actions/buildRefundRow';
+import { buildRefundRow, COLUNA_DA_CHAVE_PIX, prepararReembolso } from '@modules/reembolsos/actions/buildRefundRow';
 import { buildCancellationRow, prepararCancelamento } from '@shared/lib/cancellation/buildCancellationRow';
 import type { RefundSubmissionData } from '@modules/reembolsos/types';
 import { CONFIG_OBRIGATORIA, stubRegistroEnv } from '../helpers/registro-env';
@@ -262,10 +262,38 @@ describe('processRefund (registro na fila do Metabase e na planilha)', () => {
                     // O que acha a linha na planilha depois: o pedido e o MESMO instante que foi para a fila.
                     pedido: '220183',
                     criadoEm: AGORA,
+                    colunasSensiveis: [COLUNA_DA_CHAVE_PIX.barbours],
                 }],
                 { numeroPedido: '220183', idAtendimento: 'T-1', statusDaFila: 'enfileirado' },
             );
             expect(enfileirar.mock.invocationCallOrder[0]).toBeLessThan(planilhas.mock.invocationCallOrder[0]);
+        });
+
+        it('chave Pix (16/11/2026): numa marca do Cosmos vai como veio para a linha, e não para o caso da fila', async () => {
+            const chave = 'chave da cliente, qualquer texto 99';
+            const { status } = await processRefund('barbours', { ...DATA, pixKey: `  ${chave} ` }, { agora: AGORA });
+
+            expect(status).toBe(200);
+            const [item] = planilhas.mock.calls[0][0];
+            expect(item.linha[COLUNA_DA_CHAVE_PIX.barbours]).toBe(chave);
+            expect(item.colunasSensiveis).toEqual([COLUNA_DA_CHAVE_PIX.barbours]);
+            expect(JSON.stringify(casosEnfileirados())).not.toContain(chave);
+        });
+
+        it('chave Pix: nas 6 marcas do Cosmos é sempre opcional, mesmo com CHAVE_PIX_OBRIGATORIA=on', async () => {
+            vi.stubEnv('CHAVE_PIX_OBRIGATORIA', 'on');
+            const { status } = await processRefund('barbours', { ...DATA, pixKey: '' }, { agora: AGORA });
+
+            expect(status).toBe(200);
+            expect(planilhas.mock.calls[0][0][0].linha[COLUNA_DA_CHAVE_PIX.barbours]).toBeNull();
+        });
+
+        it('chave Pix na Kokeshi: no fim das Observações da linha, e as Observações do caso da fila ficam sem ela', async () => {
+            const chave = 'chave.da@cliente';
+            await processRefund('kokeshi', { ...DATA, brand: 'kokeshi', pixKey: chave }, { agora: AGORA });
+
+            expect(planilhas.mock.calls[0][0][0].linha[20]).toBe(`${DATA.notes}\nChave Pix: ${chave}`);
+            expect(JSON.stringify(casosEnfileirados())).not.toContain(chave);
         });
 
         it('a linha leva o carimbo de São Paulo, como o n8n gravava', async () => {

@@ -58,8 +58,10 @@ const MARCAS_SEM_PLANILHA: readonly MarcaSemPlanilha[] = ['gobeaute'];
 export const MARCAS_SEM_COSMOS_COM_PLANILHA: readonly MarcaSemCosmosComPlanilha[] = ['apice', 'yenzah', 'denavita'];
 
 /**
- * O reembolso pede a chave Pix da cliente: só nas sem Cosmos com planilha (ADR-013), porque a chave vai **só** para a
- * planilha (nunca para a fila, a gold ou o log). A Gobeaute não tem planilha e não pede (ADR-014).
+ * A chave Pix **pode ser exigida** no reembolso: só nas sem Cosmos com planilha (ADR-013), e ainda assim só com
+ * `CHAVE_PIX_OBRIGATORIA=on`. Desde 16/11/2026 a chave é lida em toda marca com planilha (`registraNaPlanilha`), mas nas
+ * 6 do Cosmos ela é sempre opcional: o bot e a tela antiga do CX Hub não a mandam. A chave vai **só** para a planilha
+ * (nunca para a fila, a gold ou o log). A Gobeaute não tem planilha e não a lê (ADR-014).
  */
 export function pedeChavePixNoReembolso(marca: string): marca is MarcaSemCosmosComPlanilha {
     return ehMarcaSemCosmosComPlanilha(marca);

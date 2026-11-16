@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildRefundRow, prepararReembolso } from '@modules/reembolsos/actions/buildRefundRow';
+import { buildRefundRow, COLUNA_DA_CHAVE_PIX, prepararReembolso } from '@modules/reembolsos/actions/buildRefundRow';
 import { camposFaltandoNoReembolso } from '@modules/reembolsos/actions/validateRefundBody';
 import type { RefundSubmissionData } from '@modules/reembolsos/types';
 
@@ -60,7 +60,7 @@ describe('buildRefundRow — paridade com o n8n', () => {
     it('Lescent', () => {
         expect(buildRefundRow('lescent', fonte)).toEqual([
             C, 'Ana', 'Cliente', 'Avaria', '220183', 'SKU01 - 1;Frete', null, 'Chat Atendimento', 'T-1', 150.5,
-            'SP', '555', 'CHAVE', 'PAC', 'Entregue', 'L1', 'Não', 'TK', 'obs', 'Não', 'Sim',
+            'SP', '555', 'CHAVE', 'PAC', 'Entregue', 'L1', 'Não', 'TK', 'obs', 'Não', 'Sim', null, null,
         ]);
     });
 
@@ -102,6 +102,52 @@ describe('buildRefundRow — paridade com o n8n', () => {
     it('lote/ticket/observações nulos viram célula vazia', () => {
         const vazio = prepararReembolso({ ...DATA, batchNumber: null, carrierTicketId: null, notes: null }, C);
         expect(buildRefundRow('lescent', vazio).slice(15, 19)).toEqual([null, 'Não', null, null]);
+    });
+});
+
+// A chave Pix nas marcas do Cosmos (pedido da Maria, 16/11/2026): a posição vem do cabeçalho das planilhas de produção.
+describe('buildRefundRow — a chave Pix nas marcas do Cosmos', () => {
+    const PIX = 'chave-qualquer 123';
+    const comChave = prepararReembolso({ ...DATA, pixKey: PIX }, C);
+    const semChave = prepararReembolso({ ...DATA, pixKey: null }, C);
+
+    it.each([
+        ['lescent', 22, 23],
+        ['bysamia', 12, 24],
+        ['aua', 11, 22],
+        ['barbours', 16, 23],
+        ['rituaria', 10, 26],
+    ] as const)('%s: a chave cai na coluna %i, e o resto da linha não muda', (marca, indice, tamanho) => {
+        const linha = buildRefundRow(marca, comChave);
+        expect(linha).toHaveLength(tamanho);
+        expect(linha[indice]).toBe(PIX);
+        expect(COLUNA_DA_CHAVE_PIX[marca]).toBe(indice);
+        // Sem a chave, a mesma linha com `null` no lugar dela: nada mais se mexeu.
+        const sem = buildRefundRow(marca, semChave);
+        expect(sem[indice]).toBeNull();
+        expect(linha.filter((_, i) => i !== indice)).toEqual(sem.filter((_, i) => i !== indice));
+    });
+
+    it('lescent: a V (21) é "Origem do pedido" e fica vazia; a chave é a W (22)', () => {
+        expect(buildRefundRow('lescent', comChave).slice(19)).toEqual(['Não', 'Sim', null, PIX]);
+    });
+
+    it('kokeshi: nenhuma posição muda; a chave vai no fim das Observações (índice 20), numa nova linha', () => {
+        const linha = buildRefundRow('kokeshi', comChave);
+        expect(linha).toHaveLength(23);
+        expect(linha[20]).toBe(`obs\nChave Pix: ${PIX}`);
+        expect(linha.filter((_, i) => i !== 20)).toEqual(buildRefundRow('kokeshi', semChave).filter((_, i) => i !== 20));
+        expect(buildRefundRow('kokeshi', semChave)).toEqual([
+            C, null, 'Ana', 'Cliente', '220183', 'Avaria', 'SKU01 - 1;Frete', null, 'Chat Atendimento', 150.5, 'T-1',
+            'SP', '555', 'CHAVE', 'PAC', 'Entregue', null, null, 'Não', 'TK', 'obs', 'Não', 'Sim',
+        ]);
+        expect(COLUNA_DA_CHAVE_PIX.kokeshi).toBe(20);
+    });
+
+    it('kokeshi: sem observação a célula é só a chave; sem as duas, fica vazia', () => {
+        const semObs = { ...DATA, notes: null };
+        expect(buildRefundRow('kokeshi', prepararReembolso({ ...semObs, pixKey: PIX }, C))[20]).toBe(`Chave Pix: ${PIX}`);
+        expect(buildRefundRow('kokeshi', prepararReembolso({ ...semObs, pixKey: null }, C))[20]).toBeNull();
     });
 });
 

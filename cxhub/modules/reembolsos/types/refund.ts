@@ -22,7 +22,7 @@ export interface RefundStep2Data {
     statusPedido: string;
     ticketTransportadora: string;
     observacoes: string;
-    chavePix: string;                          // Só nas marcas sem Cosmos (ADR-013); opcional, formato conferido
+    chavePix: string;                          // Em toda marca com planilha; opcional, aceita qualquer texto
 }
 
 // ─── Constants ───────────────────────────────────────────────────────

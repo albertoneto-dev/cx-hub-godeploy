@@ -73,9 +73,13 @@ export function aplicarConferenciaAoReembolso(
 }
 
 /**
- * A chave Pix do reembolso de Ápice, Yenzah e Denavita, validada pelo tipo e normalizada como a planilha a guarda
- * (ADR-018, `normalizarChavePix`): `{ ok: true, chave: null }` quando veio vazia e não é obrigatória. A obrigatoriedade
- * vem de fora (`CHAVE_PIX_OBRIGATORIA=on`), porque a Central de Tickets ainda manda o reembolso sem a chave.
+ * A chave Pix do reembolso, em toda marca com planilha. **Nunca recusa por formato** (pedido da Maria, 16/11/2026:
+ * "coletar chave Pix aceitando qualquer valor"): a Central de Tickets manda o texto como a agente digitou, sem tipo.
+ * - vazia: `{ ok: true, chave: null }`, ou erro se a marca a exige (`obrigatoria`, que vem de fora: Ápice, Yenzah e
+ *   Denavita com `CHAVE_PIX_OBRIGATORIA=on`);
+ * - com `pixKeyType` e válida pelo tipo (ADR-018, `normalizarChavePix`): grava a normalizada, como outros clientes ainda
+ *   mandam;
+ * - em qualquer outro caso (sem tipo, tipo desconhecido, fora do formato): grava o texto com `trim()`, como veio.
  *
  * ⚠️ A chave é dado pessoal sensível: nem ela nem o erro (que não a repete) vão ao log aqui.
  */
@@ -88,6 +92,8 @@ export function chavePixDoReembolso(
             ? { ok: false, erro: 'Informe a chave Pix da cliente: o reembolso desta marca é pago por Pix.' }
             : { ok: true, chave: null };
     }
+    const comoVeio = String(data.pixKey).trim();
+    if (!String(data.pixKeyType ?? '').trim()) return { ok: true, chave: comoVeio };
     const chave = normalizarChavePix(data.pixKey, data.pixKeyType);
-    return chave.ok ? { ok: true, chave: chave.chave } : { ok: false, erro: chave.erro };
+    return { ok: true, chave: chave.ok ? chave.chave : comoVeio };
 }

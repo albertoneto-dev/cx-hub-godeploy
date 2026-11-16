@@ -149,6 +149,17 @@ describe('processRefund — Gobeaute', () => {
         expect(problemaNoCaso(casos[0])).toBeNull();
     });
 
+    it('não lê a chave Pix (sem planilha): nem a recusa, nem a leva para a fila', async () => {
+        vi.stubEnv('CHAVE_PIX_OBRIGATORIA', 'on');
+        const semChave = await processRefund('gobeaute', { ...REEMBOLSO, pixKey: '' }, { agora: AGORA });
+        expect(semChave.status).toBe(200);
+
+        enfileirar.mockClear();
+        await processRefund('gobeaute', { ...REEMBOLSO, ecommerceOrderId: 'SH1042GB', pixKey: 'segredo-da-cliente' }, { agora: AGORA });
+        expect(JSON.stringify(enfileirar.mock.calls)).not.toContain('segredo-da-cliente');
+        expect(planilhas).not.toHaveBeenCalled();
+    });
+
     it('fila incerta ⇒ 504 API_TIMEOUT com o id, sem falar de planilha, para NÃO repetir', async () => {
         enfileirar.mockResolvedValueOnce({ status: 'incerto', motivo: 'timeout' });
 

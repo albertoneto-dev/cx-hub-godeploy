@@ -140,15 +140,21 @@ describe('chavePixDoReembolso', () => {
         }
     });
 
-    it('normaliza pelo tipo informado ou inferido', () => {
-        expect(chavePixDoReembolso({ pixKey: '529.982.247-25' }, true)).toEqual({ ok: true, chave: '52998224725' });
+    it('com o tipo informado e a chave válida para ele: grava a normalizada', () => {
+        expect(chavePixDoReembolso({ pixKey: '529.982.247-25', pixKeyType: 'cpf' }, true)).toEqual({ ok: true, chave: '52998224725' });
         expect(chavePixDoReembolso({ pixKey: '(11) 98765-4321', pixKeyType: 'celular' }, true)).toEqual({ ok: true, chave: '+5511987654321' });
-        expect(chavePixDoReembolso({ pixKey: 'Cliente@Exemplo.com' }, false)).toEqual({ ok: true, chave: 'cliente@exemplo.com' });
+        expect(chavePixDoReembolso({ pixKey: 'Cliente@Exemplo.com', pixKeyType: 'email' }, false)).toEqual({ ok: true, chave: 'cliente@exemplo.com' });
     });
 
-    it('a chave inválida para o tipo é recusada com o erro do tipo', () => {
-        expect(chavePixDoReembolso({ pixKey: '52998224726', pixKeyType: 'cpf' }, false)).toEqual({
-            ok: false, erro: 'CPF da chave Pix inválido (confira os 11 dígitos).',
-        });
+    it('aceita qualquer texto, como veio (com trim): sem tipo, tipo desconhecido ou chave fora do formato', () => {
+        // Antes (ADR-018) isto era normalizado por inferência ou recusado. Desde 16/11/2026 a Central manda o texto da
+        // agente, sem tipo, e nada é recusado por formato.
+        expect(chavePixDoReembolso({ pixKey: '  529.982.247-25 ' }, true)).toEqual({ ok: true, chave: '529.982.247-25' });
+        expect(chavePixDoReembolso({ pixKey: 'Cliente@Exemplo.com' }, false)).toEqual({ ok: true, chave: 'Cliente@Exemplo.com' });
+        expect(chavePixDoReembolso({ pixKey: 'a chave da Ana, cel final 99', pixKeyType: null }, false)).toEqual({ ok: true, chave: 'a chave da Ana, cel final 99' });
+        expect(chavePixDoReembolso({ pixKey: '529.982.247-25', pixKeyType: 'tipo-que-nao-existe' }, true)).toEqual({ ok: true, chave: '529.982.247-25' });
+        // CPF com dígito errado, mesmo com o tipo: grava como veio.
+        expect(chavePixDoReembolso({ pixKey: '52998224726', pixKeyType: 'cpf' }, false)).toEqual({ ok: true, chave: '52998224726' });
+        expect(chavePixDoReembolso({ pixKey: ' 123 ', pixKeyType: 'email' }, true)).toEqual({ ok: true, chave: '123' });
     });
 });

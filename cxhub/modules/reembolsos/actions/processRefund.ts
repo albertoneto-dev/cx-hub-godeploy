@@ -1,5 +1,4 @@
 import {
-    ehMarcaSemCosmos,
     ehMarcaSemCosmosComPlanilha,
     pedeChavePixNoReembolso,
     registraNaPlanilha,
@@ -68,11 +67,12 @@ export async function processRefund(
         };
     }
 
-    // ─── Chave Pix (Ápice, Yenzah e Denavita, ADR-018): validada pelo tipo e gravada normalizada ──
-    // Antes de qualquer leitura: é o corpo. A chave nunca vai ao log (LGPD); o erro não a repete.
+    // ─── Chave Pix (toda marca com planilha): gravada como veio, normalizada só se vier o tipo e bater ──
+    // Antes de qualquer leitura: é o corpo. A chave nunca vai ao log (LGPD); o erro não a repete. Só Ápice, Yenzah e
+    // Denavita a exigem (com `CHAVE_PIX_OBRIGATORIA=on`); nas 6 do Cosmos é sempre opcional. A Gobeaute não a lê.
     let dados = data;
-    if (pedeChavePixNoReembolso(brand)) {
-        const pix = chavePixDoReembolso(data, chavePixObrigatoria());
+    if (registraNaPlanilha(brand)) {
+        const pix = chavePixDoReembolso(data, pedeChavePixNoReembolso(brand) && chavePixObrigatoria());
         if (!pix.ok) return { body: { code: 'UNKNOWN_ERROR', message: `${pix.erro} Nada foi registrado.` }, status: 422 };
         dados = { ...data, pixKey: pix.chave };
     }
@@ -203,8 +203,8 @@ export async function processRefund(
             idSolicitacao: idReembolso,
             pedido,
             criadoEm: agora,
-            // A chave Pix (marcas sem Cosmos) não vai ao log da linha que falhou (LGPD).
-            ...(ehMarcaSemCosmos(brand) ? { colunasSensiveis: [COLUNA_DA_CHAVE_PIX[brand]] } : {}),
+            // A chave Pix não vai ao log da linha que falhou (LGPD). Na Kokeshi ela está na célula de Observações.
+            colunasSensiveis: [COLUNA_DA_CHAVE_PIX[brand]],
         },
     ];
     // A linha do cancelamento só existe nas marcas do Cosmos: as sem Cosmos não têm planilha de cancelamento (ADR-015).

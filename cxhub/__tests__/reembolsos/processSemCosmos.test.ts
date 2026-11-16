@@ -415,21 +415,25 @@ describe('processRefund — a conferência do pedido no Data Mart e a chave Pix 
         expect(planilhas.mock.calls[0][0][0].linha).toContain('[CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY] | Cliente sem retorno');
     });
 
-    it('a chave Pix vai normalizada para a linha, e nunca para a fila', async () => {
-        await processRefund('apice', { ...REEMBOLSO, pixKey: '529.982.247-25' }, { agora: AGORA });
+    it('a chave Pix com o tipo vai normalizada para a linha, e nunca para a fila', async () => {
+        await processRefund('apice', { ...REEMBOLSO, pixKey: '529.982.247-25', pixKeyType: 'cpf' }, { agora: AGORA });
 
         expect(planilhas.mock.calls[0][0][0].linha[COLUNA_DA_CHAVE_PIX.apice]).toBe('52998224725');
         expect(JSON.stringify(enfileirar.mock.calls)).not.toContain('52998224725');
     });
 
-    it('a chave Pix inválida para o tipo é recusada antes de qualquer leitura', async () => {
-        const { body, status } = await processRefund('apice', { ...REEMBOLSO, pixKey: '52998224726', pixKeyType: 'cpf' }, { agora: AGORA });
+    it('a chave Pix sem o tipo vai como veio para a linha, e nunca para a fila', async () => {
+        await processRefund('apice', { ...REEMBOLSO, pixKey: '529.982.247-25' }, { agora: AGORA });
 
-        expect(status).toBe(422);
-        expect(body.message).toBe('CPF da chave Pix inválido (confira os 11 dígitos). Nada foi registrado.');
-        expect(buscar).not.toHaveBeenCalled();
-        expect(conferir).not.toHaveBeenCalled();
-        expect(enfileirar).not.toHaveBeenCalled();
+        expect(planilhas.mock.calls[0][0][0].linha[COLUNA_DA_CHAVE_PIX.apice]).toBe('529.982.247-25');
+        expect(JSON.stringify(enfileirar.mock.calls)).not.toContain('529.982.247-25');
+    });
+
+    it('a chave Pix fora do formato do tipo não é mais recusada (16/11/2026): grava como veio', async () => {
+        const { status } = await processRefund('apice', { ...REEMBOLSO, pixKey: '52998224726', pixKeyType: 'cpf' }, { agora: AGORA });
+
+        expect(status).toBe(200);
+        expect(planilhas.mock.calls[0][0][0].linha[COLUNA_DA_CHAVE_PIX.apice]).toBe('52998224726');
     });
 
     it('sem a chave: passa com CHAVE_PIX_OBRIGATORIA desligada, e é recusada com ela em on', async () => {

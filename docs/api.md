@@ -55,7 +55,7 @@ não é `gdk_`.
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
 | POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h (com a conferência no Data Mart junto, nas três sem Cosmos com planilha), Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava |
 | POST | `/api/reenvio/bot` | O reenvio do Typebot: busca o pedido, aplica as guardas e registra; toda dúvida vira registro sem automação. `testMode: true` não grava |
-| POST | `/api/refund/submit` | Registra um reembolso: chave Pix validada (as três sem Cosmos com planilha), dedup de 24 h com a conferência no Data Mart junto, fila e planilha |
+| POST | `/api/refund/submit` | Registra um reembolso: chave Pix gravada como veio (toda marca com planilha), dedup de 24 h com a conferência no Data Mart junto, fila e planilha |
 | POST | `/api/cancellation/submit` | Registra um cancelamento junto do reenvio ou do reembolso: fila e planilha |
 | POST | `/api/refund/cancel` | Cancela o reembolso mais recente do pedido (fila, depois planilha) |
 | POST | `/api/refund/update` | Edita valor e motivo do reembolso |
@@ -95,8 +95,11 @@ quer dizer "registrado, não repita", e o chamador depende disso.
     `reason: ORDER_NOT_INVOICED`, sem aviso). O que conta como prova está no item seguinte;
   - o "Valor da NF de reenvio (R$)" é calculado; na Ápice e na Yenzah vai para a coluna da operação (AC), junto com as
     fórmulas;
-  - a chave Pix do reembolso é validada pelo tipo e gravada normalizada; obrigatória só com `CHAVE_PIX_OBRIGATORIA=on`,
-    desligada neste app;
+  - a chave Pix do reembolso **não é mais validada** (v14, 16/11/2026): é gravada como veio (`trim()`), em toda marca com
+    planilha; só vai normalizada quando vem o `pixKeyType` e a chave vale para ele. É obrigatória só na Ápice, Yenzah e
+    Denavita, com `CHAVE_PIX_OBRIGATORIA=on` (desligada neste app); nas 6 do Cosmos é sempre opcional. Colunas: Lescent W,
+    BySamia M, Auá L, Barbours Q, Rituária K; na Kokeshi, no fim das Observações da linha (a planilha dela está
+    deslocada);
   - o registro nunca depende do Data Mart: a conferência corre junto do dedup, com teto de 12 s, e o que não foi
     conferido fica com o valor que veio e a nota do motivo (`[… NÃO CONFERIDOS: DATA MART SEM RESPOSTA]` e as do item
     seguinte).
