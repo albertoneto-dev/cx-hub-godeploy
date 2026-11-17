@@ -174,6 +174,14 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   Publicado como v15. Os 5 `SHOPIFY_TOKEN_*` foram apagados do app no GoDeploy logo depois, a pedido do usuário, e as
   13 chamadas de conferência ao `/api/shopify/orders` no ar (um pedido de 3 dias por marca do Cosmos e a Ápice, pelo
   gateway; um de 95 dias por marca nova, pelo Data Mart; e uma marca inválida) deram o mesmo resultado sem eles.
+- A NF das 6 marcas do Cosmos sai da Intelipost quando não vem (2026-11-17). Desde a virada do Cosmos para o V3 (21/10),
+  o pedido criado depois dela vem sem `invoice_number`, e a tela e a Central de Tickets mandavam `"-"`: a planilha e a
+  gold ficaram sem NF em 88 a 97% dos reenvios e reembolsos dessas marcas com pedido de 26/10 em diante, e a Intelipost
+  tinha a NF em 92% deles. Arquivo novo: `shared/lib/datamart/nfDaIntelipostServer.ts` (`nfAusente`: vazia, `-`, `na`,
+  `n/a` ou só zeros; `nfDaIntelipost`: a NF da primeira remessa pelo índice `(shopify_order_number, brand_code)`, sem
+  os zeros à esquerda, com a BySamia como `by_samia`; nunca lança). O `processResend` e o `processRefund` a consultam
+  junto do dedup, com o teto da conferência, só nas marcas do Cosmos e só quando a NF não veio; sem resposta, fica a
+  que veio. A NF que veio nunca é trocada. O Cosmos não recebe a NF, então o reenvio automático não muda.
 
 ## Testes
 

@@ -139,6 +139,12 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   - sem a Intelipost no gold, a busca no Tiny por data procura o número no `numero_ordem_compra` ou no
     `numero_ecommerce`, nos dois CDs. A janela vai de 1 dia antes da criação na Shopify a 12 dias depois no ES e a 60
     no RJ, que recebe os pedidos cancelados no ES e refeitos lá. As medidas estão no comentário de `sqlDoTinyPorData`.
+- **A NF das marcas do Cosmos pela Intelipost (2026-11-17, decisão deste app):** o pedido do Cosmos V3 (desde 21/10)
+  vem sem `invoice_number`, e a NF chegava como `"-"`. No `/api/sheets/append` e no `/api/refund/submit` (e no bot, que
+  passa por eles), a NF vazia, `-`, `na` ou só zeros das 6 marcas do Cosmos vira a da primeira remessa da Intelipost
+  (`gold.fct_intelipost_orders`, uma consulta pelo índice, teto de 12 s junto do dedup), sem os zeros à esquerda. A NF
+  que veio nunca é trocada, e sem resposta do Data Mart fica a que veio. Código:
+  `cxhub/shared/lib/datamart/nfDaIntelipostServer.ts`.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.

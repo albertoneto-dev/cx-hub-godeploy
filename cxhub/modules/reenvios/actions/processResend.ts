@@ -8,6 +8,7 @@ import {
 } from '../../../shared/lib/constants';
 import { configuracaoQueFalta, prazoDaRequisicao } from '../../../shared/lib/backendDireto';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../shared/lib/datamart/conferenciaServer';
+import { nfAusente, nfDaIntelipost } from '../../../shared/lib/datamart/nfDaIntelipostServer';
 import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro, type ResultadoFila } from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { planilhaQueFalta } from '../../../shared/lib/sheets/index';
@@ -105,6 +106,11 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     const conferencia = ehMarcaSemCosmosComPlanilha(brand)
         ? conferirPedidoNoDataMart(brand, data.numeroPedido, prazoDaConferencia(prazo))
         : null;
+    // Nas marcas do Cosmos, a NF que não veio (o pedido do Cosmos V3 chega sem ela) sai da Intelipost, também junto do
+    // dedup e no mesmo teto da conferência. Nunca lança; sem resposta, fica a que veio (2026-11-17).
+    const nfIntelipost = temOrganizacaoNoCosmos(brand) && nfAusente(data.numeroNF)
+        ? nfDaIntelipost(brand, data.numeroPedido, prazoDaConferencia(prazo))
+        : null;
     try {
         const existente = await solicitacaoRecenteNoRegistro('REENVIO', brand, data.numeroPedido);
         if (existente) {
@@ -146,6 +152,13 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         logarConferencia(idSolicitacao, data.numeroPedido, conferido);
         dados = conferido.data;
         valorNaOperacao = conferido.valorNaOperacao;
+    }
+    if (nfIntelipost) {
+        const nf = await nfIntelipost;
+        if (nf) {
+            console.log(`${LOG} ${idSolicitacao}: NF ${nf} da Intelipost no pedido ${data.numeroPedido} (veio "${data.numeroNF ?? ''}")`);
+            dados = { ...dados, numeroNF: nf };
+        }
     }
 
     // ─── 2. Reenvio no Cosmos ─────────────────────────────────────────────────────────────────────

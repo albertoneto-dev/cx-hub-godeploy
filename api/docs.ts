@@ -412,6 +412,10 @@ const GUIA_HTML = `
         <code>[NF NÃO CONFERIDA: AINDA FORA DO DATA MART]</code>. A chave Pix do reembolso é gravada como veio, sem recusa por formato. O
         <code>GET /api/datamart/order-context</code> mostra antes o que vai ser gravado, com o motivo em
         <code>nfMotivo</code>. Na Vercel, valia o que a tela mandava.</td></tr>
+      <tr><td>NF do reenvio e do reembolso das 6 marcas do Cosmos</td><td>O pedido do Cosmos V3 (desde 21/10/2026) vem sem a
+        NF. Quando a NF chega vazia, <code>-</code> ou <code>na</code>, o servidor grava a da <strong>primeira remessa da
+        Intelipost</strong>, sem os zeros à esquerda, na planilha e na fila. A NF que veio nunca é trocada, e sem resposta
+        do Data Mart fica a que veio. Na Vercel, valia o que a tela mandava.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.
         Para ensaiar, use <code>testMode: true</code>.</td></tr>
       <tr><td>Tempo de execução</td><td>Não há o <code>maxDuration</code> da Vercel. O bot continua planejando o trabalho para

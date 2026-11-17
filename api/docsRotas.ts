@@ -2588,7 +2588,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.numeroNF",
           "type": "string",
           "required": false,
-          "description": "Número da nota fiscal. Na apice, na yenzah e na denavita vale a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart não respondeu, a NF já emitida ainda não chegou a ele, ou o Tiny só tem o pedido cancelado)."
+          "description": "Número da nota fiscal. Na apice, na yenzah e na denavita vale a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart não respondeu, a NF já emitida ainda não chegou a ele, ou o Tiny só tem o pedido cancelado). Nas 6 marcas do Cosmos, a NF que vier vazia, \"-\" ou \"na\" (o pedido do Cosmos V3 chega sem ela) é trocada pela da primeira remessa da Intelipost, sem os zeros à esquerda; sem ela, fica a que veio."
         },
         {
           "name": "data.chaveNF",
@@ -4707,7 +4707,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.invoiceNumber",
           "type": "string",
           "required": true,
-          "description": "Número da NF do pedido. Na apice, na yenzah e na denavita a planilha grava a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart não respondeu, a NF já emitida ainda não chegou a ele, ou o Tiny só tem o pedido cancelado)."
+          "description": "Número da NF do pedido. Na apice, na yenzah e na denavita a planilha grava a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart não respondeu, a NF já emitida ainda não chegou a ele, ou o Tiny só tem o pedido cancelado). Nas 6 marcas do Cosmos, a NF que vier vazia, \"-\" ou \"na\" (o pedido do Cosmos V3 chega sem ela) é trocada pela da primeira remessa da Intelipost, sem os zeros à esquerda; sem ela, fica a que veio."
         },
         {
           "name": "data.nfeAccessKey",
