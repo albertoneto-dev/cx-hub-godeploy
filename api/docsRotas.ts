@@ -55,6 +55,7 @@ export const GRUPOS: ReadonlyArray<{ tag: string; descricao: string }> = [
   { tag: "Fila", descricao: "A fila de registro (`/api/v1`), que manda os casos e as atualizações em lote ao Airflow a cada 10 min (as edições do backoffice vão no mesmo lote). O contrato não mudou na migração." },
   { tag: "Backoffice", descricao: "O backoffice de reenvio e reembolso, que era o app `backoffice-hub`: a lista da gold + raw (+ os casos ainda na fila) por cursor, o caso e as edições com as regras de lá. A edição entra na fila do app e sobe no lote dela, a cada 10 min. Rotas novas, só no GoDeploy. Toda chamada leva o `x-usuario-email` de quem está na tela." },
   { tag: "Cache da rota dados", descricao: "A rodada do cron que renova as listas da rota dados guardadas no `env.DB`. Rota nova, só no GoDeploy." },
+  { tag: "Saúde", descricao: "O estado de cada função do app (o registro, o bot, a busca de pedido, a fila e os serviços de que ele depende), para monitores como o Monitor da Black. Rota nova, só no GoDeploy." },
 ];
 
 export const ENDPOINTS: Endpoint[] = [
@@ -10824,6 +10825,180 @@ export const ENDPOINTS: Endpoint[] = [
       "api/cacheDaRotaDados.ts",
       "cxhub/shared/lib/formDataApi.ts",
       "servidor/cron.ts"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/saude",
+    "tag": "Saúde",
+    "summary": "O estado de cada função do CX Hub (o Monitor da Black lê a cada 5 min)",
+    "description": "Devolve, em até ~4 s, o nível (`ok`, `alerta` ou `erro`) de 16 componentes, cada um com o último sucesso, a última tentativa, os erros da última hora, os pendentes e um detalhe curto. O desfecho de cada função é anotado onde ela termina: o `code` do corpo dos envios (como a Central de Tickets lê), o resumo da rodada do lote, a lista de pedidos da busca, cada chamada real aos serviços externos. O `HEAD` responde o mesmo status, sem corpo. Basta a `gdk_` do app `cx-hub` (nenhum header da rota).",
+    "routeHeader": null,
+    "params": [],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "Nenhum componente crítico em `erro` (um `alerta` nunca gera 503).",
+        "fields": [
+          {
+            "name": "ok",
+            "type": "boolean",
+            "required": true,
+            "description": "`true` quando nenhum componente crítico está em `erro`."
+          },
+          {
+            "name": "gerado_em",
+            "type": "string (ISO 8601)",
+            "required": true,
+            "description": "Quando a leitura foi feita, em UTC, sem milissegundos."
+          },
+          {
+            "name": "componentes[].id",
+            "type": "string",
+            "required": true,
+            "description": "O id estável do componente (o monitor guarda o histórico por ele).",
+            "enum": [
+              "app",
+              "fila_rodada",
+              "fila_entrega",
+              "reenvio",
+              "reembolso",
+              "cancelamento",
+              "bot_reenvio",
+              "consulta_pedido",
+              "cache_rota_dados",
+              "backoffice",
+              "dep_airflow",
+              "dep_cosmos",
+              "dep_sheets",
+              "dep_datamart",
+              "dep_gateway",
+              "dep_rota_dados"
+            ]
+          },
+          {
+            "name": "componentes[].nome",
+            "type": "string",
+            "required": true,
+            "description": "O nome para gente."
+          },
+          {
+            "name": "componentes[].nivel",
+            "type": "string",
+            "required": true,
+            "description": "`ok`, `alerta` ou `erro`.",
+            "enum": [
+              "ok",
+              "alerta",
+              "erro"
+            ]
+          },
+          {
+            "name": "componentes[].ultimo_sucesso",
+            "type": "string (ISO 8601) | null",
+            "required": true,
+            "description": "A última vez que a função terminou bem. Na `fila_entrega`, o fim do último lote que gravou na raw."
+          },
+          {
+            "name": "componentes[].ultima_tentativa",
+            "type": "string (ISO 8601) | null",
+            "required": true,
+            "description": "A última vez que a função rodou, com qualquer desfecho."
+          },
+          {
+            "name": "componentes[].erros_ultima_hora",
+            "type": "number",
+            "required": true,
+            "description": "As falhas do sistema na última hora (o dado recusado de quem chama não conta). Na `fila_entrega`, os lotes que terminaram sem resultado."
+          },
+          {
+            "name": "componentes[].pendentes",
+            "type": "number | null",
+            "required": true,
+            "description": "Na `fila_entrega`, os casos e as atualizações ainda a caminho da raw; `null` quando a fila não pôde ser lida. Nos outros, 0."
+          },
+          {
+            "name": "componentes[].detalhe",
+            "type": "string",
+            "required": true,
+            "description": "Frase curta (até 120 caracteres), sem dado de cliente: só contagens, horários de Brasília e códigos HTTP."
+          },
+          {
+            "name": "componentes[].critico",
+            "type": "boolean",
+            "required": true,
+            "description": "Crítico em `erro` faz a rota responder 503."
+          },
+          {
+            "name": "componentes[].tipo",
+            "type": "string",
+            "required": true,
+            "description": "`app`, `cron`, `demanda` ou `dependencia`.",
+            "enum": [
+              "app",
+              "cron",
+              "demanda",
+              "dependencia"
+            ]
+          }
+        ],
+        "example": {
+          "ok": true,
+          "gerado_em": "2026-11-17T17:40:05Z",
+          "componentes": [
+            { "id": "app", "nome": "Worker e banco do CX Hub", "nivel": "ok", "ultimo_sucesso": null, "ultima_tentativa": null, "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "Worker e banco respondendo", "critico": true, "tipo": "app" },
+            { "id": "fila_rodada", "nome": "Rodada do lote da fila (cron a cada 10 min)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:40:03Z", "ultima_tentativa": "2026-11-17T17:40:03Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "última execução às 14:40", "critico": true, "tipo": "cron" },
+            { "id": "fila_entrega", "nome": "Entrega dos casos ao Airflow (raw)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:40:03Z", "ultima_tentativa": "2026-11-17T17:40:03Z", "erros_ultima_hora": 0, "pendentes": 4, "detalhe": "4 item(ns) na fila; último lote gravado às 14:40", "critico": true, "tipo": "demanda" },
+            { "id": "reenvio", "nome": "Registro de reenvio (POST /api/sheets/append)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:38:51Z", "ultima_tentativa": "2026-11-17T17:38:51Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "último sucesso às 14:38", "critico": true, "tipo": "demanda" },
+            { "id": "reembolso", "nome": "Registro de reembolso (POST /api/refund/submit)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:31:12Z", "ultima_tentativa": "2026-11-17T17:31:12Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "último sucesso às 14:31", "critico": true, "tipo": "demanda" },
+            { "id": "cancelamento", "nome": "Registro de cancelamento (POST /api/cancellation/submit)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T15:02:40Z", "ultima_tentativa": "2026-11-17T15:02:40Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "sem chamadas desde 12:02", "critico": true, "tipo": "demanda" },
+            { "id": "bot_reenvio", "nome": "Reenvio pelo bot do Typebot (POST /api/reenvio/bot)", "nivel": "alerta", "ultimo_sucesso": "2026-11-17T17:20:09Z", "ultima_tentativa": "2026-11-17T17:20:09Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "registrou sem a automação (Cosmos fora) às 14:20", "critico": true, "tipo": "demanda" },
+            { "id": "consulta_pedido", "nome": "Busca de pedido (Cosmos, Shopify e Data Mart)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:39:58Z", "ultima_tentativa": "2026-11-17T17:39:58Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "último sucesso às 14:39", "critico": true, "tipo": "demanda" },
+            { "id": "cache_rota_dados", "nome": "Cache da rota dados (cron a cada 5 min)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:40:04Z", "ultima_tentativa": "2026-11-17T17:40:04Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "última execução às 14:40", "critico": false, "tipo": "cron" },
+            { "id": "backoffice", "nome": "Edições do backoffice (salvar e desfazer)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T13:10:44Z", "ultima_tentativa": "2026-11-17T13:10:44Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "sem chamadas desde 10:10", "critico": false, "tipo": "demanda" },
+            { "id": "dep_airflow", "nome": "Airflow", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:40:03Z", "ultima_tentativa": "2026-11-17T17:40:03Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "respondeu às 14:40", "critico": false, "tipo": "dependencia" },
+            { "id": "dep_cosmos", "nome": "Cosmos", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:39:58Z", "ultima_tentativa": "2026-11-17T17:39:58Z", "erros_ultima_hora": 1, "pendentes": 0, "detalhe": "respondeu às 14:39", "critico": false, "tipo": "dependencia" },
+            { "id": "dep_sheets", "nome": "Google Planilhas", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:38:51Z", "ultima_tentativa": "2026-11-17T17:38:51Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "respondeu às 14:38", "critico": false, "tipo": "dependencia" },
+            { "id": "dep_datamart", "nome": "Data Mart (Metabase Gobeaute)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:36:20Z", "ultima_tentativa": "2026-11-17T17:36:20Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "respondeu às 14:36", "critico": false, "tipo": "dependencia" },
+            { "id": "dep_gateway", "nome": "integrations-gateway (Shopify)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:12:07Z", "ultima_tentativa": "2026-11-17T17:12:07Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "respondeu às 14:12", "critico": false, "tipo": "dependencia" },
+            { "id": "dep_rota_dados", "nome": "Rota dados (rota-dados-cxhub)", "nivel": "ok", "ultimo_sucesso": "2026-11-17T17:40:04Z", "ultima_tentativa": "2026-11-17T17:40:04Z", "erros_ultima_hora": 0, "pendentes": 0, "detalhe": "respondeu às 14:40", "critico": false, "tipo": "dependencia" }
+          ]
+        }
+      },
+      {
+        "status": 405,
+        "description": "Método que não é GET nem HEAD.",
+        "example": {
+          "code": "METHOD_NOT_ALLOWED",
+          "message": "Use GET, HEAD nesta rota."
+        }
+      },
+      {
+        "status": 503,
+        "description": "Algum componente crítico está em `erro`. O corpo é o mesmo do 200, com `ok: false`. Com o banco do app fora, o `app` vem em `erro` e os outros em `alerta`, \"sem dados\".",
+        "example": {
+          "ok": false,
+          "gerado_em": "2026-11-17T18:55:00Z",
+          "componentes": [
+            { "id": "fila_entrega", "nome": "Entrega dos casos ao Airflow (raw)", "nivel": "erro", "ultimo_sucesso": "2026-11-17T17:40:03Z", "ultima_tentativa": "2026-11-17T17:50:02Z", "erros_ultima_hora": 0, "pendentes": 12, "detalhe": "12 item(ns) na fila, o mais antigo desde 14:41; a DAG está pausada", "critico": true, "tipo": "demanda" }
+          ]
+        }
+      }
+    ],
+    "notes": [
+      "Críticos (o `erro` deles gera 503): `app`, `fila_rodada`, `fila_entrega`, `reenvio`, `reembolso`, `cancelamento`, `bot_reenvio` e `consulta_pedido`. Os outros só informam.",
+      "Quando vira erro: a rodada do lote 30 min sem sucesso (alerta em 15); um item na fila há mais de 60 min (alerta em 30, ou um lote sem resultado na última hora); 3 falhas na hora sem nenhum registro nos envios e no bot (alerta: 1 falha, ou o bot que registrou sem a automação porque o Cosmos ou a Shopify caiu); 5 buscas na hora sem achar nenhum pedido; a cache 30 min sem renovar; 3 falhas do backoffice na hora; 2 falhas seguidas de um serviço (alerta: 1 falha, ou resposta lenta).",
+      "O que é dado de quem chama não conta como falha: o 400, o 409 e o 422 dos envios, o pedido duplicado, o estoque, o token vencido do Cosmos. O ensaio (`testMode: true`) não conta.",
+      "Os serviços são medidos nas chamadas reais. Sem nenhuma chamada há 15 min, a rota faz uma sonda só de leitura: a DAG no Airflow e `select 1` no Data Mart. O Cosmos não tem sonda (a leitura barata exige login).",
+      "O estado fica no `env.DB` (`saude_estado`, `saude_janela`, `saude_meta`), gravado no fim de cada requisição, em segundo plano. As janelas com mais de 48 h são apagadas."
+    ],
+    "sources": [
+      "api/saude/rota.ts",
+      "api/saude/regras.ts",
+      "api/saude/registro.ts",
+      "api/saude/medidor.ts",
+      "api/saude/pontos.ts"
     ]
   }
 ];

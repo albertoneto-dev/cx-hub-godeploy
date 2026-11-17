@@ -174,6 +174,17 @@ async function rodada(dataDeCompatibilidade) {
     const noDataMart = saidas.filter(s => s.url === `${METABASE}/api/dataset`);
     conferir("order-context lê o Data Mart com a chave do app e confere o token no Cosmos; a gdk_ não sai", noDataMart.length === 3 && noDataMart.every(s => s.chave === "chave-do-metabase") && saidas.some(s => s.url.startsWith(COSMOS) && s.authorization === "Bearer jwt-do-login") && !saidas.some(s => s.authorization?.includes("gdk_")), JSON.stringify(saidas.map(s => s.url)));
 
+    // A saúde (api/saude/): o medidor na frente do fetch do workerd anotou o Cosmos e o Data Mart das chamadas acima
+    // (sem "Illegal invocation"), e a rota responde no contrato. Com o tráfego recente, nenhuma sonda sai.
+    saidas = [];
+    r = await pedir("/api/saude", { headers: { authorization: "Bearer gdk_chave" } });
+    const saude = r.status === 200 ? await r.json() : { status: r.status, corpo: await r.text() };
+    const componente = id => saude.componentes?.find(x => x.id === id);
+    conferir("/api/saude responde os 16 componentes, 200 com o app de pé", saude.componentes?.length === 16 && saude.ok === true && componente("app")?.nivel === "ok", JSON.stringify(saude).slice(0, 400));
+    conferir("o fetch medido anotou o Cosmos e o Data Mart das chamadas reais, sem sonda", /^respondeu /.test(componente("dep_cosmos")?.detalhe ?? "") && /^respondeu /.test(componente("dep_datamart")?.detalhe ?? "") && saidas.length === 0, JSON.stringify([componente("dep_cosmos"), componente("dep_datamart"), saidas.map(s => s.url)]));
+    r = await pedir("/api/saude", { method: "HEAD", headers: { authorization: "Bearer gdk_chave" } });
+    conferir("HEAD /api/saude: o mesmo status, sem corpo", r.status === 200 && (await r.text()) === "", `HTTP ${r.status}`);
+
     r = await pedir("/__conferencias");
     const c = await r.json();
     conferir("sem Node no runtime: process é o do app, Buffer não existe", c.processExiste === "object" && c.bufferExiste === "undefined", JSON.stringify([c.processExiste, c.bufferExiste]));

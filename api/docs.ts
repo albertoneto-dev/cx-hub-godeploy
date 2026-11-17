@@ -211,6 +211,7 @@ const GUIA: ReadonlyArray<readonly [string, string]> = [
   ["comportamento", "Comportamento"],
   ["backoffice", "Backoffice"],
   ["crons", "Crons e cache"],
+  ["saude", "Saúde"],
   ["problemas", "Problemas comuns"],
 ];
 
@@ -296,6 +297,8 @@ const GUIA_HTML = `
         navegador</td><td><code>x-usuario-email: &lt;e-mail de quem está na tela&gt;</code>, o autor das edições</td></tr>
       <tr><td><code>/api/interno/rota-dados</code> (a cache)</td><td>Não existia</td>
         <td><code>x-cxhub-fila-token</code>, ou o cron do GoDeploy</td></tr>
+      <tr><td><code>/api/saude</code> (a saúde)</td><td>Não existia</td>
+        <td>Nenhum header da rota. Basta a <code>gdk_</code> do app <code>cx-hub</code>.</td></tr>
     </tbody>
   </table></div>
   <p class="aviso">O token do Cosmos é o <code>credentials.token</code> que o <code>POST /api/auth/login</code> devolve. O app o
@@ -515,6 +518,25 @@ const GUIA_HTML = `
   dados. Mais velha, a leitura busca ao vivo e guarda; com a rota dados fora, serve a última resposta boa por até 24 h. Cada
   rota de cron aceita no máximo uma chamada sem assinatura a cada 30 s, com uma trava por rota. O backoffice não tem cron
   próprio: as edições dele sobem no lote da fila.</p>
+</section>
+
+<section class="bloco" id="saude">
+  <p class="sobrelinha">Monitoramento</p>
+  <h2>Saúde</h2>
+  <p class="intro">O <code>GET /api/saude</code> diz se cada função está de pé, e não só se o app responde: o último registro
+  de reenvio, de reembolso e de cancelamento, o bot, a busca de pedido, a fila que leva os casos à raw e os serviços de que o
+  app depende. O Monitor da Black lê a cada 5 min, com a <code>gdk_</code> do app.</p>
+  <div class="tabela-rolavel"><table class="marca">
+    <thead><tr><th>Resposta</th><th>Quando</th></tr></thead>
+    <tbody>
+      <tr><td><code>200</code></td><td>Nenhum componente crítico em <code>erro</code>. Um <code>alerta</code> nunca gera 503.</td></tr>
+      <tr><td><code>503</code></td><td>Algum crítico em <code>erro</code>: o app, a rodada do lote, a entrega à raw, os três
+        registros, o bot ou a busca de pedido. O corpo é o mesmo, com <code>ok: false</code>.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="aviso">O desfecho é o que a função devolveu, e não o HTTP da rota: o <code>code</code> do corpo nos envios, o resumo
+  da rodada do lote, a lista de pedidos na busca. O dado recusado de quem chama (o 422 da conferência, o pedido duplicado) não
+  conta como falha, e o ensaio (<code>testMode</code>) não conta. O <code>detalhe</code> nunca traz dado de cliente.</p>
 </section>
 
 <section class="bloco" id="problemas">

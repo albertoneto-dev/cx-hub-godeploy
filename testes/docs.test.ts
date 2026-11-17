@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ancoraDoEndpoint, PAGINA_DOS_DOCS } from "../api/docs";
 import { ENDPOINTS, GRUPOS } from "../api/docsRotas";
 import { ROTAS_DA_API } from "../api/roteador";
+import { CATALOGO } from "../api/saude/regras";
 import worker from "../worker";
 import { URL_APP } from "./ambiente";
 
@@ -24,7 +25,9 @@ const ROTAS_NOVAS = [
   "POST /api/backoffice/solicitacoes/{chave}/edicoes", "DELETE /api/backoffice/edicoes/{id}", "GET /api/backoffice/estado",
   "POST /api/interno/rota-dados",
 ];
-const ehDoHub = (d: string) => !/ \/api\/(v1|backoffice|interno)\//.test(d);
+// A saúde (worker.ts, api/saude/rota.ts): o GET documentado; o HEAD responde o mesmo, sem corpo, e está na descrição.
+const ROTAS_DA_SAUDE = ["GET /api/saude"];
+const ehDoHub = (d: string) => !/ \/api\/(v1|backoffice|interno)\//.test(d) && !ROTAS_DA_SAUDE.includes(d);
 
 describe("página /docs", () => {
   it("GET /docs e /docs/ devolvem o HTML, sem depender de segredo nenhum (env vazio)", async () => {
@@ -77,6 +80,18 @@ describe("especificação dos endpoints (api/docsRotas.ts)", () => {
 
   it("as rotas do backoffice e a da cache são exatamente as documentadas em /api/backoffice e /api/interno", () => {
     expect(documentados.filter((d) => / \/api\/(backoffice|interno)\//.test(d)).sort()).toEqual([...ROTAS_NOVAS].sort());
+  });
+
+  it("a saúde está documentada, com os 16 componentes do catálogo, e responde no app", async () => {
+    expect(documentados.filter((d) => d.includes(" /api/saude"))).toEqual(ROTAS_DA_SAUDE);
+    const saude = ENDPOINTS.find((e) => e.path === "/api/saude")!;
+    const ids = saude.responses[0].fields?.find((f) => f.name === "componentes[].id")?.enum;
+    expect(ids).toEqual(CATALOGO.map((c) => c.id));
+    expect((saude.responses[0].example as { componentes: Array<{ id: string }> }).componentes.map((c) => c.id)).toEqual(ids);
+    // Sem o env.DB, a rota existe e diz que o banco não respondeu (503), em vez do 404 de rota inexistente.
+    const r = await worker.fetch(new Request(`${URL_APP}/api/saude`), {} as never);
+    expect(r.status).toBe(503);
+    expect((await r.json()).componentes[0]).toMatchObject({ id: "app", nivel: "erro" });
   });
 
   it("cada rota documentada do backoffice responde no app (nenhuma é 404 de rota inexistente)", async () => {

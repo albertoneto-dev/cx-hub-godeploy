@@ -6,6 +6,8 @@
 // Authorization só para a rota; uma gdk_ que o gateway deixe passar não chega a ela (iria ao Cosmos como token).
 //
 // Quando a rota responde, as tarefas que o after() deixou rodando vão para o ctx.waitUntil (api/next-server.ts).
+//
+// Saúde (/api/saude): os envios e as buscas de pedido anotam o desfecho pelo corpo que devolvem (api/saude/pontos.ts).
 
 import * as authLogin from "../cxhub/app/api/auth/login/route";
 import * as cancellationSubmit from "../cxhub/app/api/cancellation/submit/route";
@@ -33,6 +35,7 @@ import * as shopifyOrders from "../cxhub/app/api/shopify/orders/route";
 import * as solicitacoes from "../cxhub/app/api/solicitacoes/route";
 import { decodificar, erro } from "../servidor/http";
 import { type NextRequest, tarefasPendentes } from "./next-server";
+import { anotarRotaDoHub, ehEnsaio, medidaDaRota } from "./saude/pontos";
 
 type Handler = (req: NextRequest, contexto: { params: Promise<Record<string, string>> }) => Response | Promise<Response>;
 
@@ -128,6 +131,10 @@ export async function tratarNaApi(req: Request, ctx?: ContextoDoWorker): Promise
   const inicio = Date.now();
   const url = new URL(req.url);
   const caminho = url.pathname.replace(/\/+$/, "") || "/";
+  // A saúde (/api/saude): os envios e as buscas de pedido anotam o desfecho pelo corpo da resposta. O ensaio
+  // (testMode) não grava, então não conta.
+  const medida = medidaDaRota(caminho, req.method);
+  const ensaio = medida?.tipo === "envio" ? await ehEnsaio(req) : false;
   let resposta: Response;
   try {
     resposta = await despachar(req, url, caminho);
@@ -139,6 +146,7 @@ export async function tratarNaApi(req: Request, ctx?: ContextoDoWorker): Promise
     const pendentes = tarefasPendentes();
     if (pendentes) ctx?.waitUntil(pendentes);
   }
+  if (medida && !ensaio) await anotarRotaDoHub(medida, resposta);
   console.log(`${req.method} ${caminho} → ${resposta.status} em ${Date.now() - inicio} ms`);
   return resposta;
 }

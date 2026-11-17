@@ -8,6 +8,7 @@ Este repositório é o código do app GoDeploy `cx-hub` (id `66edd698`, https://
 | `/api/v1/*` | A fila de registro. Guarda casos e atualizações do CX Hub no `env.DB` e manda tudo em lote ao Airflow. | `servidor/` (código deste app) |
 | `/api/backoffice/*` | O backoffice de reenvio e reembolso: a lista da gold + raw (+ os casos ainda na fila) e as edições, que sobem no lote da fila | `backoffice/` (cópia do app `backoffice-hub`) |
 | `/api/interno/rota-dados` | A rodada do cron que renova a cache da rota dados no `env.DB` | `api/cacheDaRotaDados.ts` |
+| `/api/saude` | A saúde de cada função, para o Monitor da Black | `api/saude/` |
 | `/api/*` (o resto) | As 23 rotas que o CX Hub tinha na Vercel, nos mesmos caminhos, métodos e corpos | `cxhub/` (cópia do CX Hub) + `api/` (cola com o Worker) |
 | `/docs` | A página da API para quem integra | `api/docs.ts` + `api/docsRotas.ts` |
 
@@ -17,8 +18,9 @@ publicado no GoDeploy.
 
 ## Mapa
 
-- `worker.ts`: a entrada. Manda `/docs` para `api/docs.ts`, `/api/v1/*` para `servidor/app.ts` e o resto para
-  `api/roteador.ts`.
+- `worker.ts`: a entrada. Manda `/docs` para `api/docs.ts`, `/api/saude` para `api/saude/rota.ts`, `/api/v1/*` para
+  `servidor/app.ts` e o resto para `api/roteador.ts`. Põe o medidor da saúde na frente do `fetch` global e grava o que
+  cada requisição anotou para a saúde.
 - `servidor/`: a fila. `validacao.ts` (o que entra), `fila.ts` (as rotas), `lote.ts` (a rodada do cron), `airflow.ts`,
   `cron.ts` (quem pode chamar o lote), `aviso.ts` (o Slack) e `config.ts` (os segredos).
 - `cxhub/`: a cópia do backend do CX Hub. A origem está em `cxhub/ORIGEM.md` (o commit, o que foi adaptado à mão e por
@@ -28,6 +30,8 @@ publicado no GoDeploy.
   dele; o Airflow, o cron e o Slack são os da fila (fila única). `backoffice/servidor/fila.ts` é o que fala com a fila, e
   `conferencia.ts` é a etapa dele na rodada do cron da fila.
 - `api/cacheDaRotaDados.ts`: a cache das listas da rota dados no `env.DB` e a rota do cron que a renova.
+- `api/saude/`: a `/api/saude`. `regras.ts` (puro: o catálogo, os desfechos e os níveis), `registro.ts` (anotar e
+  gravar), `medidor.ts` (o envoltório do `fetch`), `pontos.ts` (os pontos de registro das rotas) e `rota.ts`.
 - `api/`: a cola com o Worker. `roteador.ts` (as 23 rotas), `next-server.ts` (o pouco do Next que as rotas usam),
   `ambiente.ts` (o `process.env` montado dos segredos), `filaNoWorker.ts` (as rotas falam com a fila sem rede) e a
   página `/docs`.
@@ -159,6 +163,25 @@ a outro app do GoDeploy paga o gateway de novo, cerca de 0,8 s medidos em 2026-1
 | Rota dados fora | Vale a última resposta boa até 24 h |
 | Cron | Renova a cache a cada 5 min, para quem lê quase sempre acertar |
 
+### A saúde (`/api/saude`)
+
+Pedido do Monitor da Black (17/11/2026), no mesmo contrato da `/api/saude` da Central de Tickets. São 16 componentes,
+fechados com o usuário: 8 críticos (`app`, `fila_rodada`, `fila_entrega`, `reenvio`, `reembolso`, `cancelamento`,
+`bot_reenvio`, `consulta_pedido`) e 8 que só informam (`cache_rota_dados`, `backoffice` e as 6 dependências `dep_*`). A
+rota responde 503 só com um crítico em `erro`. O leitor de fora chama com a `gdk_` do app. Regras e limites em
+`api/saude/regras.ts` e `docs/api.md`.
+
+- **O desfecho vem de onde a função termina, nunca do HTTP da rota.** Nos envios, é o `code` do corpo, com a régua da
+  Central. O que é dado de quem chama (400, 409, 422, duplicado) é neutro, e o `testMode` não conta. Rota de envio ou de
+  busca nova entra em `COMPONENTE_DO_ENVIO` ou `ROTAS_DE_BUSCA`.
+- **A `fila_entrega` é lida das tabelas da fila**, sem gravação própria. O item mais antigo esperando (erro com mais de
+  60 min) pega qualquer causa de fila parada.
+- **As dependências são medidas pelo `fetch` global**, com o envoltório que o `worker.ts` instala. Assim nenhum arquivo
+  do `cxhub/` mudou. Serviço novo entra em `dependenciaDaUrl` e no catálogo.
+- **O registro nunca muda a função:** `anotarSaude` não lança nem espera, e a gravação roda no `ctx.waitUntil`. Se ela
+  falhar, só vai ao log.
+- **O `detalhe` nunca leva dado de cliente:** só contagens, horários de Brasília e códigos HTTP.
+
 ### Os crons
 
 | Rota | Agenda |
@@ -184,6 +207,7 @@ Como o `Authorization` passou a ser do gateway, a credencial de cada rota foi pa
 | Rotas que usam o token do Cosmos | `x-cosmos-token` (o roteador o põe no `Authorization` só para a rota) |
 | Bot | `x-bot-secret` |
 | Fila | `x-cxhub-fila-token` |
+| Saúde | nenhum: basta a `gdk_` |
 
 A `gdk_` é tirada antes da rota e nunca chega ao Cosmos.
 

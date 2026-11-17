@@ -1,7 +1,7 @@
 # API do app GoDeploy `cx-hub`
 
 Backend do CX Hub em `https://cx-hub.devgogroup.com` (app `66edd698`, visibilidade `authenticated`). Duas partes no
-mesmo Worker:
+mesmo Worker (além do backoffice, da cache da rota dados e da saúde, mais abaixo):
 
 - `/api/v1/*`: a fila do Metabase, que guarda casos e atualizações e dispara a DAG `gobeaute_reenvio_reembolso_etl`
   em lote a cada 10 min (era 20 até a v9). O contrato está em `docs/fila-cxhub.md`, no repositório do CX Hub. As
@@ -31,6 +31,7 @@ Como o `Authorization` é do gateway, o que cada rota confere vai em outro heade
 | `/api/reenvio/bot` | `x-bot-secret` (o `BOT_RESEND_SECRET`), **junto da** `gdk_`: um só não passa. Quem chama é o Typebot e, quando for publicado, o Extravios Gobeaute do hub Jornada CX |
 | `/api/v1/*` (a fila) | `x-cxhub-fila-token` |
 | `/api/auth/login`, `/api/cancellation/submit`, `/api/refund/submit`, `/api/sheets/append`, `/api/logistica/submit`, `/api/resend/data`, `/api/shopify/orders` | nenhum, como na Vercel. Aqui ficam atrás do gateway, e na Vercel estavam abertas. |
+| `/api/saude` | nenhum: basta a `gdk_` (é como o Monitor da Black lê) |
 
 Use o `x-cosmos-token` também no navegador. O app ainda aceita o token no `Authorization` quando ele chega até a rota
 (e o repassa como veio), mas ninguém conferiu se o gateway deixa passar, junto com a sessão, um `Authorization` que
@@ -187,6 +188,44 @@ As listas do app `rota-dados-cxhub` ficam guardadas no `env.DB` (tabela `cache_r
 | Cache mais velha | Busca ao vivo e guarda a resposta |
 | Rota dados fora | Serve a última resposta boa até 24 h, com aviso no log |
 | Rota `POST /api/interno/rota-dados` | Renova as três origens. Chamada pelo cron ou à mão, com o `x-cxhub-fila-token`. Responde 200, ou 502 quando nenhuma origem renovou |
+
+## Saúde (`GET /api/saude`)
+
+Pedido do Monitor da Black (17/11/2026): saber se cada função está de pé, e não só se o app responde. O contrato é o
+mesmo da `/api/saude` da Central de Tickets: 16 componentes, cada um com `nivel` (`ok`, `alerta`, `erro`),
+`ultimo_sucesso`, `ultima_tentativa`, `erros_ultima_hora`, `pendentes`, `detalhe`, `critico` e `tipo`. Responde 503
+só quando um componente crítico está em `erro`, em até ~4 s. O `HEAD` responde o mesmo status, sem corpo.
+
+| Componente | Crítico | Vira erro | Alerta |
+|---|---|---|---|
+| `app` | sim | o `env.DB` não responde em 1,5 s | |
+| `fila_rodada` | sim | 30 min sem rodada do lote com sucesso | 15 min, ou uma etapa falhou |
+| `fila_entrega` | sim | um item na fila há mais de 60 min | 30 min, ou um lote sem resultado na última hora |
+| `reenvio`, `reembolso`, `cancelamento` | sim | 3 falhas na hora sem nenhum registro | 1 falha na hora |
+| `bot_reenvio` | sim | idem (no bot, 401 e 503 contam) | idem, ou registrou sem a automação porque o Cosmos ou a Shopify caiu |
+| `consulta_pedido` | sim | 5 buscas na hora sem achar nenhum pedido | 1 falha na hora |
+| `cache_rota_dados` | não | 30 min sem renovar | 15 min |
+| `backoffice` | não | 3 falhas ao salvar ou desfazer na hora | 1 falha |
+| `dep_airflow`, `dep_cosmos`, `dep_sheets`, `dep_datamart`, `dep_gateway`, `dep_rota_dados` | não | 2 falhas seguidas | 1 falha, ou resposta lenta |
+
+Como cada desfecho é medido (código em `api/saude/`):
+
+- **Onde a função termina, nunca pelo HTTP da rota.** Os envios e o bot pelo `code` do corpo, com a mesma régua do
+  `desfechoEnvioCxHub` da Central (`SHEET_WRITE_FAILED` é registro, porque a fila guardou). O que é dado de quem chama
+  (400, 409, 422, duplicado, estoque) é neutro, e o ensaio (`testMode`) não conta. A busca pelo pedido achado. A rodada
+  do lote e a da cache pelo resumo que devolvem. O backoffice pelo status (o 4xx é a regra de edição).
+- **A `fila_entrega` não grava nada:** é lida de `casos`, `atualizacoes`, `lotes` e `controle.ultima_rodada` a cada
+  chamada. O item mais antigo esperando pega qualquer causa de fila parada, inclusive a rodada que "dá certo" sem
+  entregar nada (o Airflow sem resposta, a DAG pausada). Nos logs de 17/11, cada caso chega à raw em até ~20 min.
+- **As dependências pelo `fetch` global:** o `worker.ts` põe um envoltório na frente dele (`api/saude/medidor.ts`), que
+  olha só o host e anota o desfecho, sem mudar a chamada. Assim o `cxhub/` não foi editado. O 401/403 do Cosmos é o token
+  de quem chama, e não conta. Sem nenhuma chamada há 15 min, a rota faz uma sonda só de leitura: a DAG no Airflow (que
+  também diz se ela está pausada) e `select 1` no Data Mart. O Cosmos não tem sonda.
+- **Gravação:** `anotarSaude` guarda em memória; o `worker.ts` grava no fim de cada requisição e de cada tarefa do
+  `after()`, no `ctx.waitUntil`. A falha do registro só vai ao log (`[saude] registro não gravado`). Tabelas no `env.DB`:
+  `saude_estado`, `saude_janela` (blocos de 5 min, apagados depois de 48 h) e `saude_meta`.
+- **Custo:** a rodada do lote e a da cache gravam sempre (~430 rodadas por dia, 2 escritas cada); a dependência com
+  sucesso grava no máximo uma vez por minuto; a leitura lê ~250 linhas.
 
 ## Crons
 
