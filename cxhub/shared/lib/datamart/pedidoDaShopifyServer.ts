@@ -2,11 +2,11 @@ import { consultarDataMart, literalSql } from '../metabase/index';
 import type { ShopifyOrder } from '../../types/index';
 
 /**
- * O pedido da Shopify das marcas que este app lê pelo integrations-gateway (as sem Cosmos e a Rituária,
- * `MarcaNoGateway`), lido no **Data Mart**, pelo Metabase: a reserva do gateway, que só enxerga os últimos 60 dias de
- * pedidos (falta o `read_all_orders` nas lojas). O Data Mart guarda o pedido inteiro, sem janela — em
- * `api.vw_shopify_orders`, com os itens, o frete e os despachos no JSON da própria Shopify. Decisão deste app
- * (`cxhub/ORIGEM.md`, 2026-11-12).
+ * O pedido da Shopify das marcas do CX Hub (todas lidas pelo integrations-gateway, `MarcaNoGateway`), lido no
+ * **Data Mart**, pelo Metabase: a reserva do gateway, que só enxerga os últimos 60 dias de pedidos (falta o
+ * `read_all_orders` nas lojas). O Data Mart guarda o pedido inteiro, sem janela — em `api.vw_shopify_orders`, com os
+ * itens, o frete e os despachos no JSON da própria Shopify. Decisão deste app (`cxhub/ORIGEM.md`, 2026-11-12; as 5
+ * marcas do Cosmos que liam o REST da loja entraram em 2026-11-17).
  *
  * Devolve o mesmo `ShopifyOrder` (REST) que o gateway devolve (`pedidoDoGatewayParaShopify`), com os mesmos campos: a
  * tela e o `adaptShopifyOrder` não mudam. A carga do Data Mart atrasa horas, então o pedido de agora pode ainda não
@@ -18,8 +18,22 @@ import type { ShopifyOrder } from '../../types/index';
 
 const LOG = '[Pedido no Data Mart]';
 
-/** As lojas que o Data Mart guarda com o nome da marca (`gold.fct_shopify_orders.brand`). A Gobeaute não está lá. */
-const MARCAS_NO_DATA_MART: readonly string[] = ['apice', 'yenzah', 'denavita', 'rituaria'];
+/**
+ * A marca do CX Hub → o nome dela no Data Mart (`gold.fct_shopify_orders.brand`). Quase sempre o mesmo slug; a BySamia
+ * é `by_samia` lá. A Gobeaute não está no Data Mart. Conferido em 2026-11-17: as 9 marcas, com o pedido de 90 dias
+ * atrás na `api.vw_shopify_orders` e o nome (`SH592465LC`, `SH39996BS`…) com os mesmos dígitos do `order_number`.
+ */
+const MARCA_NO_DATA_MART: ReadonlyMap<string, string> = new Map([
+    ['lescent', 'lescent'],
+    ['kokeshi', 'kokeshi'],
+    ['bysamia', 'by_samia'],
+    ['aua', 'aua'],
+    ['barbours', 'barbours'],
+    ['rituaria', 'rituaria'],
+    ['apice', 'apice'],
+    ['yenzah', 'yenzah'],
+    ['denavita', 'denavita'],
+]);
 
 export type ResultadoDaBuscaNoDataMart =
     | { tipo: 'achado'; pedido: ShopifyOrder }
@@ -43,9 +57,11 @@ function sqlDoTelefoneNoTiny(marca: string, numero: string): string {
  * O pedido pela marca e pelo número. A visão é lida pela chave (`order_id`), que a `fct_shopify_orders` dá pelo índice
  * de `(brand, order_number)`: a subconsulta fica no WHERE, como nas outras leituras do Data Mart. Na Ápice, a última
  * coluna é o telefone do Tiny. Medido em 2026-11-12 com a chave do CX Hub: de 0,2 a 0,9 s, com o telefone do Tiny.
- * `numero` já vem só com dígitos (no `order_number` vai sem aspas: a coluna é numérica).
+ * `marca` é a do CX Hub (vai ao Data Mart pelo `MARCA_NO_DATA_MART`); `numero` já vem só com dígitos (no `order_number`
+ * vai sem aspas: a coluna é numérica).
  */
 export function sqlDoPedidoDaShopify(marca: string, numero: string): string {
+    const marcaNoDataMart = MARCA_NO_DATA_MART.get(marca) ?? marca;
     return `select o.order_id::text, o.order_name, o.created_at, coalesce(o.order_email, o.customer_email, o.contact_email) as email,
   o.financial_status, o.current_total_price, o.value_total, o.value_shipment,
   o.customer_name, o.customer_phone, o.order_phone,
@@ -53,7 +69,7 @@ export function sqlDoPedidoDaShopify(marca: string, numero: string): string {
   o.line_items_data, o.shipping_lines_data, o.fulfillments_data, o.note_attributes_data,
   ${sqlDoTelefoneNoTiny(marca, numero)} as fone_do_tiny
 from api.vw_shopify_orders o
-where o.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(marca)} and order_number = ${numero} order by order_id desc limit 1)`;
+where o.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(marcaNoDataMart)} and order_number = ${numero} order by order_id desc limit 1)`;
 }
 
 type Objeto = Record<string, unknown>;
@@ -152,7 +168,7 @@ export function pedidoDoDataMartParaShopify(linha: unknown[]): ShopifyOrder | nu
  */
 export async function buscarPedidoDaShopifyNoDataMart(marca: string, orderId: string): Promise<ResultadoDaBuscaNoDataMart> {
     const numero = (orderId ?? '').replace(/\D/g, '');
-    if (!MARCAS_NO_DATA_MART.includes(marca) || !/^\d{1,12}$/.test(numero)) return { tipo: 'nao_encontrado' };
+    if (!MARCA_NO_DATA_MART.has(marca) || !/^\d{1,12}$/.test(numero)) return { tipo: 'nao_encontrado' };
     try {
         const linhas = await consultarDataMart(sqlDoPedidoDaShopify(marca, numero));
         const pedido = linhas[0] ? pedidoDoDataMartParaShopify(linhas[0]) : null;

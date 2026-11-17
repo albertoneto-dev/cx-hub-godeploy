@@ -167,6 +167,11 @@ describe('sqlDoPedidoDaShopify', () => {
         expect(yenzah).toContain('null as fone_do_tiny');
         expect(yenzah).not.toContain('tiny_pedidos');
     });
+
+    it('a marca vai ao Data Mart com o nome de lá: a BySamia é by_samia; as outras, o mesmo slug', () => {
+        expect(sqlDoPedidoDaShopify('bysamia', '39996')).toContain("brand = 'by_samia' and order_number = 39996");
+        expect(sqlDoPedidoDaShopify('barbours', '2545051')).toContain("brand = 'barbours' and order_number = 2545051");
+    });
 });
 
 describe('buscarPedidoDaShopifyNoDataMart', () => {
@@ -187,6 +192,22 @@ describe('buscarPedidoDaShopifyNoDataMart', () => {
 
         expect(r.tipo === 'achado' && r.pedido.name).toBe('#123456');
         expect(consultar.mock.calls[0][0]).toContain("brand = 'rituaria' and order_number = 123456");
+    });
+
+    it.each([
+        ['lescent', 'lescent', 'SH592465LC'],
+        ['kokeshi', 'kokeshi', 'SH1204230KS'],
+        ['bysamia', 'by_samia', 'SH39996BS'],
+        ['aua', 'aua', 'SH6990AU'],
+        ['barbours', 'barbours', 'SH2545051BB'],
+    ])('%s (marca do Cosmos, sem token de loja desde 2026-11-17) também tem a reserva, como %s no Data Mart', async (marca, noDataMart, nome) => {
+        consultar.mockResolvedValue([linha({ 1: nome })]);
+        const numero = nome.replace(/\D/g, '');
+
+        const r = await buscarPedidoDaShopifyNoDataMart(marca, numero);
+
+        expect(r.tipo === 'achado' && r.pedido.name).toBe(nome);
+        expect(consultar.mock.calls[0][0]).toContain(`brand = '${noDataMart}' and order_number = ${numero}`);
     });
 
     it('sem a linha, ou com um pedido de outro número: não encontrado', async () => {

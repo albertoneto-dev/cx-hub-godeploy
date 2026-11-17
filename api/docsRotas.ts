@@ -1701,7 +1701,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/shopify/orders",
     "tag": "Shopify e Data Mart",
     "summary": "Busca o pedido na Shopify da marca",
-    "description": "Lescent, Kokeshi, BySamia, Auá e Barbours: lê o REST orders.json da loja (status=any&name={orderId}) com o token da loja e repassa a resposta. Rituária, Ápice, Yenzah, Denavita e Gobeaute: consulta o integrations-gateway (GraphQL), confere o nome do pedido e devolve no mesmo formato REST, com 0 ou 1 pedido e só os campos que o formulário usa. Não grava nada; cada consulta tem 10 s por padrão (env TIMEOUT).",
+    "description": "Toda marca é lida pelo integrations-gateway (GraphQL), com o nome da marca na URL: o app não usa token de loja da Shopify. Confere o nome do pedido e devolve no formato REST da Shopify, com 0 ou 1 pedido e só os campos que o formulário usa. Não grava nada; cada consulta tem 10 s por padrão (env TIMEOUT).",
     "routeHeader": null,
     "params": [
       {
@@ -1709,7 +1709,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "Marca do CX Hub (sem diferenciar maiúsculas); define se a leitura é pelo REST da loja ou pelo gateway.",
+        "description": "Marca do CX Hub (sem diferenciar maiúsculas); vai minúscula ao gateway, como a loja a ler.",
         "enum": [
           "lescent",
           "kokeshi",
@@ -1728,7 +1728,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "Número do pedido na loja; mande só os dígitos (nas marcas do gateway, SH1629891AP ou #1475900 também servem)."
+        "description": "Número do pedido na loja; mande só os dígitos (nas marcas sem Cosmos, SH1629891AP ou #1475900 também servem)."
       }
     ],
     "requestBody": null,
@@ -1741,7 +1741,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "orders",
             "type": "array",
             "required": true,
-            "description": "Pedidos achados; vazia quando nenhum casa (pelo gateway, 0 ou 1)."
+            "description": "O pedido achado (0 ou 1); vazia quando nenhum casa."
           },
           {
             "name": "orders[].id",
@@ -1813,7 +1813,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "orders[].note_attributes",
             "type": "array",
             "required": true,
-            "description": "Atributos do pedido (name, value); pelo gateway, só o nf_number."
+            "description": "Atributos do pedido (name, value): só o nf_number."
           },
           {
             "name": "orders[].line_items",
@@ -1893,42 +1893,36 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
-        "status": 401,
-        "description": "Só nas marcas do REST: a Shopify recusou o token da loja. Qualquer outro status de erro da Shopify (403, 404, 429, 5xx...) também volta com o mesmo status e {\"error\": \"Shopify API error: <status>\"}.",
-        "example": {
-          "error": "Shopify API error: 401"
-        }
-      },
-      {
         "status": 500,
-        "description": "Falta o token da loja no app (REST). Também {\"error\": \"Shopify gateway key not configured\"} sem a chave do gateway, e {\"error\": \"Failed to fetch from Shopify\"} na falha de rede ou resposta que não é JSON.",
+        "description": "Falta a chave do gateway no app (INTEGRATIONS_GATEWAY_READ_KEY) e o pedido não está no Data Mart. Também {\"error\": \"Failed to fetch from Shopify\"} na falha de rede.",
         "example": {
-          "error": "Shopify token not configured for this brand"
+          "error": "Shopify gateway key not configured"
         }
       },
       {
         "status": 502,
-        "description": "Só nas marcas do gateway: o gateway respondeu erro (inclusive 429 que persiste depois de uma nova tentativa). Também {\"error\": \"Shopify gateway invalid response\"} (200 sem JSON) e {\"error\": \"Shopify gateway query error\"} (GraphQL com errors).",
+        "description": "O gateway respondeu erro (chave recusada, marca que ele não conhece, 429 que persiste depois de uma nova tentativa...) e o pedido não está no Data Mart. Também {\"error\": \"Shopify gateway invalid response\"} (200 sem JSON) e {\"error\": \"Shopify gateway query error\"} (GraphQL com errors).",
         "example": {
           "error": "Shopify gateway error: 401"
         }
       },
       {
         "status": 504,
-        "description": "A Shopify ou o gateway não respondeu no prazo.",
+        "description": "O gateway não respondeu no prazo, e o pedido não está no Data Mart.",
         "example": {
           "error": "Request timeout"
         }
       }
     ],
     "notes": [
-      "Nas marcas do REST, a resposta é repasse da Shopify Admin API 2025-01 (o objeto completo de orders.json, tipo ShopifyOrder em cxhub/shared/types/shopify.ts) e pode trazer mais de um pedido.",
-      "Pelo gateway, só os últimos 60 dias de pedidos aparecem. Nas sem Cosmos, procura SH{n}{sufixo} (AP, YE, DN, GB) e depois só os dígitos; na Rituária, só os dígitos.",
-      "O pedido que o gateway não acha (mais de 60 dias) ou com o gateway fora do ar vem do Data Mart (api.vw_shopify_orders, pela chave do Metabase), no mesmo formato e com os mesmos campos. Vale para Ápice, Yenzah, Denavita e Rituária; a Gobeaute não está no Data Mart. Não achado nos dois é 200 {\"orders\": []}; com o gateway com erro e o pedido fora do Data Mart, vale o erro do gateway.",
-      "Pelo gateway ficam de fora tags, note e os atributos com CPF e endereço; de note_attributes só passa o nf_number.",
-      "No gateway, um 429 tem uma nova tentativa depois do Retry-After (até 3 s).",
-      "No REST, o orderId vai cru no filtro name da Shopify: mande só os dígitos (a tela já manda assim).",
-      "A Rituária só lê pelo gateway aqui; nas rotas do Cosmos ela segue como marca do Cosmos.",
+      "Desde 2026-11-17 o app não usa token de loja da Shopify: Lescent, Kokeshi, BySamia, Auá e Barbours, que liam o REST orders.json da loja, passaram ao gateway. A resposta delas deixou de ser o objeto completo da Shopify (com mais de um pedido às vezes) e ficou como a das outras: 0 ou 1 pedido, com os campos acima.",
+      "O gateway é o da INTEGRATIONS_GATEWAY_URL, ou o de produção quando ela não está cadastrada, e a loja vem do nome da marca: POST {gateway}/shopify/{marca}/graphql.",
+      "Pelo gateway, só os últimos 60 dias de pedidos aparecem. Nas sem Cosmos, procura SH{n}{sufixo} (AP, YE, DN, GB) e depois só os dígitos; nas 6 do Cosmos, só os dígitos.",
+      "O nome do pedido achado é conferido pelos dígitos: o reenvio do Cosmos (SH1452727BB-R-1, um pedido da loja), que o filtro da Shopify devolve junto, não é escolhido no lugar do original.",
+      "O pedido que o gateway não acha (mais de 60 dias) ou com o gateway fora do ar vem do Data Mart (api.vw_shopify_orders, pela chave do Metabase), no mesmo formato e com os mesmos campos. Vale para as 9 marcas com planilha; a Gobeaute não está no Data Mart. Não achado nos dois é 200 {\"orders\": []}; com o gateway com erro e o pedido fora do Data Mart, vale o erro do gateway.",
+      "Ficam de fora tags, note e os atributos com CPF e endereço; de note_attributes só passa o nf_number.",
+      "Um 429 do gateway tem uma nova tentativa depois do Retry-After (até 3 s).",
+      "Nas marcas do Cosmos, o gateway só substitui a busca na Shopify; nas rotas do Cosmos elas seguem como marcas do Cosmos.",
       "Sem header próprio: só a chave gdk_ do gateway do GoDeploy."
     ],
     "sources": [

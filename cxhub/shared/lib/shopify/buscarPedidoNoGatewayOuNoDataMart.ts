@@ -4,10 +4,11 @@ import { buscarPedidoNoGateway, type ResultadoDaBuscaNoGateway } from './buscarP
 import type { MarcaNoGateway } from './gateway';
 
 /**
- * O pedido das marcas que este app lê pelo integrations-gateway (as sem Cosmos e a Rituária, `MarcaNoGateway`): o
- * gateway primeiro — o pedido ao vivo, sem o atraso de carga do Data Mart — e, quando ele não o acha ou falha, o Data
- * Mart (`pedidoDaShopifyServer.ts`). O gateway só enxerga os últimos 60 dias de pedidos; o Data Mart, todos. É o que a
- * rota `/api/shopify/orders` (a tela) e a rota do bot chamam. Decisão deste app (`cxhub/ORIGEM.md`, 2026-11-12).
+ * O pedido de uma marca do CX Hub na Shopify (todas lidas pelo integrations-gateway, `MarcaNoGateway`): o gateway
+ * primeiro — o pedido ao vivo, sem o atraso de carga do Data Mart — e, quando ele não o acha ou falha, o Data Mart
+ * (`pedidoDaShopifyServer.ts`; a Gobeaute não está lá). O gateway só enxerga os últimos 60 dias de pedidos; o Data
+ * Mart, todos. É o que a rota `/api/shopify/orders` (a tela) e a rota do bot chamam. Decisão deste app
+ * (`cxhub/ORIGEM.md`, 2026-11-12).
  *
  * Não achou em nenhum dos dois ⇒ vale o desfecho do gateway: o "não encontrado", ou a falha dele com o status que a
  * rota da tela responde. Com `prazo` (o bot), o Data Mart só é lido se a consulta dele (até 5 s) ainda cabe.

@@ -1,32 +1,44 @@
 import type { ShopifyOrder } from '../../types/index';
-import { ehMarcaSemCosmos, type MarcaSemCosmos } from '../constants';
+import { ehMarcaCxHub, type MarcaCxHub } from '../constants';
 
 /**
- * Leitura do pedido das marcas sem Cosmos (ADR-013) e da Rituária (`MarcaNoGateway`) pelo **integrations-gateway**: uma
- * chave só (`INTEGRATIONS_GATEWAY_READ_KEY`) para as lojas, e a Admin API em **GraphQL** (`POST /shopify/{marca}/graphql`),
- * não o REST `orders.json` que as outras 5 marcas do Cosmos usam. Contrato e testes do gateway em
- * `docs/integrations-gateway-shopify.md`.
+ * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **integrations-gateway**: uma chave só
+ * (`INTEGRATIONS_GATEWAY_READ_KEY`) para as 10 lojas, e a Admin API em **GraphQL** (`POST /shopify/{marca}/graphql`, com
+ * o nome da marca na URL). O app não guarda token de loja nenhum (decisão de 2026-11-17: os tokens das lojas vão ser
+ * trocados, e o gateway já lê todas). Contrato e testes do gateway em `docs/integrations-gateway-shopify.md`.
  *
- * Aqui fica só o que é puro: a consulta, a escolha do pedido certo entre os que o filtro devolve e a tradução do nó
- * GraphQL para o `ShopifyOrder` (REST) que o `adaptShopifyOrder` já lê — o adapter fica como está. A chamada HTTP é do
- * `buscarPedidoNoGateway.ts`, server-only (a chave nunca vai ao navegador), que a rota `/api/shopify/orders` e a rota
+ * Aqui fica só o que é puro: a URL, a consulta, a escolha do pedido certo entre os que o filtro devolve e a tradução do
+ * nó GraphQL para o `ShopifyOrder` (REST) que o `adaptShopifyOrder` já lê — o adapter fica como está. A chamada HTTP é
+ * do `buscarPedidoNoGateway.ts`, server-only (a chave nunca vai ao navegador), que a rota `/api/shopify/orders` e a rota
  * do bot usam.
  */
 
-export const URL_DO_GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+/** A base do gateway de produção: vale quando a `INTEGRATIONS_GATEWAY_URL` não está cadastrada. */
+export const URL_PADRAO_DO_GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
 
 /**
- * As marcas cujo pedido na Shopify é lido pelo gateway: as sem Cosmos (ADR-013) e a Rituária. A Rituária continua marca
- * do Cosmos em todo o resto (pedido, reenvio automático, cancelamento, e no `adaptShopifyOrder`); só a busca na Shopify,
- * que a tela faz quando o Cosmos não acha o pedido, passa por aqui. Decisão do app `cx-hub` do GoDeploy (2026-11-10):
- * ele não tem o token da loja (`SHOPIFY_TOKEN_RITUARIA`), e a chave do gateway já lê a mesma loja (`uyckuc-fw`,
- * conferida em 2026-11-06). Como nas sem Cosmos, o gateway só enxerga os últimos 60 dias de pedidos.
+ * A base do gateway, sem `/` no fim: a `INTEGRATIONS_GATEWAY_URL` quando cadastrada, senão a de produção. Lida a cada
+ * chamada, porque no Worker o `process.env` só é preenchido quando a requisição chega (e um segredo trocado vale sem
+ * deploy).
  */
-export type MarcaNoGateway = MarcaSemCosmos | 'rituaria';
+export function urlDoGateway(): string {
+    const configurada = (process.env.INTEGRATIONS_GATEWAY_URL ?? '').trim().replace(/\/+$/, '');
+    return configurada || URL_PADRAO_DO_GATEWAY;
+}
 
-/** O pedido desta marca na Shopify é lido pelo gateway (`MarcaNoGateway`), e não pelo REST da loja. */
+/**
+ * As marcas cujo pedido na Shopify é lido pelo gateway: todas as do CX Hub, as 6 do Cosmos e as sem Cosmos (ADR-013).
+ * O `{marca}` da URL é o slug do CX Hub: os 10 foram conferidos no gateway em 2026-11-06, e as lojas são as mesmas que
+ * o REST com token lia. As marcas do Cosmos continuam do Cosmos em todo o resto (pedido, reenvio automático,
+ * cancelamento, e no `adaptShopifyOrder`): só a busca na Shopify, que a tela faz quando o Cosmos não acha o pedido,
+ * passa por aqui. O gateway só enxerga os últimos 60 dias de pedidos; o resto vem do Data Mart
+ * (`buscarPedidoNoGatewayOuNoDataMart`).
+ */
+export type MarcaNoGateway = MarcaCxHub;
+
+/** O pedido desta marca na Shopify é lido pelo gateway: vale para toda marca do CX Hub (`MarcaNoGateway`). */
 export function lePedidoPeloGateway(marca: string): marca is MarcaNoGateway {
-    return ehMarcaSemCosmos(marca) || marca === 'rituaria';
+    return ehMarcaCxHub(marca);
 }
 
 /**

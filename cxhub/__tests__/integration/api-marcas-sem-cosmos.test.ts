@@ -89,16 +89,15 @@ describe('rotas do Cosmos', () => {
     });
 });
 
+// As 6 marcas do Cosmos, que também passam pelo gateway desde 2026-11-17, estão em `api-shopify-orders.test.ts`.
 describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integrations-gateway', () => {
     type GetFn = (req: import('next/server').NextRequest) => Promise<import('next/server').NextResponse>;
     let GET: GetFn;
     const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
 
     beforeEach(async () => {
-        // O mapa das lojas REST lê o token no carregamento do módulo; a chave do gateway é lida a cada chamada.
-        vi.resetModules();
+        // A chave do gateway é lida a cada chamada.
         vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_chave_de_teste');
-        vi.stubEnv('SHOPIFY_TOKEN_LESCENT', 'token-lescent');
         GET = (await import('../../app/api/shopify/orders/route')).GET;
     });
 
@@ -300,7 +299,7 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integr
         expect(res.status).toBe(504);
     });
 
-    it('Rituária (só neste app, sem o token da loja): pelo gateway, buscando só os dígitos, e nunca pelo REST', async () => {
+    it('Rituária (marca do Cosmos, sem token de loja): pelo gateway, buscando só os dígitos, e nunca pelo REST', async () => {
         vi.stubEnv('SHOPIFY_TOKEN_RITUARIA', 'shpat_que_nao_deve_ser_usado');
         const rj = {
             name: 'Ana Teste', address1: 'Rua B, 20', address2: 'Centro', city: 'Rio de Janeiro', zip: '20010-000',
@@ -333,16 +332,5 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integr
 
         expect(res.status).toBe(500);
         expect(fetchSpy).not.toHaveBeenCalled();
-    });
-
-    it('as outras 5 marcas do Cosmos seguem no REST da loja, com o token delas e uma busca só', async () => {
-        const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({ orders: [{ id: 1 }] }), { status: 200 }));
-
-        const res = await GET(createRequest('http://localhost/api/shopify/orders?brand=lescent&orderId=220183'));
-
-        expect(await res.json()).toEqual({ orders: [{ id: 1 }] });
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
-        expect(String(fetchSpy.mock.calls[0][0])).toBe('https://568499-ef.myshopify.com/admin/api/2025-01/orders.json?status=any&name=220183');
-        expect((fetchSpy.mock.calls[0][1]?.headers as Record<string, string>)['X-Shopify-Access-Token']).toBe('token-lescent');
     });
 });

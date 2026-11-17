@@ -62,8 +62,8 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
 - `shared/lib/alerts/gchatAlert.ts` (e o comentário de `formatAlert.ts`): o aviso vai ao Slack
   (`SLACK_ALERT_WEBHOOK_URL`, com `&`, `<` e `>` escapados), e a janela é `ALERT_THROTTLE_MS`; o texto é o mesmo.
 - Env lida na carga do módulo passou a ser lida na chamada (no Worker o `process.env` só existe depois que a
-  requisição chega): `app/api/shopify/orders/route.ts` (os `SHOPIFY_TOKEN_*`), `shared/lib/cosmos/server.ts`
-  (`COSMOS_FETCH_BUDGET_MS`) e `gchatAlert.ts`.
+  requisição chega): `shared/lib/cosmos/server.ts` (`COSMOS_FETCH_BUDGET_MS`) e `gchatAlert.ts`. O
+  `app/api/shopify/orders/route.ts` lia assim os `SHOPIFY_TOKEN_*`, até deixar de usá-los (2026-11-17, abaixo).
 - `cache: 'no-store'` saiu das chamadas de servidor (o runtime do Worker pode recusar a opção, e não há o cache do Next
   aqui): `processResend.ts`, `formDataApi.ts`, `metabase/client.ts`, `fila/client.ts`, `products/[id]/route.ts`,
   `googleAuth.ts`, `cosmos/http.ts`, `cosmos/server.ts` e `sheets/server.ts`. Os clientes de navegador que os barrels
@@ -81,7 +81,8 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `shared/lib/shopify/gateway.ts` ganhou `MarcaNoGateway` e `lePedidoPeloGateway` (as sem Cosmos e a Rituária), que
   `app/api/shopify/orders/route.ts` usa no lugar do `ehMarcaSemCosmos`, e a Rituária saiu do `SHOPIFY_STORES`. O
   `buscarPedidoNoGateway.ts` e o `nomeDoPedido.ts` aceitam a `MarcaNoGateway`; na Rituária, a busca é só pelos dígitos.
-  Ela continua marca do Cosmos em todo o resto, inclusive no `adaptShopifyOrder` e no bot.
+  Ela continua marca do Cosmos em todo o resto, inclusive no `adaptShopifyOrder` e no bot. Em 2026-11-17 as outras 5
+  marcas do Cosmos seguiram o mesmo caminho (abaixo).
 - O lote da fila roda a cada 10 min (2026-11-11), e não a cada 20 como diz o `docs/fila-cxhub.md` de lá. As mensagens
   do CX Hub que prometem "até 20 min" (`NO_PROXIMO_LOTE` e as de sucesso do registro) ficaram como estão: são resposta
   de sucesso, que o contrato manda manter igual à da Vercel, e continuam verdadeiras. Nenhum arquivo daqui mudou por isso.
@@ -149,6 +150,30 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
 
   Yenzah e Denavita ficaram como estavam: a única prova delas é a Intelipost, e o atraso de ~1 h até a remessa chegar ao
   gold também as bloqueia (a NF fica `ausente`, e o registro, recusado, até lá).
+- Nenhum token de loja da Shopify (2026-11-17). O usuário pediu: "o cx-hub não deve mais usar nenhuma chave da Shopify
+  [...] as chaves vão ser trocadas [...] a INTEGRATIONS_GATEWAY_URL já resolve". Lescent, Kokeshi, BySamia, Auá e
+  Barbours liam o REST `orders.json` da loja com os `SHOPIFY_TOKEN_*`. Passaram ao integrations-gateway, como a Rituária
+  e as sem Cosmos. O gateway conhece as 10 lojas pelo slug do CX Hub (conferido em 2026-11-06, com os mesmos domínios do
+  `SHOPIFY_STORES`). O que mudou:
+  - `shared/lib/shopify/gateway.ts`: `MarcaNoGateway` é a `MarcaCxHub`, e `lePedidoPeloGateway` é o `ehMarcaCxHub`. A
+    URL vem de `urlDoGateway()`: a `INTEGRATIONS_GATEWAY_URL` quando cadastrada, senão a de produção
+    (`URL_PADRAO_DO_GATEWAY`, o antigo `URL_DO_GATEWAY`), lida a cada chamada;
+  - `app/api/shopify/orders/route.ts`: sem o `SHOPIFY_STORES` e sem o REST. Marca fora do CX Hub continua `400 Unknown
+    brand`. Nas 5 marcas, a resposta passou a ter 0 ou 1 pedido, só com os campos que o `adaptShopifyOrder` lê (a cópia
+    dele na Central de Tickets, o `cxAdaptarPedidoShopify`, lê os mesmos), e o erro passou a ser o do gateway (`502`,
+    não o status da Shopify repassado). O `escolherPedido` confere os dígitos do nome, então o reenvio do Cosmos
+    (`SH…-R-1`), que o filtro `name=` do REST devolvia primeiro, deixa de ser candidato;
+  - `shared/lib/shopify/nomeDoPedido.ts`: nas 6 do Cosmos a busca é só pelos dígitos, como o `name=` do REST fazia.
+    Mudou só o comentário;
+  - `shared/lib/datamart/pedidoDaShopifyServer.ts`: a reserva vale para as 9 marcas com planilha. A lista virou o mapa
+    `MARCA_NO_DATA_MART`, porque a BySamia é `by_samia` na `gold.fct_shopify_orders`. Conferido em 2026-11-17: as 5
+    marcas novas estão lá, desde 2024 ou 2025, com o pedido de 90 dias atrás na `api.vw_shopify_orders` e o nome
+    (`SH592465LC`, `SH39996BS`…) com os dígitos do `order_number`. Sem isso, o pedido de mais de 60 dias dessas marcas,
+    que o REST achava, deixaria de ser achado.
+
+  Publicado como v15. Os 5 `SHOPIFY_TOKEN_*` foram apagados do app no GoDeploy logo depois, a pedido do usuário, e as
+  13 chamadas de conferência ao `/api/shopify/orders` no ar (um pedido de 3 dias por marca do Cosmos e a Ápice, pelo
+  gateway; um de 95 dias por marca nova, pelo Data Mart; e uma marca inválida) deram o mesmo resultado sem eles.
 
 ## Testes
 
@@ -189,6 +214,14 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
 
   Mudaram: os testes do `ausente` usam um pedido do Tiny sem o id da NF (com o id, agora é `nf_fora_do_data_mart`), e as
   fixtures da NF `desconhecida` e do CD sem conferência levam o motivo.
+- Sem token de loja (2026-11-17):
+  - `integration/api-shopify-orders` foi reescrito: testava o REST com os `SHOPIFY_TOKEN_*`, e agora testa as 6 do
+    Cosmos pelo gateway (o nome da marca na URL, só os dígitos, nenhum token de loja nem `myshopify.com` nas chamadas
+    mesmo com os tokens no ambiente, o reenvio `SH…-R-1` que não é escolhido, a `INTEGRATIONS_GATEWAY_URL`, a reserva
+    com `by_samia`, o 500 sem a chave, o 502 do gateway e os 400);
+  - `integration/api-marcas-sem-cosmos`: saiu o caso "as outras 5 marcas do Cosmos seguem no REST", e o `beforeEach`
+    não estuba mais o token;
+  - `shared/pedidoDaShopifyNoDataMart`: as 5 marcas novas na reserva, e a BySamia como `by_samia` no SQL.
 
 ## Atualizar para um commit novo do CX Hub
 

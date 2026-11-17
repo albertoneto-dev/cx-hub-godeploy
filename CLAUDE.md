@@ -84,8 +84,11 @@ O contrato é o da Vercel: os mesmos caminhos, métodos, corpos e respostas de s
 - **Planilha junto da fila:** cada registro grava a linha na planilha da marca junto com a fila (ADR-010).
 - **Marcas sem Cosmos:** Ápice, Yenzah e Denavita leem a Shopify pelo integrations-gateway, que só enxerga os últimos 60
   dias. A Gobeaute registra só na fila. As marcas que o bot aceita vêm da rota dados (ADR-015).
-- **Rituária (decisão deste app, 2026-11-10):** no `/api/shopify/orders`, o pedido dela vem pelo integrations-gateway,
-  porque o app não tem o `SHOPIFY_TOKEN_RITUARIA`. Em todo o resto, inclusive no bot, ela continua no Cosmos.
+- **Nenhuma chave da Shopify (decisão de 2026-11-17):** o app não usa token de loja. No `/api/shopify/orders`, o pedido
+  de **toda** marca, inclusive as 6 do Cosmos, vem pelo integrations-gateway, com o nome da marca na URL
+  (`INTEGRATIONS_GATEWAY_URL`, ou o gateway de produção sem ela) e o Data Mart de reserva para o que passa de 60 dias.
+  Não volte a pôr `SHOPIFY_TOKEN_*` nem chamada a `*.myshopify.com`. No Cosmos e no bot, as marcas do Cosmos continuam
+  no Cosmos.
 - **Bot de reenvio (`/api/reenvio/bot`):**
   - pede a `gdk_` **e** o `x-bot-secret`. O login do GoDeploy deixa entrar qualquer pessoa do grupo, e esta rota cria
     pedido no Cosmos;

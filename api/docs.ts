@@ -394,12 +394,14 @@ const GUIA_HTML = `
   <div class="tabela-rolavel"><table class="marca">
     <thead><tr><th>Assunto</th><th>O que muda</th></tr></thead>
     <tbody>
-      <tr><td>Rituária no <code>/api/shopify/orders</code></td><td>O pedido vem do integrations-gateway, como o das marcas
-        sem Cosmos, e não do token da loja. No Cosmos e no bot, a Rituária segue igual.</td></tr>
-      <tr><td>Pedido com mais de 60 dias no <code>/api/shopify/orders</code> e no bot (Ápice, Yenzah, Denavita e
-        Rituária)</td><td>O integrations-gateway só enxerga os <strong>últimos 60 dias</strong>. O pedido que ele não acha,
-        ou com ele fora do ar, vem do <strong>Data Mart</strong>, no mesmo formato. Na Vercel, ele voltava como não
-        encontrado. A Gobeaute não está no Data Mart e continua com o limite.</td></tr>
+      <tr><td>Toda marca no <code>/api/shopify/orders</code></td><td>O pedido vem do <strong>integrations-gateway</strong>,
+        com o nome da marca, e não do token da loja: o app não usa chave da Shopify. Nas 6 marcas do Cosmos, a resposta
+        traz <strong>0 ou 1 pedido</strong> e só os campos do formulário, como nas sem Cosmos (antes, o objeto completo da
+        Shopify). No Cosmos e no bot, nada muda.</td></tr>
+      <tr><td>Pedido com mais de 60 dias no <code>/api/shopify/orders</code> e no bot</td><td>O integrations-gateway só
+        enxerga os <strong>últimos 60 dias</strong>. O pedido que ele não acha, ou com ele fora do ar, vem do
+        <strong>Data Mart</strong>, no mesmo formato. Na Vercel, o das sem Cosmos voltava como não encontrado. A Gobeaute
+        não está no Data Mart e continua com o limite.</td></tr>
       <tr><td>Reenvio e reembolso da Ápice, Yenzah e Denavita (<code>/api/sheets/append</code>, <code>/api/refund/submit</code>
         e o bot)</td><td>O servidor confere o pedido no <strong>Data Mart</strong> (ADR-018). A NF de venda, o CD de origem e
         o valor da NF de reenvio vêm de lá, no lugar dos que vieram. Pedido que o Data Mart <strong>prova não
@@ -530,10 +532,10 @@ const GUIA_HTML = `
         <td>O <code>BOT_RESEND_SECRET</code> não está cadastrado no app</td><td>Cadastre o segredo no GoDeploy</td></tr>
       <tr><td>O bot estoura o tempo</td><td>O timeout do cliente é menor que 150 s</td><td>Aumente para pelo menos 160 s</td></tr>
       <tr><td><code>404 { "code": "NOT_FOUND" }</code></td><td>Caminho digitado errado</td><td>Confira na lista de endpoints ao lado</td></tr>
-      <tr><td>Pedido da Ápice, Yenzah, Denavita ou Rituária não encontrado no <code>/api/shopify/orders</code></td><td>Não
-        está na Shopify (60 dias) nem no Data Mart: número errado, pedido de outra marca, ou pedido de agora com o gateway
-        fora do ar (o Data Mart leva horas para receber)</td><td>Confira o número e a marca; na Rituária, busque também pelo
-        Cosmos (<code>/api/cosmos/orders</code>)</td></tr>
+      <tr><td>Pedido não encontrado no <code>/api/shopify/orders</code></td><td>Não está na Shopify (60 dias) nem no Data
+        Mart: número errado, pedido de outra marca, ou pedido de agora com o gateway fora do ar (o Data Mart leva horas
+        para receber)</td><td>Confira o número e a marca; nas marcas do Cosmos, busque também pelo Cosmos
+        (<code>/api/cosmos/orders</code>)</td></tr>
       <tr><td><code>422</code> "não tem NF de venda" no reenvio ou no reembolso da Ápice, Yenzah ou Denavita</td><td>O Data
         Mart prova que o pedido não foi faturado: na Ápice, o pedido do Tiny está ativo e sem NF, ou a NF foi cancelada,
         ou o pedido não aparece em lugar nenhum; na Yenzah e na Denavita, a Intelipost ainda não tem a NF (ela chega lá

@@ -49,7 +49,7 @@ não é `gdk_`.
 | GET | `/api/cosmos/resends?brand=&orderId=` | Os reenvios (`-R-n`) de um pedido |
 | PATCH | `/api/cosmos/resends/{id}?brand=` | Edita endereço, transportadora ou cliente de um reenvio; endereço novo vai à gold pela fila, depois da resposta |
 | POST | `/api/cosmos/resends/{id}/cancel?brand=` | Cancela um reenvio no Cosmos (sem volta); o cancelamento vai à gold pela fila |
-| GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify: pelo REST da loja (Lescent, Kokeshi, BySamia, Auá, Barbours) ou pelo integrations-gateway (Rituária, Ápice, Yenzah, Denavita, Gobeaute) |
+| GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify, pelo integrations-gateway com o nome da marca (as 10), e o Data Mart de reserva. Sem token de loja |
 | GET | `/api/datamart/products?brand=apice\|yenzah\|denavita` | O catálogo de produtos avulsos da marca no Data Mart, no formato dos produtos do Cosmos: o mimo e a troca do reenvio das marcas sem Cosmos. Guardado por 6 h em memória |
 | GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, `ausente` ou `desconhecida`, esta com o `nfMotivo`: `sem_resposta`, `nf_fora_do_data_mart` ou `pedido_cancelado_no_tiny`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
@@ -76,14 +76,25 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   não existe responde `404 { code: "NOT_FOUND" }`, e método errado responde `405 { code: "METHOD_NOT_ALLOWED" }` com
   `Allow`.
 - Os avisos que iam ao Google Chat vão ao Slack (`SLACK_ALERT_WEBHOOK_URL`, o mesmo canal da fila), com o mesmo texto.
-- A Rituária lê a Shopify pelo integrations-gateway, sem `SHOPIFY_TOKEN_RITUARIA` (o app não tem o token da loja). É o
-  fallback da tela quando o Cosmos não acha o pedido. No resto, inclusive no bot, ela segue no Cosmos.
+- **Nenhum token de loja da Shopify (2026-11-17).** O `/api/shopify/orders` lê toda marca pelo integrations-gateway:
+  `POST {INTEGRATIONS_GATEWAY_URL}/shopify/{marca}/graphql`, com a `INTEGRATIONS_GATEWAY_READ_KEY`. Sem a
+  `INTEGRATIONS_GATEWAY_URL` cadastrada, vale o gateway de produção. Na Vercel, Lescent, Kokeshi, BySamia, Auá, Barbours
+  e Rituária liam o REST `orders.json` da loja com os `SHOPIFY_TOKEN_*`. Aqui a Rituária passou ao gateway em
+  2026-11-10, e as outras 5 em 2026-11-17, porque os tokens das lojas vão ser trocados. O que muda para quem chama, nas
+  6 marcas do Cosmos:
+  - a resposta traz 0 ou 1 pedido e só os campos que o formulário usa (antes, o objeto completo da Shopify, às vezes com
+    o reenvio do Cosmos `SH…-R-1` junto e primeiro). O nome é conferido pelos dígitos, então o reenvio não é escolhido no
+    lugar do original;
+  - o erro do gateway vira `502 { "error": "Shopify gateway error: <status>" }`, e não o status da Shopify repassado;
+  - só os últimos 60 dias vêm da Shopify; o resto vem do Data Mart (abaixo).
+
+  No Cosmos e no bot, as marcas do Cosmos seguem iguais. Código: `cxhub/shared/lib/shopify/gateway.ts`.
 - O pedido que o integrations-gateway não acha (ele só enxerga os últimos 60 dias) ou com ele fora do ar vem do Data
-  Mart (`api.vw_shopify_orders`, pela chave do Metabase), no mesmo formato: no `/api/shopify/orders` (Ápice, Yenzah,
-  Denavita e Rituária) e no bot (as sem Cosmos). Na Ápice, quando a Shopify não tem o telefone, vale o do Tiny. Na
-  Vercel, o pedido de mais de 60 dias voltava como não encontrado e a
-  agente não conseguia pedir o reenvio (o #1607929 da Ápice, em 2026-11-12). A Gobeaute não está no Data Mart e continua
-  com o limite. Código: `cxhub/shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart.ts` e
+  Mart (`api.vw_shopify_orders`, pela chave do Metabase), no mesmo formato: no `/api/shopify/orders` (as 9 marcas com
+  planilha; a BySamia é `by_samia` lá) e no bot (as sem Cosmos). Na Ápice, quando a Shopify não tem o telefone, vale o
+  do Tiny. Na Vercel, o pedido de mais de 60 dias das sem Cosmos voltava como não encontrado e a agente não conseguia
+  pedir o reenvio (o #1607929 da Ápice, em 2026-11-12). A Gobeaute não está no Data Mart e continua com o limite.
+  Código: `cxhub/shared/lib/shopify/buscarPedidoNoGatewayOuNoDataMart.ts` e
   `cxhub/shared/lib/datamart/pedidoDaShopifyServer.ts`.
 - **ADR-018 (do `11cebff`, o último commit do repositório antigo do CX Hub, encerrado em 2026-11-13; a Vercel não a
   tem):** o reenvio e o reembolso da Ápice, da Yenzah e da Denavita conferem o pedido no Data Mart, em toda entrada

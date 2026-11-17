@@ -8,8 +8,10 @@ import type { MarcaNoGateway } from './gateway';
  * histórico da Denavita). A agente pode digitar `SH…AP`, `#n` ou só o número: os dígitos decidem. Sem dígito nenhum,
  * não há o que buscar.
  *
- * Na Rituária (`MarcaNoGateway`), só os dígitos: é o que a tela manda (o `sanitizeOrderId` tira o resto), a mesma
- * busca que o `name=` do REST da loja fazia, e o `escolherPedido` confere os dígitos do nome achado.
+ * Nas 6 marcas do Cosmos (que também passam pelo gateway, `MarcaNoGateway`), só os dígitos: é o que a tela manda (o
+ * `sanitizeOrderId` tira o resto), a mesma busca que o `name=` do REST da loja fazia, e o `escolherPedido` confere os
+ * dígitos do nome achado. Assim o reenvio do Cosmos (`SH1452727RT-R-1`, um pedido da loja desde 01/11), que o filtro
+ * também devolve, não é escolhido no lugar do original: os dígitos dele são outros.
  *
  * ⚠️ Na Denavita, o número que a Intelipost mostra é o do **Bling**, não o da loja: digitado aqui, ele pode casar com
  * outro pedido `#n`. A tela mostra o nome do pedido achado para a agente conferir.
