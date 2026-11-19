@@ -33,7 +33,7 @@ const CONTEXTO: ContextoDoPedido = {
     marca: 'apice',
     numero: '1731559',
     pedido: 'SH1731559AP',
-    nf: { estado: 'achada', numero: '10157987' },
+    nf: { estado: 'achada', numero: '10157987', origem: 'datamart' },
     cd: { valor: 'CD RJ', conferido: true },
     statusSugerido: null,
     avisos: [],

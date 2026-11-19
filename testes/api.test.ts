@@ -307,6 +307,7 @@ describe("order-context pelo worker.fetch (ADR-018)", () => {
       order: "SH5478YE",
       nf: "777001",
       nfStatus: "achada",
+      nfOrigem: "datamart",
       cd: "CD ES",
       statusSugerido: "Pedido não entregue (em trânsito)",
       avisos: [],

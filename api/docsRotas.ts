@@ -1,8 +1,9 @@
 // A especificação de cada endpoint que a página /docs (api/docs.ts) mostra no estilo Swagger: parâmetros, corpo da
 // requisição e respostas por status, com exemplos. Levantada do código das rotas (cxhub/app/api, servidor/) em
 // 2026-11-11, com o CX Hub no commit 8a1b1a9, revista em 2026-11-13 para o 11cebff (ADR-018: o order-context e a
-// conferência no Data Mart) e em 2026-11-16 (a NF da Ápice só é recusada com prova, e o nfMotivo); "sources" diz de
-// onde veio cada uma, para conferir quando a rota mudar.
+// conferência no Data Mart), em 2026-11-16 (a NF da Ápice só é recusada com prova, e o nfMotivo) e em 2026-11-19 (a NF
+// fora do Data Mart: o metacampo da Shopify e a Intelipost ao vivo, e o nfOrigem); "sources" diz de onde veio cada uma,
+// para conferir quando a rota mudar.
 // Os exemplos são fictícios: nenhum dado de cliente, token ou segredo. O testes/docs.test.ts cobra que toda rota do
 // roteador e da fila esteja aqui, e que nada aqui seja rota que não existe.
 
@@ -1814,7 +1815,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "orders[].note_attributes",
             "type": "array",
             "required": true,
-            "description": "Atributos do pedido (name, value): só o nf_number."
+            "description": "Atributos do pedido (name, value): só o nf_number, a NF de venda sem os zeros à esquerda. Ela vem do metacampo custom.nf_numero do pedido, onde as lojas a guardam (100% dos despachados das 6 marcas do Cosmos e da Yenzah em 19/11/2026; nenhum da Ápice, da Denavita e da Gobeaute); o atributo nf_number da Shopify fica de reserva. Vazio quando o pedido não tem NF."
           },
           {
             "name": "orders[].line_items",
@@ -1921,7 +1922,7 @@ export const ENDPOINTS: Endpoint[] = [
       "Pelo gateway, só os últimos 60 dias de pedidos aparecem. Nas sem Cosmos, procura SH{n}{sufixo} (AP, YE, DN, GB) e depois só os dígitos; nas 6 do Cosmos, só os dígitos.",
       "O nome do pedido achado é conferido pelos dígitos: o reenvio do Cosmos (SH1452727BB-R-1, um pedido da loja), que o filtro da Shopify devolve junto, não é escolhido no lugar do original.",
       "O pedido que o gateway não acha (mais de 60 dias) ou com o gateway fora do ar vem do Data Mart (api.vw_shopify_orders, pela chave do Metabase), no mesmo formato e com os mesmos campos. Vale para as 9 marcas com planilha; a Gobeaute não está no Data Mart. Não achado nos dois é 200 {\"orders\": []}; com o gateway com erro e o pedido fora do Data Mart, vale o erro do gateway.",
-      "Ficam de fora tags, note e os atributos com CPF e endereço; de note_attributes só passa o nf_number.",
+      "Ficam de fora tags, note e os atributos com CPF e endereço; de note_attributes só passa o nf_number, que é a NF do metacampo custom.nf_numero (2026-11-19: o atributo nf_number não existe em nenhum pedido consultado). O reenvio SH…-R-1, que vem junto no filtro com a NF dele, não é escolhido.",
       "Um 429 do gateway tem uma nova tentativa depois do Retry-After (até 3 s).",
       "Nas marcas do Cosmos, o gateway só substitui a busca na Shopify; nas rotas do Cosmos elas seguem como marcas do Cosmos.",
       "Sem header próprio: só a chave gdk_ do gateway do GoDeploy."
@@ -2086,7 +2087,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/datamart/order-context",
     "tag": "Shopify e Data Mart",
     "summary": "O que o servidor vai gravar para o pedido de uma marca sem Cosmos: NF, CD, status sugerido, avisos e kits",
-    "description": "Confere o token no Cosmos (na org da Lescent, como o catálogo) e lê o pedido no Data Mart pelo Metabase, com as mesmas consultas e regras que o /api/sheets/append, o /api/refund/submit e o /api/reenvio/bot usam ao gravar (ADR-018): a Intelipost, a Shopify, os itens explodidos e, na Ápice, o pedido e a NF no Tiny. Serve para a tela mostrar, antes de enviar, a NF e o CD que vão para a planilha, e para avisar quando o pedido não tem NF de venda (o registro seria recusado com 422) ou quando a NF ainda não dá para conferir (o registro grava a NF que vier, com a nota do motivo). A leitura tem teto de 12 s; o que não for conferido volta em naoConferidos, ainda com 200, e o motivo da NF, em nfMotivo.",
+    "description": "Confere o token no Cosmos (na org da Lescent, como o catálogo) e lê o pedido no Data Mart pelo Metabase, com as mesmas consultas e regras que o /api/sheets/append, o /api/refund/submit e o /api/reenvio/bot usam ao gravar (ADR-018): a Intelipost, a Shopify, os itens explodidos e, na Ápice, o pedido e a NF no Tiny. Sem a NF no Data Mart, procura fora dele antes de concluir: o metacampo custom.nf_numero da Shopify (só na Yenzah, das três) e a Intelipost ao vivo, as duas pelo integrations-gateway. Serve para a tela mostrar, antes de enviar, a NF e o CD que vão para a planilha, e para avisar quando o pedido não tem NF de venda (o registro seria recusado com 422) ou quando a NF ainda não dá para conferir (o registro grava a NF que vier, com a nota do motivo). A leitura tem teto de 12 s; o que não for conferido volta em naoConferidos, ainda com 200, o motivo da NF, em nfMotivo, e onde a NF foi achada, em nfOrigem.",
     "routeHeader": "x-cosmos-token",
     "params": [
       {
@@ -2131,13 +2132,13 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "nf",
             "type": "string | null",
             "required": true,
-            "description": "A NF de venda que o servidor grava: a da primeira remessa da Intelipost; na Ápice, sem ela, a NF não cancelada do pedido ativo no Tiny (a de um pedido cancelado nunca vale). null quando não há (ausente) ou não se sabe (desconhecida)."
+            "description": "A NF de venda que o servidor grava, sem os zeros à esquerda: a da primeira remessa da Intelipost no Data Mart; na Ápice, sem ela, a NF não cancelada do pedido ativo no Tiny (a de um pedido cancelado nunca vale); sem as duas, a do metacampo custom.nf_numero da Shopify (Yenzah) ou a da Intelipost ao vivo. null quando não há (ausente) ou não se sabe (desconhecida)."
           },
           {
             "name": "nfStatus",
             "type": "string",
             "required": true,
-            "description": "achada: há NF de venda. ausente: o Data Mart prova que o pedido não foi faturado (na Ápice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum; na Yenzah e na Denavita: a Intelipost respondeu sem a NF), e o registro do reenvio ou do reembolso deste pedido é recusado com 422 (no bot, reason ORDER_NOT_INVOICED). desconhecida: não dá para afirmar, e o motivo vem em nfMotivo; o registro grava a NF que vier, com a nota do motivo, e ao gravar o servidor confere de novo.",
+            "description": "achada: há NF de venda, e nfOrigem diz onde. ausente: há prova de que o pedido não foi faturado, e o registro do reenvio ou do reembolso deste pedido é recusado com 422 (no bot, reason ORDER_NOT_INVOICED). A prova é o Data Mart (na Ápice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum; na Yenzah e na Denavita: a Intelipost sem a NF) junto das fontes de fora dele respondendo sem NF: a Intelipost ao vivo e, na Yenzah, o metacampo da Shopify. desconhecida: não dá para afirmar, e o motivo vem em nfMotivo; o registro grava a NF que vier, com a nota do motivo, e ao gravar o servidor confere de novo.",
             "enum": [
               "achada",
               "ausente",
@@ -2145,10 +2146,21 @@ export const ENDPOINTS: Endpoint[] = [
             ]
           },
           {
+            "name": "nfOrigem",
+            "type": "string",
+            "required": false,
+            "description": "Só com nfStatus achada: onde a NF foi achada. datamart: a Intelipost do gold ou, na Ápice, o Tiny. shopify: o metacampo custom.nf_numero do pedido (das três, só a Yenzah o preenche). intelipost: a Intelipost ao vivo, na hora entre a NF sair e o envio chegar ao Data Mart. As fontes de fora só são lidas sem a NF no Data Mart, nessa ordem.",
+            "enum": [
+              "datamart",
+              "shopify",
+              "intelipost"
+            ]
+          },
+          {
             "name": "nfMotivo",
             "type": "string",
             "required": false,
-            "description": "Só com nfStatus desconhecida: por que a NF não deu para conferir. sem_resposta: o Data Mart não respondeu a tempo. nf_fora_do_data_mart: o pedido da Ápice já tem a NF emitida no Tiny, e ela ainda não chegou ao Data Mart (a tabela de NFs chega em lotes, horas depois, e a Intelipost, cerca de 1 h depois); a NF já está na Intelipost. pedido_cancelado_no_tiny: o Tiny só tem o pedido da Ápice cancelado, que pode ter sido refeito em outro CD; o cd fica null, a menos que a Intelipost dê a UF. Nos três, a tela pede a NF, e o registro a grava com a nota do motivo nas observações, como [NF NÃO CONFERIDA: AINDA FORA DO DATA MART] ou [CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY].",
+            "description": "Só com nfStatus desconhecida: por que a NF não deu para conferir. sem_resposta: o Data Mart não respondeu a tempo, ou não tinha a NF e a Shopify ou a Intelipost ao vivo não responderam (sem a chave do gateway, chave recusada, gateway fora ou passou do prazo); neste caso a nota é [NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]. nf_fora_do_data_mart: o pedido da Ápice já tem a NF emitida no Tiny, e ela ainda não chegou ao Data Mart (a tabela de NFs chega em lotes, horas depois, e a Intelipost, cerca de 1 h depois); a NF já está na Intelipost. pedido_cancelado_no_tiny: o Tiny só tem o pedido da Ápice cancelado, que pode ter sido refeito em outro CD; o cd fica null, a menos que a Intelipost dê a UF. Nos três, a tela pede a NF, e o registro a grava com a nota do motivo nas observações, como [NF NÃO CONFERIDA: AINDA FORA DO DATA MART] ou [CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY].",
             "enum": [
               "sem_resposta",
               "nf_fora_do_data_mart",
@@ -2176,7 +2188,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "avisos",
             "type": "array",
             "required": true,
-            "description": "Frases para a tela: pedido sem NF, NF já emitida no Tiny que ainda não chegou ao Data Mart, pedido cancelado no Tiny (pode ter sido refeito em outro CD), pedido em mais de um CD ou mais de uma vez no Tiny, mais de uma remessa na Intelipost (pode já existir um reenvio), pedido cancelado ou fora da Shopify, kit sem composição, e o que o Data Mart não respondeu a tempo."
+            "description": "Frases para a tela: pedido sem NF, NF já emitida no Tiny que ainda não chegou ao Data Mart, NF fora do Data Mart que a Shopify ou a Intelipost ao vivo não confirmaram a tempo, pedido cancelado no Tiny (pode ter sido refeito em outro CD), pedido em mais de um CD ou mais de uma vez no Tiny, mais de uma remessa na Intelipost (pode já existir um reenvio), pedido cancelado ou fora da Shopify, kit sem composição, e o que o Data Mart não respondeu a tempo."
           },
           {
             "name": "kits",
@@ -2206,7 +2218,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "naoConferidos",
             "type": "array",
             "required": true,
-            "description": "O que não foi conferido no Data Mart: \"nf\", \"cd\" ou os dois. Vazio quando tudo foi conferido. O motivo da NF vem em nfMotivo; só o que ficou sem resposta ganha o aviso \"O Data Mart não respondeu a tempo…\"."
+            "description": "O que não foi conferido: \"nf\", \"cd\" ou os dois. Vazio quando tudo foi conferido. O motivo da NF vem em nfMotivo; só o que o Data Mart deixou sem resposta ganha o aviso \"O Data Mart não respondeu a tempo…\" (a NF que só a Shopify ou a Intelipost ao vivo deixaram sem resposta tem o aviso dela)."
           }
         ],
         "example": {
@@ -2214,6 +2226,7 @@ export const ENDPOINTS: Endpoint[] = [
           "order": "SH1234567AP",
           "nf": "10000001",
           "nfStatus": "achada",
+          "nfOrigem": "datamart",
           "cd": "CD ES",
           "statusSugerido": "Pedido não entregue (em trânsito)",
           "avisos": [],
@@ -2237,7 +2250,25 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "A NF ainda não dá para conferir, sem ser falha: o pedido da Ápice foi cancelado no ES e refeito no RJ, e a NF do RJ, já emitida no Tiny, ainda não chegou ao Data Mart. O registro deste pedido não é recusado: grava a NF que vier, com a nota [NF NÃO CONFERIDA: AINDA FORA DO DATA MART]. Com nfMotivo pedido_cancelado_no_tiny, o cd também vem null, e naoConferidos traz os dois.",
+        "description": "A NF achada fora do Data Mart: a remessa ainda não chegou ao gold (ela leva cerca de 1 h), e a Intelipost ao vivo já tem a NF. Na Yenzah, o metacampo da Shopify costuma trazê-la antes (nfOrigem shopify). O registro grava esta NF.",
+        "example": {
+          "brand": "yenzah",
+          "order": "SH12345YE",
+          "nf": "1500001",
+          "nfStatus": "achada",
+          "nfOrigem": "intelipost",
+          "cd": null,
+          "statusSugerido": null,
+          "avisos": [
+            "Não encontrei o CD de origem na Intelipost."
+          ],
+          "kits": [],
+          "naoConferidos": []
+        }
+      },
+      {
+        "status": 200,
+        "description": "A NF ainda não dá para conferir, sem ser falha: o pedido da Ápice foi cancelado no ES e refeito no RJ, a NF do RJ, já emitida no Tiny, ainda não chegou ao Data Mart, e a Intelipost ao vivo também não a deu. O registro deste pedido não é recusado: grava a NF que vier, com a nota [NF NÃO CONFERIDA: AINDA FORA DO DATA MART]. Com nfMotivo pedido_cancelado_no_tiny, o cd também vem null, e naoConferidos traz os dois.",
         "example": {
           "brand": "apice",
           "order": "SH1234567AP",
@@ -2297,9 +2328,10 @@ export const ENDPOINTS: Endpoint[] = [
       "Nada da marca vai ao Cosmos: ele só confere o token, na org da Lescent.",
       "As funções são as da gravação (conferirPedidoNoDataMart): o que esta rota mostra é o que vai para a planilha, a menos que o Data Mart mude entre a leitura e o envio.",
       "nfStatus ausente não é erro desta rota: avisa que o registro seria recusado com 422.",
-      "O Data Mart tem atraso de carga: a Intelipost chega ao gold cerca de 1 h depois da NF, e a tabela de NFs do Tiny, em lotes, horas depois. Na Ápice, o pedido ativo que já tem o id da NF no Tiny dá desconhecida (nf_fora_do_data_mart), e não ausente. Na Yenzah e na Denavita, a única prova é a Intelipost: até a remessa chegar ao gold, o pedido dá ausente.",
+      "O Data Mart tem atraso de carga: a Intelipost chega ao gold cerca de 1 h depois da NF, e a tabela de NFs do Tiny, em lotes, horas depois. Por isso, sem a NF no Data Mart, a rota procura no metacampo custom.nf_numero da Shopify (só na Yenzah: a Ápice e a Denavita não o preenchem, medido em 19/11/2026) e depois na Intelipost ao vivo, pelo SH da marca (GET {gateway}/intelipost/{conta}/shipment_order/sales_order_number/SH…), até 4 s cada. Só com as duas respondendo sem NF a prova do Data Mart vale como ausente; uma delas sem resposta dá desconhecida (sem_resposta). Na Ápice, o pedido ativo que já tem o id da NF no Tiny dá desconhecida (nf_fora_do_data_mart), e não ausente.",
+      "As chaves das fontes de fora do Data Mart são as do app: a INTEGRATIONS_GATEWAY_READ_KEY (o metacampo da Shopify) e a INTEGRATIONS_GATEWAY_WRITE_KEY (a que tem intelipost:read). Sem elas, nenhum pedido sem a NF no Data Mart dá ausente: dá desconhecida.",
       "Sem a Intelipost no gold, o pedido da Ápice é procurado no Tiny pela data e pelo número da Shopify, no numero_ordem_compra ou no numero_ecommerce (no RJ, o numero_ecommerce vem vazio): de 1 dia antes da criação na Shopify a 12 dias depois no ES e a 60 no RJ, que recebe os pedidos cancelados no ES e refeitos lá. Achando o mesmo número mais de uma vez, vale o pedido ativo; entre eles, o que tem a NF, depois o mais recente, depois o do ES.",
-      "Leituras por chamada: 3 consultas ao Metabase na Yenzah e na Denavita, de 3 a 7 na Ápice. Nos logs de 16/11/2026, a leitura inteira da Ápice levou 1,0 s na mediana e 2,0 s no p90. Sem cache: cada chamada lê de novo."
+      "Leituras por chamada: 3 consultas ao Metabase na Yenzah e na Denavita, de 3 a 7 na Ápice. Nos logs de 16/11/2026, a leitura inteira da Ápice levou 1,0 s na mediana e 2,0 s no p90. Sem a NF no Data Mart, mais 1 consulta à Shopify (Yenzah) e 1 ou 2 à Intelipost ao vivo; com ela, nenhuma. Sem cache: cada chamada lê de novo."
     ],
     "sources": [
       "cxhub/app/api/datamart/order-context/route.ts",
@@ -2307,6 +2339,10 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/shared/lib/datamart/pedidoServer.ts",
       "cxhub/shared/lib/datamart/pedido.ts",
       "cxhub/shared/lib/datamart/pedidoTipos.ts",
+      "cxhub/shared/lib/datamart/nfForaDoDataMartServer.ts",
+      "cxhub/shared/lib/shopify/buscarPedidoNoGateway.ts",
+      "cxhub/shared/lib/intelipost/nfNaIntelipostServer.ts",
+      "cxhub/shared/lib/intelipost/gateway.ts",
       "cxhub/shared/lib/cosmos/http.ts",
       "cxhub/shared/lib/metabase/client.ts",
       "cxhub/__tests__/integration/api-datamart-order-context.test.ts"
@@ -2589,7 +2625,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.numeroNF",
           "type": "string",
           "required": false,
-          "description": "Número da nota fiscal. Na apice, na yenzah e na denavita vale a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart não respondeu, a NF já emitida ainda não chegou a ele, ou o Tiny só tem o pedido cancelado). Nas 6 marcas do Cosmos, a NF que vier vazia, \"-\" ou \"na\" (o pedido do Cosmos V3 chega sem ela) é trocada pela da primeira remessa da Intelipost, sem os zeros à esquerda; sem ela, fica a que veio."
+          "description": "Número da nota fiscal. Na apice, na yenzah e na denavita vale a NF de venda do Data Mart ou, sem ela, a do metacampo custom.nf_numero da Shopify (yenzah) ou a da Intelipost ao vivo; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart, a Shopify ou a Intelipost ao vivo não responderam, a NF já emitida ainda não chegou ao Data Mart, ou o Tiny só tem o pedido cancelado). Nas 6 marcas do Cosmos, a NF que vier vazia, \"-\" ou \"na\" (o pedido do Cosmos V3 chega sem ela) é trocada pela da primeira remessa da Intelipost no Data Mart ou, sem ela, pela do metacampo da Shopify ou pela da Intelipost ao vivo, sem os zeros à esquerda; sem nenhuma, fica a que veio."
         },
         {
           "name": "data.chaveNF",
@@ -3259,7 +3295,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 422,
-        "description": "Só apice, yenzah e denavita (ADR-018): o Data Mart prova que o pedido não foi faturado. Na apice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum (nem no Tiny, nem na Intelipost). Na yenzah e na denavita: a Intelipost respondeu sem a NF (a remessa chega ao Data Mart cerca de 1 h depois da NF). Nada foi registrado; pode repetir quando a NF chegar ao Data Mart. Não dão esta recusa, e o registro segue com o que veio e a nota do motivo: o Data Mart fora do ar, a NF da apice já emitida no Tiny que ainda não chegou ao Data Mart, e o pedido da apice que o Tiny só tem cancelado (pode ter sido refeito em outro CD).",
+        "description": "Só apice, yenzah e denavita (ADR-018): o Data Mart prova que o pedido não foi faturado, e as fontes de fora dele confirmam (a Intelipost ao vivo e, na yenzah, o metacampo da Shopify responderam sem NF). Na apice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum (nem no Tiny, nem na Intelipost). Na yenzah e na denavita: a Intelipost sem a NF. Nada foi registrado; pode repetir quando a NF sair. Não dão esta recusa, e o registro segue com o que veio e a nota do motivo: o Data Mart fora do ar, a Shopify ou a Intelipost ao vivo sem resposta, a NF da apice já emitida no Tiny que ainda não chegou ao Data Mart, e o pedido da apice que o Tiny só tem cancelado (pode ter sido refeito em outro CD).",
         "fields": [
           {
             "name": "code",
@@ -3420,7 +3456,7 @@ export const ENDPOINTS: Endpoint[] = [
       "Decida pelo code (e pelo reason) do corpo, não pelo status HTTP: DUPLICATE_RESEND, OUT_OF_STOCK, API_ERROR e SHEETS_ERROR chegam como 200.",
       "A rota não confere credencial própria: o token do Cosmos vai no corpo (token), e o header x-cosmos-token não é lido aqui.",
       "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha) → POST /resend no Cosmos → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
-      "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai na frente dos comentários. Só o pedido que o Data Mart prova não faturado é recusado (422). As 6 marcas do Cosmos e a gobeaute não passam por ela.",
+      "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai na frente dos comentários. Sem a NF no Data Mart, ela é procurada no metacampo da Shopify (yenzah) e na Intelipost ao vivo, no mesmo teto. Só o pedido que o Data Mart prova não faturado, e que essas fontes confirmam sem NF, é recusado (422). As 6 marcas do Cosmos e a gobeaute não passam por ela.",
       "O dedup procura o mesmo tipo (REENVIO), marca e data.numeroPedido nas últimas 24 h, na fila e na raw; um reenvio cancelado libera o pedido.",
       "O POST /resend no Cosmos não é retentado; o prazo dele é a env TIMEOUT (10 s sem ela), contado do início da requisição.",
       "Marcas sem Cosmos (apice, yenzah, denavita, gobeaute) nunca executam no Cosmos, mesmo com data.automacao preenchida; a gobeaute não tem planilha e o registro termina na fila.",
@@ -4370,7 +4406,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 422,
-        "description": "Só apice, yenzah e denavita (ADR-018): o Data Mart prova que o pedido não foi faturado (na apice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum; na yenzah e na denavita: a Intelipost sem a NF). Nada é gravado e o time não é avisado: é dado do pedido, não sistema quebrado. Diga à cliente que o pedido ainda não foi faturado; a NF pode levar algumas horas para chegar ao Data Mart. Não dão esta recusa, e o registro segue com a nota do motivo: o Data Mart fora do ar, a NF da apice já emitida que ainda não chegou ao Data Mart, e o pedido da apice que o Tiny só tem cancelado.",
+        "description": "Só apice, yenzah e denavita (ADR-018): o Data Mart prova que o pedido não foi faturado (na apice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum; na yenzah e na denavita: a Intelipost sem a NF), e a Intelipost ao vivo e, na yenzah, o metacampo da Shopify também não têm a NF. Nada é gravado e o time não é avisado: é dado do pedido, não sistema quebrado. Diga à cliente que o pedido ainda não foi faturado. Não dão esta recusa, e o registro segue com a nota do motivo: o Data Mart fora do ar, a Shopify ou a Intelipost ao vivo sem resposta, a NF da apice já emitida que ainda não chegou ao Data Mart, e o pedido da apice que o Tiny só tem cancelado.",
         "fields": [
           {
             "name": "code",
@@ -4405,7 +4441,7 @@ export const ENDPOINTS: Endpoint[] = [
         ],
         "example": {
           "code": "UNKNOWN_ERROR",
-          "message": "O pedido SH1234567YE não tem NF de venda na Intelipost: não dá para solicitar reenvio ainda. Nada foi registrado. Se a NF acabou de sair, ela pode levar algumas horas para chegar ao Data Mart.",
+          "message": "O pedido SH1234567YE não tem NF de venda na Intelipost nem na Shopify: não dá para solicitar reenvio ainda. Nada foi registrado. Se a NF acabou de sair, ela pode levar algumas horas para chegar ao Data Mart.",
           "sentToAPI": false,
           "reason": "ORDER_NOT_INVOICED"
         }
@@ -4592,7 +4628,7 @@ export const ENDPOINTS: Endpoint[] = [
       "O dedup roda também no modo de teste (um reenvio real do mesmo pedido em 24 h devolve DUPLICATE_RESEND no ensaio), e o ensaio não grava nada: o guia docs/qa-reenvio-bot.md do CX Hub, que fala em aba TESTE e em 504 API_TIMEOUT, está desatualizado nesses pontos.",
       "O 503 da porta fechada não traz reason: GATE_CLOSED só aparece no aviso ao time.",
       "Avisos ao time vão ao Slack só nos reasons que são do time; dado da cliente ou do pedido (ORDER_NOT_FOUND, ORDER_NOT_INVOICED, NEW_ADDRESS_*, NOT_ELIGIBLE, AUTOMATION_OFF, INVALID_ITEMS) não gera aviso.",
-      "Na apice, na yenzah e na denavita, o registro confere o pedido no Data Mart (ADR-018, o mesmo do /api/sheets/append): a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que o bot mandou, e o pedido que o Data Mart prova não faturado volta 422 ORDER_NOT_INVOICED. O /api/datamart/order-context mostra o mesmo antes de pedir.",
+      "Na apice, na yenzah e na denavita, o registro confere o pedido no Data Mart (ADR-018, o mesmo do /api/sheets/append): a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que o bot mandou (sem a NF no Data Mart, vale a do metacampo da Shopify ou a da Intelipost ao vivo), e o pedido que o Data Mart prova não faturado, com essas fontes sem NF, volta 422 ORDER_NOT_INVOICED. O /api/datamart/order-context mostra o mesmo antes de pedir.",
       "Tempo: o orçamento é de 150 s (a fase de busca do pedido recebe 150 s menos 2×TIMEOUT, 5 s da rota dados, 16 s da fila, 25 s da planilha, 2,5 s do aviso e 5 s de folga, com piso de 8 s, e cada postagem tem teto de min(TIMEOUT, 44,25 s)); o GoDeploy não impõe maxDuration, então configure o Typebot para esperar pelo menos 150 s.",
       "Não confirmado: o que acontece com o registro se quem chama desistir da conexão antes da resposta (se o Worker segue até gravar).",
       "Não confirmado: o comportamento do dedup e da busca no modo de teste sem order.ecommerceOrderId (pelo código, o pedido não é achado e a resposta degrada com ORDER_NOT_FOUND).",
@@ -4708,7 +4744,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.invoiceNumber",
           "type": "string",
           "required": true,
-          "description": "Número da NF do pedido. Na apice, na yenzah e na denavita a planilha grava a NF de venda do Data Mart; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart não respondeu, a NF já emitida ainda não chegou a ele, ou o Tiny só tem o pedido cancelado). Nas 6 marcas do Cosmos, a NF que vier vazia, \"-\" ou \"na\" (o pedido do Cosmos V3 chega sem ela) é trocada pela da primeira remessa da Intelipost, sem os zeros à esquerda; sem ela, fica a que veio."
+          "description": "Número da NF do pedido. Na apice, na yenzah e na denavita a planilha grava a NF de venda do Data Mart ou, sem ela, a do metacampo custom.nf_numero da Shopify (yenzah) ou a da Intelipost ao vivo; a que veio e difere só vai para o log, e fica quando a NF não dá para conferir (o Data Mart, a Shopify ou a Intelipost ao vivo não responderam, a NF já emitida ainda não chegou ao Data Mart, ou o Tiny só tem o pedido cancelado). Nas 6 marcas do Cosmos, a NF que vier vazia, \"-\" ou \"na\" (o pedido do Cosmos V3 chega sem ela) é trocada pela da primeira remessa da Intelipost no Data Mart ou, sem ela, pela do metacampo da Shopify ou pela da Intelipost ao vivo, sem os zeros à esquerda; sem nenhuma, fica a que veio."
         },
         {
           "name": "data.nfeAccessKey",
@@ -5107,7 +5143,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 422,
-        "description": "UNKNOWN_ERROR, só apice, yenzah e denavita (ADR-018): o Data Mart prova que o pedido não foi faturado. Na apice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum (nem no Tiny, nem na Intelipost). Na yenzah e na denavita: a Intelipost respondeu sem a NF (a remessa chega ao Data Mart cerca de 1 h depois da NF). Nada registrado; pode repetir quando a NF chegar ao Data Mart. Não dão esta recusa, e o registro segue com o que veio e a nota do motivo: o Data Mart fora do ar, a NF da apice já emitida no Tiny que ainda não chegou ao Data Mart, e o pedido da apice que o Tiny só tem cancelado (pode ter sido refeito em outro CD).",
+        "description": "UNKNOWN_ERROR, só apice, yenzah e denavita (ADR-018): o Data Mart prova que o pedido não foi faturado, e as fontes de fora dele confirmam (a Intelipost ao vivo e, na yenzah, o metacampo da Shopify responderam sem NF). Na apice: o pedido ativo no Tiny sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum (nem no Tiny, nem na Intelipost). Na yenzah e na denavita: a Intelipost sem a NF. Nada registrado; pode repetir quando a NF sair. Não dão esta recusa, e o registro segue com o que veio e a nota do motivo: o Data Mart fora do ar, a Shopify ou a Intelipost ao vivo sem resposta, a NF da apice já emitida no Tiny que ainda não chegou ao Data Mart, e o pedido da apice que o Tiny só tem cancelado (pode ter sido refeito em outro CD).",
         "fields": [
           {
             "name": "code",

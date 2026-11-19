@@ -7,9 +7,10 @@ import type { RefundSubmissionData } from '../types/index';
 /**
  * O que a conferência do pedido no Data Mart muda no reembolso de Ápice, Yenzah e Denavita (ADR-018), antes da fila e da
  * planilha, em qualquer entrada:
- * - **NF:** o Data Mart prova que o pedido não tem NF de venda (`ausente`) ⇒ recusa, nada é gravado; tem ⇒ vale a do
- *   Data Mart (a que veio, se difere, só vai para o log); não dá para afirmar (`desconhecida`: sem resposta, a NF ainda
- *   fora do Data Mart, o pedido cancelado no Tiny) ⇒ vale a que veio;
+ * - **NF:** o Data Mart prova que o pedido não tem NF de venda, e o metacampo da Shopify e a Intelipost ao vivo
+ *   confirmam (`ausente`) ⇒ recusa, nada é gravado; tem (no Data Mart ou fora dele) ⇒ vale a achada (a que veio, se
+ *   difere, só vai para o log); não dá para afirmar (`desconhecida`: sem resposta, a NF ainda fora do Data Mart, o
+ *   pedido cancelado no Tiny) ⇒ vale a que veio;
  * - **CD:** o do Data Mart, no lugar do que veio;
  * - o que não pôde ser conferido fica com o que veio, e a nota, com o motivo, vai na frente das observações. Só a
  *   planilha da Ápice tem a coluna "Observações" no reembolso: na Yenzah e na Denavita a nota fica só no log.
@@ -24,9 +25,10 @@ export type ConferenciaDoReembolso =
         naoConferidos: CampoConferido[];
     };
 
+/** Onde a NF de venda foi procurada, para a mensagem da recusa (a Intelipost é a do gold e a ao vivo). */
 const ONDE_A_NF_FOI_PROCURADA: Record<MarcaSemCosmosComPlanilha, string> = {
     apice: 'no Tiny nem na Intelipost',
-    yenzah: 'na Intelipost',
+    yenzah: 'na Intelipost nem na Shopify',
     denavita: 'na Intelipost',
 };
 

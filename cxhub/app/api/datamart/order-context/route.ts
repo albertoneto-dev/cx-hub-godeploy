@@ -3,9 +3,18 @@ import { BRAND_TO_ORG_ID, ehMarcaSemCosmosComPlanilha } from '../../../../shared
 import { conferirTokenNoCosmos } from '../../../../shared/lib/cosmos/http';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../../shared/lib/datamart/conferenciaServer';
 import { digitosDoPedido, motivosDoNaoConferido } from '../../../../shared/lib/datamart/pedido';
-import type { CampoConferido, EstadoDaNf, KitDoPedido, MotivoDoNaoConferido } from '../../../../shared/lib/datamart/pedidoTipos';
+import type {
+    CampoConferido,
+    EstadoDaNf,
+    KitDoPedido,
+    MotivoDoNaoConferido,
+    OrigemDaNf,
+} from '../../../../shared/lib/datamart/pedidoTipos';
 
-/** A conferência do token no Cosmos e a leitura do pedido no Data Mart (até `JANELA_CONFERENCIA_MS`, 12 s). */
+/**
+ * A conferência do token no Cosmos e a leitura do pedido no Data Mart, com a NF fora dele quando ele não a tem (tudo
+ * até `JANELA_CONFERENCIA_MS`, 12 s).
+ */
 export const maxDuration = 30;
 
 export interface ContextoDoPedidoNaResposta {
@@ -15,14 +24,21 @@ export interface ContextoDoPedidoNaResposta {
     /** A NF de venda que o servidor grava; `null` quando não há (`nfStatus: 'ausente'`) ou não se sabe */
     nf: string | null;
     /**
-     * `ausente`: o Data Mart prova que o pedido não foi faturado — o servidor recusa a solicitação. `desconhecida`: não
-     * dá para afirmar (`nfMotivo`); a tela pede a NF, e o servidor grava a que vier com a nota do motivo.
+     * `ausente`: o Data Mart prova que o pedido não foi faturado, e o metacampo da Shopify (nas marcas que o têm) e a
+     * Intelipost ao vivo responderam sem NF — o servidor recusa a solicitação. `desconhecida`: não dá para afirmar
+     * (`nfMotivo`); a tela pede a NF, e o servidor grava a que vier com a nota do motivo.
      */
     nfStatus: EstadoDaNf;
     /**
-     * Só com `nfStatus: 'desconhecida'`: `sem_resposta` (o Data Mart não respondeu a tempo), `nf_fora_do_data_mart` (o
-     * Tiny já emitiu a NF, e ela ainda não chegou ao Data Mart) ou `pedido_cancelado_no_tiny` (o Tiny só tem o pedido
-     * cancelado, que pode ter sido refeito em outro CD).
+     * Só com `nfStatus: 'achada'` (2026-11-19): onde a NF foi achada — `datamart` (a Intelipost do gold ou, na Ápice, o
+     * Tiny), `shopify` (o metacampo `custom.nf_numero`) ou `intelipost` (a Intelipost ao vivo, antes de o envio chegar
+     * ao Data Mart).
+     */
+    nfOrigem?: OrigemDaNf;
+    /**
+     * Só com `nfStatus: 'desconhecida'`: `sem_resposta` (o Data Mart, a Shopify ou a Intelipost ao vivo não
+     * responderam a tempo), `nf_fora_do_data_mart` (o Tiny já emitiu a NF, e ela ainda não chegou ao Data Mart) ou
+     * `pedido_cancelado_no_tiny` (o Tiny só tem o pedido cancelado, que pode ter sido refeito em outro CD).
      */
     nfMotivo?: MotivoDoNaoConferido;
     /** `CD ES`, `CD RJ`, `CD MG`, ou `null` quando não se sabe */
@@ -85,7 +101,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<Resposta>>
     const naoConferidos: CampoConferido[] = [];
     if (contexto.nf.estado === 'desconhecida') naoConferidos.push('nf');
     if (!contexto.cd.conferido) naoConferidos.push('cd');
-    // Só o que ficou sem resposta ganha este aviso: os outros motivos já vêm com o aviso deles, das regras.
+    // Só o que o Data Mart deixou sem resposta ganha este aviso: os outros motivos (inclusive a NF que só a Shopify ou a
+    // Intelipost ao vivo deixaram sem resposta) já vêm com o aviso deles, das regras.
     const motivos = motivosDoNaoConferido(contexto);
     const semResposta = naoConferidos.filter((campo) => (motivos[campo] ?? 'sem_resposta') === 'sem_resposta');
     const avisos = semResposta.length > 0
@@ -97,6 +114,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<Resposta>>
         order: contexto.pedido,
         nf: contexto.nf.numero,
         nfStatus: contexto.nf.estado,
+        ...(contexto.nf.estado === 'achada' ? { nfOrigem: contexto.nf.origem } : {}),
         ...(contexto.nf.estado === 'desconhecida' ? { nfMotivo: contexto.nf.motivo } : {}),
         cd: contexto.cd.valor,
         statusSugerido: contexto.statusSugerido,

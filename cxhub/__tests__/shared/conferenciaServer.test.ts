@@ -1,18 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// A leitura tem testes próprios (`pedidoNoDataMart.test.ts`): aqui importa a costura com as regras.
+// A leitura tem testes próprios (`pedidoNoDataMart.test.ts`, `nfForaDoDataMart.test.ts`): aqui importa a costura com as
+// regras.
 vi.mock('@shared/lib/datamart/pedidoServer', () => ({ lerPedidoNoDataMart: vi.fn() }));
+vi.mock('@shared/lib/datamart/nfForaDoDataMartServer', () => ({ lerNfForaDoDataMart: vi.fn() }));
 
 import { conferirPedidoNoDataMart, JANELA_CONFERENCIA_MS, prazoDaConferencia } from '@shared/lib/datamart/conferenciaServer';
+import { lerNfForaDoDataMart } from '@shared/lib/datamart/nfForaDoDataMartServer';
 import { lerPedidoNoDataMart } from '@shared/lib/datamart/pedidoServer';
 import type { LeiturasDoPedido } from '@shared/lib/datamart/pedidoTipos';
 
 const ler = vi.mocked(lerPedidoNoDataMart);
+const lerFora = vi.mocked(lerNfForaDoDataMart);
 const FALHA = { ok: false, motivo: 'Metabase fora' } as const;
 
 beforeEach(() => {
     ler.mockReset();
+    lerFora.mockReset().mockResolvedValue({ intelipost: { ok: false, motivo: 'sem a INTEGRATIONS_GATEWAY_WRITE_KEY' } });
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -59,6 +65,27 @@ describe('conferirPedidoNoDataMart', () => {
             tipo: 'lido',
             contexto: { pedido: 'SH423209DN', nf: { estado: 'desconhecida' }, cd: { valor: 'CD MG', conferido: true }, baseConferida: false },
         });
+    });
+
+    it('com a NF no Data Mart, a Shopify e a Intelipost ao vivo nem são lidas', async () => {
+        const remessa = { nf: '555', ufOrigem: 'MG', idPedidoTiny: null, despachadaEm: null, entregueEm: null, temRastreio: true };
+        ler.mockResolvedValue({ marca: 'denavita', numero: '423209', intelipost: { ok: true, dados: [remessa] }, shopify: FALHA, explodidas: FALHA });
+
+        const r = await conferirPedidoNoDataMart('denavita', 'SH423209DN', Date.now() + 5000);
+
+        expect(lerFora).not.toHaveBeenCalled();
+        expect(r).toMatchObject({ tipo: 'lido', contexto: { nf: { estado: 'achada', numero: '555', origem: 'datamart' } } });
+    });
+
+    it('sem a NF no Data Mart, lê fora dele no mesmo prazo, e a NF achada lá vale com a origem', async () => {
+        ler.mockResolvedValue({ marca: 'yenzah', numero: '11249', intelipost: { ok: true, dados: [] }, shopify: FALHA, explodidas: FALHA });
+        lerFora.mockResolvedValue({ shopify: { ok: true, dados: '1588301' } });
+        const prazo = Date.now() + 5000;
+
+        const r = await conferirPedidoNoDataMart('yenzah', 'SH11249YE', prazo);
+
+        expect(lerFora).toHaveBeenCalledWith('yenzah', '11249', prazo);
+        expect(r).toMatchObject({ tipo: 'lido', contexto: { nf: { estado: 'achada', numero: '1588301', origem: 'shopify' } } });
     });
 
     it('uma falha inesperada nunca derruba o registro: volta "não conferido"', async () => {

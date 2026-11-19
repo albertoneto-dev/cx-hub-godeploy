@@ -25,7 +25,7 @@ function contexto(parcial: Partial<ContextoDoPedido> = {}): ContextoDoPedido {
         marca: 'apice',
         numero: '1731559',
         pedido: 'SH1731559AP',
-        nf: { estado: 'achada', numero: '10157987' },
+        nf: { estado: 'achada', numero: '10157987', origem: 'datamart' },
         cd: { valor: 'CD ES', conferido: true },
         statusSugerido: null,
         avisos: [],
@@ -71,7 +71,29 @@ describe('aplicarConferenciaAoReenvio', () => {
                 + 'Nada foi registrado. Se a NF acabou de sair, ela pode levar algumas horas para chegar ao Data Mart.',
         });
         const yenzah = aplicarConferenciaAoReenvio('yenzah', DATA, { tipo: 'lido', contexto: contexto({ ...ausente, marca: 'yenzah', pedido: 'SH5478YE' }) });
-        expect(yenzah.tipo === 'recusado' && yenzah.mensagem).toContain('O pedido SH5478YE não tem NF de venda na Intelipost:');
+        expect(yenzah.tipo === 'recusado' && yenzah.mensagem).toContain('O pedido SH5478YE não tem NF de venda na Intelipost nem na Shopify:');
+    });
+
+    it('a NF sem resposta só fora do Data Mart: grava a que veio, com a nota da consulta ao vivo (não "DATA MART SEM RESPOSTA")', () => {
+        const r = aplicado(aplicarConferenciaAoReenvio('yenzah', { ...DATA, numeroNF: '1588301' }, {
+            tipo: 'lido',
+            contexto: contexto({
+                marca: 'yenzah',
+                nf: { estado: 'desconhecida', numero: null, motivo: 'sem_resposta', foraDoDataMart: true },
+            }),
+        }));
+        expect(r.data.numeroNF).toBe('1588301');
+        expect(r.naoConferidos).toEqual(['nf']);
+        expect(r.data.comentarios.startsWith('[NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]')).toBe(true);
+    });
+
+    it('a NF achada fora do Data Mart vale como a do Data Mart', () => {
+        const r = aplicado(aplicarConferenciaAoReenvio('yenzah', { ...DATA, numeroNF: '' }, {
+            tipo: 'lido',
+            contexto: contexto({ marca: 'yenzah', nf: { estado: 'achada', numero: '1588301', origem: 'shopify' } }),
+        }));
+        expect(r.data.numeroNF).toBe('1588301');
+        expect(r.naoConferidos).not.toContain('nf');
     });
 
     it('o Kit Cachos inteiro: a NF e o CD do Data Mart, e o valor 200,32 na coluna da operação da Ápice', () => {

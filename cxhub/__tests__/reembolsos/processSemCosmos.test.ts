@@ -42,7 +42,7 @@ function contexto(parcial: Partial<ContextoDoPedido> = {}): ContextoDoPedido {
         marca: 'apice',
         numero: '1731559',
         pedido: 'SH1731559AP',
-        nf: { estado: 'achada', numero: '10157987' },
+        nf: { estado: 'achada', numero: '10157987', origem: 'datamart' },
         cd: { valor: 'CD ES', conferido: true },
         statusSugerido: 'Pedido não entregue (em trânsito)',
         avisos: [],

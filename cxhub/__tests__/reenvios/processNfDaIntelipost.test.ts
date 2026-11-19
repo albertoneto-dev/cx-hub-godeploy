@@ -15,7 +15,7 @@ vi.mock('@shared/lib/sheets/gravarLinha', async (importOriginal) => ({
 }));
 vi.mock('@shared/lib/datamart/nfDaIntelipostServer', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/datamart/nfDaIntelipostServer')>()),
-    nfDaIntelipost: vi.fn(),
+    nfDoPedidoDoCosmos: vi.fn(),
 }));
 vi.mock('@shared/lib/datamart/conferenciaServer', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/datamart/conferenciaServer')>()),
@@ -23,7 +23,7 @@ vi.mock('@shared/lib/datamart/conferenciaServer', async (importOriginal) => ({
 }));
 
 import { conferirPedidoNoDataMart } from '@shared/lib/datamart/conferenciaServer';
-import { nfDaIntelipost } from '@shared/lib/datamart/nfDaIntelipostServer';
+import { nfDoPedidoDoCosmos } from '@shared/lib/datamart/nfDaIntelipostServer';
 import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '@shared/lib/fila';
 import { gravarNasPlanilhas } from '@shared/lib/sheets/gravarLinha';
 import { buildRefundRow, prepararReembolso } from '@modules/reembolsos/actions/buildRefundRow';
@@ -37,7 +37,7 @@ import { stubRegistroEnv } from '../helpers/registro-env';
 
 const enfileirar = vi.mocked(enfileirarCasos);
 const planilhas = vi.mocked(gravarNasPlanilhas);
-const daIntelipost = vi.mocked(nfDaIntelipost);
+const daIntelipost = vi.mocked(nfDoPedidoDoCosmos);
 
 /** 17/11/2026 10:00 em SP */
 const AGORA = new Date(Date.UTC(2026, 10, 17, 13, 0, 0));
@@ -79,7 +79,7 @@ beforeEach(() => {
     enfileirar.mockReset().mockResolvedValue({ status: 'enfileirado' });
     vi.mocked(prazoDaFila).mockReset().mockReturnValue(1_900_000_000_000);
     planilhas.mockReset().mockResolvedValue({ ok: true });
-    daIntelipost.mockReset().mockResolvedValue('1470167');
+    daIntelipost.mockReset().mockResolvedValue({ nf: '1470167', origem: 'datamart' });
     vi.mocked(conferirPedidoNoDataMart).mockReset().mockResolvedValue({ tipo: 'nao_se_aplica' });
     stubRegistroEnv();
     vi.stubEnv('SHEETS_ENV', 'prod');

@@ -1,14 +1,16 @@
 import { repartirPeloMaiorResto } from '../centavos';
 import { SUFIXO_DO_PEDIDO, type MarcaSemCosmosComPlanilha } from '../constants';
+import { temNfNaShopify, type OrigemDaNf } from '../nfDaVenda';
 import type {
     BaseDoValorDaNf,
     CampoConferido,
     ContextoDoPedido,
     ItemReenviado,
     KitDoPedido,
+    LeiturasDaNfForaDoDataMart,
     LeiturasDoPedido,
     LinhaExplodida,
-    MotivoDoNaoConferido,
+    MotivoDaNota,
     MotivoPorCampo,
     NotaNoTiny,
     PedidoNoTiny,
@@ -113,12 +115,55 @@ function baseDoPago(total: number, frete: number, linhas: readonly LinhaExplodid
 }
 
 /**
+ * A NF de venda da Ápice no Tiny, quando vale: a do pedido ativo (`pedidoEscolhidoNoTiny`), não cancelada. A NF de
+ * pedido cancelado não vale, nem como NF nem como base do valor (o leitor nem a lê): o cancelado com NF autorizada quase
+ * sempre foi refeito com outra NF (os 20 do RJ de 03 a 07/11/2026; 42 dos 56 do ES de 05 e 06/11). `null` nas outras marcas.
+ */
+function notaValidaNoTiny(leituras: LeiturasDoPedido): NotaNoTiny | null {
+    if (leituras.marca !== 'apice') return null;
+    const escolhido = pedidoEscolhidoNoTiny(leituras.tiny?.ok ? leituras.tiny.dados : []);
+    const notaDados = leituras.nota?.ok ? leituras.nota.dados : null;
+    return escolhido && !escolhido.cancelado && notaDados && !/cancel/i.test(notaDados.situacao ?? '') ? notaDados : null;
+}
+
+/**
+ * O Data Mart deu a NF de venda (a da primeira remessa da Intelipost ou, na Ápice, a do Tiny)? Sem ela, a conferência
+ * procura fora do Data Mart antes de concluir qualquer coisa (`LeiturasDaNfForaDoDataMart`). É a mesma régua dos dois
+ * primeiros passos da NF em `derivarContextoDoPedido`.
+ */
+export function dataMartDeuANf(leituras: LeiturasDoPedido): boolean {
+    const rem0 = leituras.intelipost.ok ? leituras.intelipost.dados[0] : undefined;
+    return Boolean(rem0?.nf) || notaValidaNoTiny(leituras) !== null;
+}
+
+/** A NF achada fora do Data Mart, e onde: o metacampo da Shopify vale antes da Intelipost ao vivo. */
+export function nfAchadaForaDoDataMart(fora: LeiturasDaNfForaDoDataMart | undefined): { nf: string; origem: OrigemDaNf } | null {
+    if (fora?.shopify?.ok && fora.shopify.dados) return { nf: fora.shopify.dados, origem: 'shopify' };
+    if (fora?.intelipost?.ok && fora.intelipost.dados) return { nf: fora.intelipost.dados, origem: 'intelipost' };
+    return null;
+}
+
+/**
+ * As fontes de fora do Data Mart responderam todas (sem NF)? O metacampo só conta nas marcas que o preenchem
+ * (`temNfNaShopify`). Sem as leituras, não: quem não leu não pode afirmar que não há NF.
+ */
+function foraDoDataMartRespondeu(marca: MarcaSemCosmosComPlanilha, fora: LeiturasDaNfForaDoDataMart | undefined): boolean {
+    if (!fora) return false;
+    if (temNfNaShopify(marca) && fora.shopify?.ok !== true) return false;
+    return fora.intelipost?.ok === true;
+}
+
+/**
  * O que se deriva das leituras do pedido: NF, CD, status sugerido, avisos, kits e a base do valor da NF de reenvio.
  *
- * A NF só fica `ausente`, e o servidor recusa a solicitação, com prova de que o pedido não foi faturado: o pedido ativo
- * sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum. Na dúvida, fica `desconhecida` com o motivo: a
- * tela pede a NF, e o servidor grava a que veio com a nota do motivo. Leitura que falhou nunca vira "ausente": a NF e o
- * CD ficam sem conferência, para a tela e a planilha dizerem "não conferido" em vez de afirmar que não há NF ou CD.
+ * A NF vale do Data Mart (a Intelipost do gold e, na Ápice, o Tiny); sem ela, do metacampo da Shopify ou da Intelipost
+ * ao vivo (`foraDoDataMart`, 2026-11-19), com a `origem` de onde foi achada.
+ *
+ * A NF só fica `ausente`, e o servidor recusa a solicitação, com prova de que o pedido não foi faturado: o Data Mart a
+ * dá (o pedido ativo sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum), e as fontes de fora
+ * responderam sem NF. Na dúvida, fica `desconhecida` com o motivo: a tela pede a NF, e o servidor grava a que veio com
+ * a nota do motivo. Leitura que falhou nunca vira "ausente": a NF e o CD ficam sem conferência, para a tela e a
+ * planilha dizerem "não conferido" em vez de afirmar que não há NF ou CD.
  */
 export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoPedido {
     const { marca, numero, intelipost: ip, shopify, explodidas } = leituras;
@@ -134,20 +179,22 @@ export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoP
     const ativo = soCancelados ? null : escolhido;
     const nota = ehApice ? leituras.nota : undefined;
     const notaDados = nota?.ok ? nota.dados : null;
-    // A NF de pedido cancelado não vale, nem como NF nem como base do valor (o leitor nem a lê): o cancelado com NF
-    // autorizada quase sempre foi refeito com outra NF (os 20 do RJ de 03 a 07/11/2026; 42 dos 56 do ES de 05 e 06/11).
-    const notaValida = ativo && notaDados && !/cancel/i.test(notaDados.situacao ?? '') ? notaDados : null;
+    const notaValida = notaValidaNoTiny(leituras);
     const pedidoNaShopify = shopify.ok ? shopify.dados : null;
     const linhas = explodidas.ok ? explodidas.dados : [];
+    const achadaFora = nfAchadaForaDoDataMart(leituras.foraDoDataMart);
 
-    // NF: a da Intelipost vale primeiro; a Ápice tem o Tiny como reserva.
+    // NF: a da Intelipost vale primeiro; a Ápice tem o Tiny como reserva; fora do Data Mart, o metacampo da Shopify e a
+    // Intelipost ao vivo.
     let nf: ContextoDoPedido['nf'];
     let avisoDaNf: string | null = null;
     const respondeuTudo = ehApice ? ip.ok && tinyOk && nota?.ok === true : ip.ok;
     if (rem0?.nf) {
-        nf = { estado: 'achada', numero: rem0.nf };
+        nf = { estado: 'achada', numero: rem0.nf, origem: 'datamart' };
     } else if (notaValida) {
-        nf = { estado: 'achada', numero: notaValida.numero };
+        nf = { estado: 'achada', numero: notaValida.numero, origem: 'datamart' };
+    } else if (achadaFora) {
+        nf = { estado: 'achada', numero: achadaFora.nf, origem: achadaFora.origem };
     } else if (!respondeuTudo) {
         nf = { estado: 'desconhecida', numero: null, motivo: 'sem_resposta' };
     } else if (ativo?.idNotaFiscal && notaDados === null) {
@@ -157,11 +204,20 @@ export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoP
             + 'Confira o número na Intelipost.';
     } else if (soCancelados) {
         nf = { estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' };
+    } else if (!foraDoDataMartRespondeu(marca, leituras.foraDoDataMart)) {
+        // O Data Mart prova que não há NF, mas ele chega atrasado (~1 h depois da Intelipost): sem a resposta das fontes
+        // de fora, não dá para afirmar.
+        nf = { estado: 'desconhecida', numero: null, motivo: 'sem_resposta', foraDoDataMart: true };
+        avisoDaNf = 'O Data Mart ainda não tem a NF deste pedido, e '
+            + `${temNfNaShopify(marca) ? 'a Shopify e a Intelipost não responderam' : 'a Intelipost não respondeu'} a tempo para confirmar. `
+            + 'Confira o número na Intelipost; ao gravar, o servidor confere de novo.';
     } else {
         nf = { estado: 'ausente', numero: null };
         avisoDaNf = ehApice
             ? 'O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.'
-            : 'A Intelipost ainda não tem a NF deste pedido (pedido pode não ter sido faturado).';
+            : temNfNaShopify(marca)
+                ? 'A Intelipost e a Shopify ainda não têm a NF deste pedido (pedido pode não ter sido faturado).'
+                : 'A Intelipost ainda não tem a NF deste pedido (pedido pode não ter sido faturado).';
     }
 
     // CD e os avisos que ele gera. O CD nunca sai de pedido cancelado: o refeito pode estar no outro CD.
@@ -386,10 +442,11 @@ export function nfDiverge(digitada: string | null | undefined, derivada: string)
 const NOME_DO_CAMPO: Record<CampoConferido, string> = { cd: 'CD', nf: 'NF', valor: 'VALOR' };
 
 /** O que a nota diz depois dos campos: por que eles não foram conferidos. */
-const TEXTO_DO_MOTIVO: Record<MotivoDoNaoConferido, string> = {
+const TEXTO_DO_MOTIVO: Record<MotivoDaNota, string> = {
     sem_resposta: 'DATA MART SEM RESPOSTA',
     nf_fora_do_data_mart: 'AINDA FORA DO DATA MART',
     pedido_cancelado_no_tiny: 'PEDIDO CANCELADO NO TINY',
+    consulta_ao_vivo_sem_resposta: 'CONSULTA AO VIVO SEM RESPOSTA',
 };
 
 /**
@@ -398,7 +455,7 @@ const TEXTO_DO_MOTIVO: Record<MotivoDoNaoConferido, string> = {
  * diferentes viram uma nota cada: `[NF NÃO CONFERIDA: AINDA FORA DO DATA MART] [VALOR NÃO CONFERIDO: DATA MART SEM RESPOSTA]`.
  */
 export function notaDeNaoConferido(campos: ReadonlyArray<CampoConferido>, motivos: MotivoPorCampo = {}): string {
-    const porMotivo = new Map<MotivoDoNaoConferido, CampoConferido[]>();
+    const porMotivo = new Map<MotivoDaNota, CampoConferido[]>();
     for (const campo of (['cd', 'nf', 'valor'] as const).filter((c) => campos.includes(c))) {
         const motivo = motivos[campo] ?? 'sem_resposta';
         porMotivo.set(motivo, [...(porMotivo.get(motivo) ?? []), campo]);
@@ -411,10 +468,15 @@ export function notaDeNaoConferido(campos: ReadonlyArray<CampoConferido>, motivo
         .join(' ');
 }
 
-/** O motivo da NF `desconhecida` e o do CD sem conferência: para a nota da planilha e para a order-context. */
+/**
+ * O motivo da NF `desconhecida` e o do CD sem conferência: para a nota da planilha e para a order-context. A NF que só
+ * as fontes de fora do Data Mart deixaram sem resposta ganha a nota delas, e não "DATA MART SEM RESPOSTA".
+ */
 export function motivosDoNaoConferido(contexto: ContextoDoPedido): MotivoPorCampo {
     const motivos: MotivoPorCampo = {};
-    if (contexto.nf.estado === 'desconhecida') motivos.nf = contexto.nf.motivo;
+    if (contexto.nf.estado === 'desconhecida') {
+        motivos.nf = contexto.nf.foraDoDataMart ? 'consulta_ao_vivo_sem_resposta' : contexto.nf.motivo;
+    }
     if (!contexto.cd.conferido) motivos.cd = contexto.cd.motivo;
     return motivos;
 }

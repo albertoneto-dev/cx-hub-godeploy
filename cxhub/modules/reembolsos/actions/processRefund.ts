@@ -11,7 +11,7 @@ import { buildCancellationRow, prepararCancelamento } from '../../../shared/lib/
 import { casoDoCancelamento } from '../../../shared/lib/cancellation/casoDoCancelamento';
 import type { CancellationPayload } from '../../../shared/lib/cancellation/types';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../shared/lib/datamart/conferenciaServer';
-import { nfAusente, nfDaIntelipost } from '../../../shared/lib/datamart/nfDaIntelipostServer';
+import { nfAusente, nfDoPedidoDoCosmos } from '../../../shared/lib/datamart/nfDaIntelipostServer';
 import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { planilhaQueFalta } from '../../../shared/lib/sheets/index';
@@ -102,10 +102,11 @@ export async function processRefund(
     const conferencia = ehMarcaSemCosmosComPlanilha(brand)
         ? conferirPedidoNoDataMart(brand, String(data.ecommerceOrderId), prazoDaConferencia())
         : null;
-    // Nas marcas do Cosmos, a NF que não veio (o pedido do Cosmos V3 chega sem ela) sai da Intelipost, também junto do
-    // dedup e no mesmo teto da conferência. Nunca lança; sem resposta, fica a que veio (2026-11-17).
+    // Nas marcas do Cosmos, a NF que não veio (o pedido do Cosmos V3 chega sem ela) sai da Intelipost do Data Mart (2026-11-17)
+    // e, sem ela, do metacampo da Shopify ou da Intelipost ao vivo (2026-11-19), também junto do dedup e no mesmo teto da
+    // conferência. Nunca lança; sem resposta, fica a que veio.
     const nfIntelipost = temOrganizacaoNoCosmos(brand) && nfAusente(data.invoiceNumber)
-        ? nfDaIntelipost(brand, String(data.ecommerceOrderId), prazoDaConferencia())
+        ? nfDoPedidoDoCosmos(brand, String(data.ecommerceOrderId), prazoDaConferencia())
         : null;
     try {
         const existente = await solicitacaoRecenteNoRegistro('REEMBOLSO', brand, String(data.ecommerceOrderId));
@@ -148,10 +149,10 @@ export async function processRefund(
         dados = conferido.data;
     }
     if (nfIntelipost) {
-        const nf = await nfIntelipost;
-        if (nf) {
-            console.log(`${LOG} NF ${nf} da Intelipost no pedido ${data.ecommerceOrderId} (${brand}; veio "${data.invoiceNumber ?? ''}")`);
-            dados = { ...dados, invoiceNumber: nf };
+        const achada = await nfIntelipost;
+        if (achada) {
+            console.log(`${LOG} NF ${achada.nf} (${achada.origem}) no pedido ${data.ecommerceOrderId} (${brand}; veio "${data.invoiceNumber ?? ''}")`);
+            dados = { ...dados, invoiceNumber: achada.nf };
         }
     }
 

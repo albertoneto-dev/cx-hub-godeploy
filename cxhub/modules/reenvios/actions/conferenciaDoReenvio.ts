@@ -12,9 +12,10 @@ import type { ResendSubmissionData } from '../types/index';
 /**
  * O que a conferência do pedido no Data Mart muda no reenvio de Ápice, Yenzah e Denavita (ADR-018), antes da fila e da
  * planilha — em qualquer entrada (a tela, a Central de Tickets e o bot passam todos pelo `processResend`):
- * - **NF:** o Data Mart prova que o pedido não tem NF de venda (`ausente`) ⇒ recusa, nada é gravado; tem ⇒ vale a do
- *   Data Mart (a que veio de quem chamou, se difere, só vai para o log); não dá para afirmar (`desconhecida`: sem
- *   resposta, a NF ainda fora do Data Mart, o pedido cancelado no Tiny) ⇒ vale a que veio;
+ * - **NF:** o Data Mart prova que o pedido não tem NF de venda, e o metacampo da Shopify e a Intelipost ao vivo
+ *   confirmam (`ausente`) ⇒ recusa, nada é gravado; tem (no Data Mart ou fora dele) ⇒ vale a achada (a que veio de quem
+ *   chamou, se difere, só vai para o log); não dá para afirmar (`desconhecida`: sem resposta, a NF ainda fora do Data
+ *   Mart, o pedido cancelado no Tiny) ⇒ vale a que veio;
  * - **CD:** o do Data Mart, no lugar do que veio (a tela fixa ES na Ápice e na Yenzah, e ~9% da Ápice sai do RJ);
  * - **"Valor da NF de reenvio (R$)":** o calculado pelos itens originais (o substituto herda o preço, o mimo não entra);
  *   o Data Mart respondeu mas não dá para calcular ⇒ em branco, e o backoffice preenche. Na Ápice e na Yenzah a coluna é
@@ -39,10 +40,10 @@ export type ConferenciaDoReenvio =
 /** Onde a planilha guarda o valor da NF de reenvio: no bloco da operação (Ápice, Yenzah) ou no formulário (Denavita). */
 const VALOR_NA_OPERACAO: Record<MarcaSemCosmosComPlanilha, boolean> = { apice: true, yenzah: true, denavita: false };
 
-/** Onde a NF de venda foi procurada, para a mensagem da recusa. */
+/** Onde a NF de venda foi procurada, para a mensagem da recusa (a Intelipost é a do gold e a ao vivo). */
 const ONDE_A_NF_FOI_PROCURADA: Record<MarcaSemCosmosComPlanilha, string> = {
     apice: 'no Tiny nem na Intelipost',
-    yenzah: 'na Intelipost',
+    yenzah: 'na Intelipost nem na Shopify',
     denavita: 'na Intelipost',
 };
 

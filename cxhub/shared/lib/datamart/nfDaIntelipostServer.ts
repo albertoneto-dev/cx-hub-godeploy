@@ -1,6 +1,8 @@
 import type { SupportedBrand } from '../constants';
 import { consultarDataMart, literalSql, METABASE_TIMEOUT_MS } from '../metabase/index';
-import { digitosDoPedido } from './pedido';
+import { normalizarNf, type OrigemDaNf } from '../nfDaVenda';
+import { lerNfForaDoDataMart, type DepsDaNfForaDoDataMart } from './nfForaDoDataMartServer';
+import { digitosDoPedido, nfAchadaForaDoDataMart } from './pedido';
 import type { DepsDaLeitura } from './pedidoServer';
 
 /**
@@ -11,7 +13,10 @@ import type { DepsDaLeitura } from './pedidoServer';
  * gold em 88 a 97% dos reenvios e reembolsos das 6 marcas do Cosmos com pedido de 26/10 em diante. A Intelipost tinha a
  * NF em 92% deles. Vale a da primeira remessa (a venda original; as seguintes são reenvios), a mesma regra da ADR-018.
  *
- * ⚠️ **Server-only** (lê o Data Mart com a chave do Metabase): fora do barrel. Importe por
+ * Sem a NF no Data Mart, que leva cerca de 1 h para receber a da Intelipost, ela sai do metacampo da Shopify e, depois,
+ * da Intelipost ao vivo (`nfDoPedidoDoCosmos`, 2026-11-19).
+ *
+ * ⚠️ **Server-only** (lê o Data Mart com a chave do Metabase, e o gateway com as dele): fora do barrel. Importe por
  * `@shared/lib/datamart/nfDaIntelipostServer`.
  */
 
@@ -62,12 +67,31 @@ export async function nfDaIntelipost(
         const linhas = await (deps.consultar ?? consultarDataMart)(sqlDaNfNaIntelipost(brandCode, numero), {
             timeoutMs: Math.min(METABASE_TIMEOUT_MS, restante),
         });
-        const primeira = linhas[0]?.[0];
-        const nf = primeira == null ? '' : String(primeira).trim().replace(/^0+(?=\d)/, '');
-        return /^\d{1,9}$/.test(nf) ? nf : null;
+        return normalizarNf(linhas[0]?.[0]);
     } catch (erro) {
         console.warn(`[NF da Intelipost] Sem resposta para o pedido ${numero} (${marca}): `
             + (erro instanceof Error ? erro.message : String(erro)).slice(0, 200));
         return null;
     }
+}
+
+export interface DepsDaNfDoCosmos extends DepsDaLeitura, DepsDaNfForaDoDataMart {}
+
+/**
+ * A NF de venda do pedido de uma marca do Cosmos, em todas as fontes, nesta ordem: o Data Mart (`nfDaIntelipost`), o
+ * metacampo `custom.nf_numero` da Shopify (as 6 o preenchem) e a Intelipost ao vivo — cada uma só quando a anterior não
+ * deu a NF, e todas dentro do `prazo`. **Nunca lança**: sem NF em nenhuma, ou sem resposta, devolve `null`, e quem grava
+ * fica com a NF que veio.
+ */
+export async function nfDoPedidoDoCosmos(
+    marca: SupportedBrand,
+    numeroPedido: string | null | undefined,
+    prazo: number,
+    deps: DepsDaNfDoCosmos = {},
+): Promise<{ nf: string; origem: OrigemDaNf } | null> {
+    const doDataMart = await nfDaIntelipost(marca, numeroPedido, prazo, deps);
+    if (doDataMart) return { nf: doDataMart, origem: 'datamart' };
+    const numero = digitosDoPedido(numeroPedido);
+    if (!numero) return null;
+    return nfAchadaForaDoDataMart(await lerNfForaDoDataMart(marca, numero, prazo, deps));
 }

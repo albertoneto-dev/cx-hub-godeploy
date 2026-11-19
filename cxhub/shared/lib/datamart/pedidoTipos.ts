@@ -1,4 +1,7 @@
 import type { MarcaSemCosmosComPlanilha } from '../constants';
+import type { OrigemDaNf } from '../nfDaVenda';
+
+export type { OrigemDaNf };
 
 /**
  * Os tipos da conferência do pedido das marcas sem Cosmos no Data Mart (ADR-018): o que cada consulta traz
@@ -119,18 +122,36 @@ export interface LeiturasDoPedido {
      * não a achou (inclusive a NF que o Tiny já emitiu e ainda não chegou à tabela de NFs).
      */
     nota?: Leitura<NotaNoTiny | null>;
+    /**
+     * A NF fora do Data Mart (2026-11-19): só existe quando o Data Mart não deu a NF (`dataMartDeuANf`), e quem a lê é a
+     * `conferirPedidoNoDataMart`.
+     */
+    foraDoDataMart?: LeiturasDaNfForaDoDataMart;
 }
 
 /**
- * `achada`: há NF de venda. `ausente`: o Data Mart prova que o pedido não foi faturado (o pedido ativo sem o id da NF, a
- * NF achada e cancelada, ou o pedido em lugar nenhum), e o servidor recusa a solicitação. `desconhecida`: não dá para
- * afirmar; o motivo vem junto (`MotivoDoNaoConferido`).
+ * As leituras da NF fora do Data Mart, em ordem: o metacampo `custom.nf_numero` da Shopify (só nas marcas que o
+ * preenchem, `MARCAS_COM_NF_NA_SHOPIFY`) e a Intelipost ao vivo (quando o metacampo não deu a NF). Cada uma é `null`
+ * quando a fonte respondeu sem NF, e `{ ok: false }` quando não respondeu.
+ */
+export interface LeiturasDaNfForaDoDataMart {
+    /** O metacampo da Shopify; ausente nas marcas que não o preenchem (Ápice e Denavita) */
+    shopify?: Leitura<string | null>;
+    /** A Intelipost ao vivo; ausente quando o metacampo já deu a NF */
+    intelipost?: Leitura<string | null>;
+}
+
+/**
+ * `achada`: há NF de venda, e a `origem` diz onde ela foi achada. `ausente`: há prova de que o pedido não foi faturado —
+ * o Data Mart a dá (o pedido ativo sem o id da NF, a NF achada e cancelada, ou o pedido em lugar nenhum), e o metacampo
+ * da Shopify (nas marcas que o têm) e a Intelipost ao vivo responderam sem NF —, e o servidor recusa a solicitação.
+ * `desconhecida`: não dá para afirmar; o motivo vem junto (`MotivoDoNaoConferido`).
  */
 export type EstadoDaNf = 'achada' | 'ausente' | 'desconhecida';
 
 /**
  * Por que a NF ou o CD ficaram sem conferência no Data Mart. Vai na nota da planilha e no `nfMotivo` da order-context:
- * - `sem_resposta`: uma leitura falhou ou passou do prazo;
+ * - `sem_resposta`: uma leitura falhou ou passou do prazo (do Data Mart, ou, na NF, a Shopify ou a Intelipost ao vivo);
  * - `nf_fora_do_data_mart`: o pedido ativo no Tiny já tem o id da NF, e a NF ainda não chegou à tabela de NFs (ela
  *   chega em lotes, horas depois);
  * - `pedido_cancelado_no_tiny`: o Tiny só tem o pedido cancelado, que pode ter sido refeito fora do que a busca alcança.
@@ -160,11 +181,15 @@ export interface ContextoDoPedido {
     numero: string;
     /** O número como a planilha o guarda: `SH1731559AP` */
     pedido: string;
-    /** `numero` só com `estado: 'achada'`, e o `motivo` só com `desconhecida` */
+    /**
+     * `numero` e `origem` só com `estado: 'achada'`, e o `motivo` só com `desconhecida`. `foraDoDataMart` marca a NF sem
+     * resposta da Shopify ou da Intelipost ao vivo, com o Data Mart respondendo: a nota e o aviso dizem isso, e não que o
+     * Data Mart não respondeu.
+     */
     nf:
-        | { estado: 'achada'; numero: string }
+        | { estado: 'achada'; numero: string; origem: OrigemDaNf }
         | { estado: 'ausente'; numero: null }
-        | { estado: 'desconhecida'; numero: null; motivo: MotivoDoNaoConferido };
+        | { estado: 'desconhecida'; numero: null; motivo: MotivoDoNaoConferido; foraDoDataMart?: true };
     /**
      * `CD ES`, `CD RJ` ou `CD MG`; `null` quando não se sabe. Sem conferência (`conferido: false`), vem o motivo:
      * uma leitura falhou, ou o Tiny só tem o pedido cancelado e a Intelipost não deu a UF.
@@ -199,8 +224,15 @@ export type Conferencia =
 /** O que não pôde ser conferido no Data Mart: vai para a nota nas observações (`notaDeNaoConferido`), com o motivo. */
 export type CampoConferido = 'cd' | 'nf' | 'valor';
 
+/**
+ * O motivo da nota de um campo sem conferência: o `MotivoDoNaoConferido`, ou `consulta_ao_vivo_sem_resposta`, a NF que
+ * o Data Mart não tinha e que a Shopify ou a Intelipost ao vivo não responderam a tempo (no `nfMotivo` da order-context,
+ * ela é `sem_resposta`).
+ */
+export type MotivoDaNota = MotivoDoNaoConferido | 'consulta_ao_vivo_sem_resposta';
+
 /** O motivo de cada campo sem conferência; o campo que não está aqui ficou sem resposta do Data Mart. */
-export type MotivoPorCampo = Partial<Record<CampoConferido, MotivoDoNaoConferido>>;
+export type MotivoPorCampo = Partial<Record<CampoConferido, MotivoDaNota>>;
 
 /** O "Valor da NF de reenvio (R$)" de uma solicitação. */
 export type ValorDaNfDeReenvio =

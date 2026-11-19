@@ -3,6 +3,7 @@ import {
     BRAND_CODE_NA_INTELIPOST,
     nfAusente,
     nfDaIntelipost,
+    nfDoPedidoDoCosmos,
     sqlDaNfNaIntelipost,
 } from '@shared/lib/datamart/nfDaIntelipostServer';
 
@@ -72,5 +73,52 @@ describe('nfDaIntelipost', () => {
         expect(await nfDaIntelipost('kokeshi', 'SH1595343KS', AGORA + 100, d)).toBeNull();
         expect(await nfDaIntelipost('kokeshi', 'sem número', PRAZO, d)).toBeNull();
         expect(d.consultar).not.toHaveBeenCalled();
+    });
+});
+
+describe('nfDoPedidoDoCosmos: o Data Mart, o metacampo da Shopify e a Intelipost ao vivo, nessa ordem (2026-11-19)', () => {
+    const fontes = (dataMart: unknown[][], metacampo: string | null | 'falha', intelipost: string | null | 'falha') => ({
+        consultar: vi.fn(async () => dataMart),
+        agora: () => AGORA,
+        metacampo: vi.fn(async () => (metacampo === 'falha' ? { ok: false as const, motivo: 'HTTP 503' } : { ok: true as const, dados: metacampo })),
+        intelipost: vi.fn(async () => (intelipost === 'falha' ? { ok: false as const, motivo: 'HTTP 401' } : { ok: true as const, dados: intelipost })),
+    });
+
+    it('com a NF no Data Mart, as outras fontes nem são consultadas', async () => {
+        const d = fontes([['001834451']], '9', '9');
+        expect(await nfDoPedidoDoCosmos('bysamia', 'SH52988BS', PRAZO, d)).toEqual({ nf: '1834451', origem: 'datamart' });
+        expect(d.metacampo).not.toHaveBeenCalled();
+        expect(d.intelipost).not.toHaveBeenCalled();
+    });
+
+    it('sem a NF no Data Mart: a do metacampo, pelos dígitos do pedido, sem ir à Intelipost', async () => {
+        const d = fontes([], '1834451', '9');
+        expect(await nfDoPedidoDoCosmos('bysamia', 'SH52988BS', PRAZO, d)).toEqual({ nf: '1834451', origem: 'shopify' });
+        expect(d.metacampo).toHaveBeenCalledWith('bysamia', '52988', PRAZO);
+        expect(d.intelipost).not.toHaveBeenCalled();
+    });
+
+    it('sem o metacampo (ou com ele fora): a Intelipost ao vivo', async () => {
+        for (const metacampo of [null, 'falha'] as const) {
+            const d = fontes([], metacampo, '1470167');
+            expect(await nfDoPedidoDoCosmos('barbours', 'SH2813130BB', PRAZO, d)).toEqual({ nf: '1470167', origem: 'intelipost' });
+            expect(d.intelipost).toHaveBeenCalledWith('barbours', '2813130', PRAZO);
+        }
+    });
+
+    it('nenhuma fonte com a NF, ou todas fora: null, e fica a NF que veio', async () => {
+        expect(await nfDoPedidoDoCosmos('rituaria', 'SH1398512RT', PRAZO, fontes([], null, null))).toBeNull();
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const fora = { ...fontes([], 'falha', 'falha'), consultar: vi.fn(async () => { throw new Error('Metabase 502'); }) };
+        await expect(nfDoPedidoDoCosmos('rituaria', 'SH1398512RT', PRAZO, fora)).resolves.toBeNull();
+        vi.restoreAllMocks();
+    });
+
+    it('número fora do formato: nem consulta', async () => {
+        const d = fontes([['1']], '1', '1');
+        expect(await nfDoPedidoDoCosmos('kokeshi', 'sem número', PRAZO, d)).toBeNull();
+        expect(d.consultar).not.toHaveBeenCalled();
+        expect(d.metacampo).not.toHaveBeenCalled();
+        expect(d.intelipost).not.toHaveBeenCalled();
     });
 });

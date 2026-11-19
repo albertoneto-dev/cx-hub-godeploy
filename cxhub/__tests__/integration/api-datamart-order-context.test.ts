@@ -11,9 +11,19 @@ import { createRequest } from '../helpers/api-test-utils';
 const AUTH = 'Bearer test-token';
 const COSMOS = 'https://api.cosmos.test';
 const METABASE = 'https://metabase.test';
+const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
 
 let tokenCosmos: number;
 let respostaMetabase: (sql: string) => Response;
+/**
+ * O integrations-gateway (2026-11-19): o metacampo da Shopify (`/shopify/…`) e a Intelipost ao vivo (`/intelipost/…`),
+ * que só são lidos quando o Data Mart não tem a NF. Por padrão, a Intelipost não acha o envio (400) e a Shopify não tem
+ * o pedido.
+ */
+let respostaGateway: (url: string) => Response;
+const semEnvioNemPedido = (url: string): Response => (url.includes('/intelipost/')
+    ? new Response(JSON.stringify({ status: 'ERROR' }), { status: 400 })
+    : new Response(JSON.stringify({ data: { orders: { edges: [] } } }), { status: 200 }));
 
 const linhas = (rows: unknown[][]) => new Response(JSON.stringify({ status: 'completed', data: { rows } }), { status: 202 });
 
@@ -50,9 +60,13 @@ function instalarFetch() {
             return new Response(JSON.stringify(tokenCosmos === 200 ? [] : { error: 'Token inválido' }), { status: tokenCosmos });
         }
         if (url === `${METABASE}/api/dataset`) return respostaMetabase(JSON.parse(String(init?.body)).native.query as string);
+        if (url.startsWith(`${GATEWAY}/`)) return respostaGateway(url);
         throw new Error(`fetch inesperado: ${url}`);
     });
 }
+
+const chamadasAoGateway = (fetchSpy: ReturnType<typeof instalarFetch>) =>
+    fetchSpy.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith(GATEWAY));
 
 function pedir(query: string, headers: Record<string, string> = { Authorization: AUTH }) {
     return GET(createRequest(`http://localhost/api/datamart/order-context?${query}`, { headers }));
@@ -63,8 +77,11 @@ beforeEach(() => {
     vi.stubEnv('METABASE_URL', METABASE);
     vi.stubEnv('METABASE_API_KEY', 'chave');
     vi.stubEnv('METABASE_DATABASE_ID', '43');
+    vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_leitura_de_teste');
+    vi.stubEnv('INTEGRATIONS_GATEWAY_WRITE_KEY', 'igw_intelipost_de_teste');
     tokenCosmos = 200;
     respostaMetabase = dataMartDoPedidoReal;
+    respostaGateway = semEnvioNemPedido;
     for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation(() => {});
 });
 
@@ -75,7 +92,7 @@ afterEach(() => {
 
 describe('GET /api/datamart/order-context', () => {
     it('o pedido real SH1731559AP: NF, CD, status sugerido e a composição dos dois kits', async () => {
-        instalarFetch();
+        const fetchSpy = instalarFetch();
 
         const res = await pedir('brand=apice&order=SH1731559AP');
 
@@ -85,6 +102,7 @@ describe('GET /api/datamart/order-context', () => {
             order: 'SH1731559AP',
             nf: '10157987',
             nfStatus: 'achada',
+            nfOrigem: 'datamart',
             cd: 'CD ES',
             statusSugerido: 'Pedido não entregue (em trânsito)',
             avisos: [],
@@ -94,6 +112,8 @@ describe('GET /api/datamart/order-context', () => {
             ],
             naoConferidos: [],
         });
+        // Com a NF no Data Mart, nada sai para a Shopify nem para a Intelipost ao vivo: o caminho comum não fica mais lento.
+        expect(chamadasAoGateway(fetchSpy)).toEqual([]);
     });
 
     it('aceita o número sem o prefixo e o sufixo, e a marca em qualquer caixa', async () => {
@@ -105,15 +125,47 @@ describe('GET /api/datamart/order-context', () => {
         expect(await res.json()).toMatchObject({ brand: 'apice', order: 'SH1731559AP', nf: '10157987' });
     });
 
-    it('pedido sem NF no Data Mart: nfStatus ausente e o aviso (o servidor recusaria a solicitação)', async () => {
-        instalarFetch();
+    it('pedido sem NF no Data Mart nem na Intelipost ao vivo: nfStatus ausente e o aviso (o servidor recusaria a solicitação)', async () => {
+        const fetchSpy = instalarFetch();
         respostaMetabase = (sql) => (sql.includes('fct_intelipost_orders') || sql.includes('fct_shopify_orders') ? linhas([]) : dataMartDoPedidoReal(sql));
 
         const corpo = await (await pedir('brand=apice&order=SH1731559AP')).json();
 
         expect(corpo).toMatchObject({ nf: null, nfStatus: 'ausente', naoConferidos: [] });
         expect(corpo).not.toHaveProperty('nfMotivo');
+        expect(corpo).not.toHaveProperty('nfOrigem');
         expect(corpo.avisos).toContain('O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.');
+        // A Ápice não tem o metacampo: só a Intelipost ao vivo é lida, pelo SH da marca.
+        expect(chamadasAoGateway(fetchSpy)).toEqual([`${GATEWAY}/intelipost/apice/shipment_order/sales_order_number/SH1731559AP`]);
+    });
+
+    it('a Yenzah sem NF no Data Mart e com o metacampo: nfStatus achada e nfOrigem shopify, sem ir à Intelipost', async () => {
+        const fetchSpy = instalarFetch();
+        respostaMetabase = (sql) => (sql.includes('fct_intelipost_orders') ? linhas([]) : dataMartDoPedidoReal(sql));
+        respostaGateway = (url) => (url.includes('/shopify/yenzah/graphql')
+            ? new Response(JSON.stringify({ data: { orders: { edges: [{ node: { name: 'SH5478YE', nf: { value: '001588301' } } }] } } }), { status: 200 })
+            : semEnvioNemPedido(url));
+
+        const res = await pedir('brand=yenzah&order=SH5478YE');
+
+        expect(res.status).toBe(200);
+        const corpo = await res.json();
+        expect(corpo).toMatchObject({ order: 'SH5478YE', nf: '1588301', nfStatus: 'achada', nfOrigem: 'shopify', naoConferidos: [] });
+        expect(corpo).not.toHaveProperty('nfMotivo');
+        expect(chamadasAoGateway(fetchSpy)).toEqual([`${GATEWAY}/shopify/yenzah/graphql`]);
+    });
+
+    it('a Intelipost ao vivo com a chave recusada: desconhecida, sem resposta, com o aviso dela (e não "o Data Mart não respondeu")', async () => {
+        instalarFetch();
+        respostaMetabase = (sql) => (sql.includes('fct_intelipost_orders') || sql.includes('fct_shopify_orders') ? linhas([]) : dataMartDoPedidoReal(sql));
+        respostaGateway = () => new Response(JSON.stringify({ error: 'invalid_key' }), { status: 401 });
+
+        const corpo = await (await pedir('brand=apice&order=SH1731559AP')).json();
+
+        expect(corpo).toMatchObject({ nf: null, nfStatus: 'desconhecida', nfMotivo: 'sem_resposta', naoConferidos: ['nf'] });
+        expect(corpo.avisos[0]).toBe('O Data Mart ainda não tem a NF deste pedido, e a Intelipost não respondeu a tempo para confirmar. '
+            + 'Confira o número na Intelipost; ao gravar, o servidor confere de novo.');
+        expect(corpo.avisos.some((a: string) => a.startsWith('O Data Mart não respondeu'))).toBe(false);
     });
 
     it('o Data Mart fora do ar: 200 com o que não foi conferido, o motivo e o aviso de que a gravação confere de novo', async () => {
@@ -167,6 +219,23 @@ describe('GET /api/datamart/order-context', () => {
                 'A NF deste pedido já foi emitida no Tiny do CD RJ, mas ainda não chegou ao Data Mart. Confira o número na Intelipost.',
                 'Pedido encontrado em mais de um CD (ES cancelado, RJ); usando o CD RJ.',
             ]);
+        });
+
+        it('a NF 183916 já na Intelipost ao vivo: achada, com nfOrigem intelipost, o CD RJ e sem o aviso da NF', async () => {
+            const fetchSpy = instalarFetch();
+            respostaMetabase = dataMart([RJ]);
+            respostaGateway = (url) => (url.endsWith('/intelipost/apice/shipment_order/sales_order_number/SH1832330AP')
+                ? new Response(JSON.stringify({
+                    status: 'OK',
+                    content: [{ order_number: 'SH1832330AP001', shipment_order_volume_array: [{ shipment_order_volume_invoice: { invoice_number: '000183916' } }] }],
+                }), { status: 200 })
+                : semEnvioNemPedido(url));
+
+            const corpo = await (await pedir('brand=apice&order=SH1832330AP')).json();
+
+            expect(corpo).toMatchObject({ nf: '183916', nfStatus: 'achada', nfOrigem: 'intelipost', cd: 'CD RJ', naoConferidos: [] });
+            expect(corpo.avisos).toEqual(['Pedido encontrado em mais de um CD (ES cancelado, RJ); usando o CD RJ.']);
+            expect(chamadasAoGateway(fetchSpy)).toHaveLength(1);
         });
 
         it('só o pedido cancelado no ES: desconhecida pelo cancelamento, e o CD também, sem dizer que o Data Mart não respondeu', async () => {

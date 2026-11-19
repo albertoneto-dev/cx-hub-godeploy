@@ -29,6 +29,7 @@ const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite");
 const APP = "https://cx-hub.devgogroup.com";
 const COSMOS = "https://cosmos.test";
 const METABASE = "https://metabase.test";
+const GATEWAY = "https://gateway.test";
 const TOKEN_DA_FILA = "token-da-fila-de-teste";
 const EMAIL_GOOGLE = "conferencia@projeto.iam.gserviceaccount.com";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -84,6 +85,8 @@ async function rede(req) {
   saidas.push({ url, metodo: req.method, authorization: req.headers.get("authorization"), chave: req.headers.get("x-api-key") });
   if (url.startsWith(`${COSMOS}/organizations/`)) return Response.json([]);
   if (url === `${METABASE}/api/dataset`) return Response.json({ status: "completed", data: { rows: [] } }, { status: 202 });
+  // A Intelipost ao vivo pelo integrations-gateway: o envio não existe (o 400 da Intelipost).
+  if (url.startsWith(`${GATEWAY}/intelipost/`)) return Response.json({ status: "ERROR" }, { status: 400 });
   if (url === TOKEN_URL) {
     const problema = jwtValido(new URLSearchParams(await req.text()).get("assertion"));
     return problema
@@ -126,6 +129,8 @@ async function rodada(dataDeCompatibilidade) {
       METABASE_URL: METABASE,
       METABASE_API_KEY: "chave-do-metabase",
       METABASE_DATABASE_ID: "43",
+      INTEGRATIONS_GATEWAY_URL: GATEWAY,
+      INTEGRATIONS_GATEWAY_WRITE_KEY: "igw_intelipost_de_teste",
       GOOGLE_PLANILHAS_EMAIL: EMAIL_GOOGLE,
       GOOGLE_PLANILHAS_TOKEN: chavePrivadaPem,
       SHEETS_ENV: "staging",
@@ -166,13 +171,16 @@ async function rodada(dataDeCompatibilidade) {
     conferir("x-cosmos-token vai ao Cosmos como Authorization; a gdk_ não", saidas.some(s => s.url.startsWith(COSMOS) && s.authorization === "Bearer jwt-do-login") && !saidas.some(s => s.authorization?.includes("gdk_")));
     conferir("nada da fila saiu do Worker pela rede", saidas.every(s => s.url.startsWith(COSMOS) || s.url.startsWith(METABASE)), JSON.stringify(saidas.map(s => s.url)));
 
-    // ADR-018: o Metabase falso não tem linha nenhuma, então a Intelipost respondeu sem remessa e o pedido "não tem NF".
+    // ADR-018: o Metabase falso não tem linha nenhuma, então a Intelipost respondeu sem remessa; sem a NF no Data Mart, a
+    // Intelipost ao vivo é lida pelo gateway (2026-11-19) e também não acha o envio: o pedido "não tem NF".
     saidas = [];
     r = await pedir("/api/datamart/order-context?brand=apice&order=SH1234567AP", { headers: { "x-cosmos-token": "jwt-do-login", authorization: "Bearer gdk_chave" } });
     const contexto = r.status === 200 ? await r.json() : { status: r.status, corpo: await r.text() };
-    conferir("order-context (ADR-018) roda no workerd: Data Mart sem linhas dá nfStatus ausente", contexto.order === "SH1234567AP" && contexto.nfStatus === "ausente" && contexto.naoConferidos?.length === 0, JSON.stringify(contexto));
+    conferir("order-context (ADR-018) roda no workerd: Data Mart e Intelipost ao vivo sem NF dão nfStatus ausente", contexto.order === "SH1234567AP" && contexto.nfStatus === "ausente" && contexto.naoConferidos?.length === 0, JSON.stringify(contexto));
     const noDataMart = saidas.filter(s => s.url === `${METABASE}/api/dataset`);
     conferir("order-context lê o Data Mart com a chave do app e confere o token no Cosmos; a gdk_ não sai", noDataMart.length === 3 && noDataMart.every(s => s.chave === "chave-do-metabase") && saidas.some(s => s.url.startsWith(COSMOS) && s.authorization === "Bearer jwt-do-login") && !saidas.some(s => s.authorization?.includes("gdk_")), JSON.stringify(saidas.map(s => s.url)));
+    const naIntelipost = saidas.filter(s => s.url.startsWith(`${GATEWAY}/intelipost/`));
+    conferir("a Intelipost ao vivo sai pelo gateway, pelo SH da marca e com a chave dela", naIntelipost.length === 1 && naIntelipost[0].url === `${GATEWAY}/intelipost/apice/shipment_order/sales_order_number/SH1234567AP` && naIntelipost[0].authorization === "Bearer igw_intelipost_de_teste", JSON.stringify(naIntelipost));
 
     // A saúde (api/saude/): o medidor na frente do fetch do workerd anotou o Cosmos e o Data Mart das chamadas acima
     // (sem "Illegal invocation"), e a rota responde no contrato. Com o tráfego recente, nenhuma sonda sai.

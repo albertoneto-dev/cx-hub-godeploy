@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    dataMartDeuANf,
     derivarContextoDoPedido,
     digitosDoPedido,
     itensDoProdutoReenviar,
@@ -15,6 +16,7 @@ import {
 } from '@shared/lib/datamart/pedido';
 import type {
     ContextoDoPedido,
+    LeiturasDaNfForaDoDataMart,
     LeiturasDoPedido,
     LinhaExplodida,
     NotaNoTiny,
@@ -24,6 +26,12 @@ import type {
 } from '@shared/lib/datamart/pedidoTipos';
 
 const FALHA = { ok: false as const, motivo: 'Metabase fora do ar' };
+
+/** Fora do Data Mart, a Intelipost ao vivo respondeu sem NF (na Ápice e na Denavita, a Shopify nem é lida). */
+const SEM_NF_FORA: LeiturasDaNfForaDoDataMart = { intelipost: { ok: true, dados: null } };
+
+/** Na Yenzah, o metacampo da Shopify também respondeu sem NF. */
+const SEM_NF_FORA_YENZAH: LeiturasDaNfForaDoDataMart = { shopify: { ok: true, dados: null }, intelipost: { ok: true, dados: null } };
 
 const REMESSA: RemessaIntelipost = {
     nf: '10157987',
@@ -242,7 +250,7 @@ describe('derivarContextoDoPedido — o caso real SH1731559AP (Ápice)', () => {
 
     it('NF, CD, status, avisos e kits', () => {
         expect(contexto.pedido).toBe('SH1731559AP');
-        expect(contexto.nf).toEqual({ estado: 'achada', numero: '10157987' });
+        expect(contexto.nf).toEqual({ estado: 'achada', numero: '10157987', origem: 'datamart' });
         expect(contexto.cd).toEqual({ valor: 'CD ES', conferido: true });
         expect(contexto.statusSugerido).toBe('Pedido não entregue (em trânsito)');
         expect(contexto.avisos).toEqual([]);
@@ -284,8 +292,10 @@ describe('derivarContextoDoPedido — NF', () => {
 
     it('na Ápice, sem NF na Intelipost, vale a do Tiny quando não está cancelada', () => {
         const sem = { ok: true as const, dados: [{ ...REMESSA, nf: null }] };
-        expect(derivarContextoDoPedido(leiturasApice({ intelipost: sem })).nf).toEqual({ estado: 'achada', numero: '10157987' });
-        const cancelada = derivarContextoDoPedido(leiturasApice({ intelipost: sem, nota: { ok: true, dados: { ...NOTA, situacao: 'Cancelada' } } }));
+        expect(derivarContextoDoPedido(leiturasApice({ intelipost: sem })).nf).toEqual({ estado: 'achada', numero: '10157987', origem: 'datamart' });
+        const cancelada = derivarContextoDoPedido(leiturasApice({
+            intelipost: sem, nota: { ok: true, dados: { ...NOTA, situacao: 'Cancelada' } }, foraDoDataMart: SEM_NF_FORA,
+        }));
         expect(cancelada.nf).toEqual({ estado: 'ausente', numero: null });
         expect(cancelada.baseDoValor).toBeNull();
         expect(cancelada.unidadesDoPedido).toEqual({});
@@ -293,7 +303,12 @@ describe('derivarContextoDoPedido — NF', () => {
 
     it('ausente quando todas responderam e o pedido ativo não tem NF; desconhecida, sem resposta, quando uma falhou', () => {
         const sem = { ok: true as const, dados: [] };
-        const base = { intelipost: sem, tiny: { ok: true as const, dados: [{ ...TINY, idNotaFiscal: null }] }, nota: { ok: true as const, dados: null } };
+        const base = {
+            intelipost: sem,
+            tiny: { ok: true as const, dados: [{ ...TINY, idNotaFiscal: null }] },
+            nota: { ok: true as const, dados: null },
+            foraDoDataMart: SEM_NF_FORA,
+        };
         const ausente = derivarContextoDoPedido(leiturasApice(base));
         expect(ausente.nf).toEqual({ estado: 'ausente', numero: null });
         expect(ausente.avisos).toContain('O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.');
@@ -303,16 +318,110 @@ describe('derivarContextoDoPedido — NF', () => {
         expect(derivarContextoDoPedido(leiturasApice({ ...base, intelipost: FALHA })).nf).toEqual(semResposta);
     });
 
-    it('o pedido em lugar nenhum (nem no Tiny, nem na Intelipost): ausente', () => {
-        const c = derivarContextoDoPedido(leiturasApice({ intelipost: { ok: true, dados: [] }, tiny: { ok: true, dados: [] }, nota: { ok: true, dados: null } }));
+    it('o pedido em lugar nenhum (nem no Tiny, nem na Intelipost do gold, nem na ao vivo): ausente', () => {
+        const c = derivarContextoDoPedido(leiturasApice({
+            intelipost: { ok: true, dados: [] }, tiny: { ok: true, dados: [] }, nota: { ok: true, dados: null }, foraDoDataMart: SEM_NF_FORA,
+        }));
         expect(c.nf).toEqual({ estado: 'ausente', numero: null });
     });
 
     it('Yenzah e Denavita: ausente se a Intelipost respondeu, senão desconhecida', () => {
-        const ausente = derivarContextoDoPedido(leiturasDenavita({ intelipost: { ok: true, dados: [] } }));
+        const ausente = derivarContextoDoPedido(leiturasDenavita({ intelipost: { ok: true, dados: [] }, foraDoDataMart: SEM_NF_FORA }));
         expect(ausente.nf).toEqual({ estado: 'ausente', numero: null });
         expect(ausente.avisos).toContain('A Intelipost ainda não tem a NF deste pedido (pedido pode não ter sido faturado).');
         expect(derivarContextoDoPedido(leiturasDenavita({ intelipost: FALHA })).nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'sem_resposta' });
+
+        const yenzah = derivarContextoDoPedido(leiturasDenavita({ marca: 'yenzah', intelipost: { ok: true, dados: [] }, foraDoDataMart: SEM_NF_FORA_YENZAH }));
+        expect(yenzah.nf).toEqual({ estado: 'ausente', numero: null });
+        expect(yenzah.avisos).toContain('A Intelipost e a Shopify ainda não têm a NF deste pedido (pedido pode não ter sido faturado).');
+    });
+});
+
+describe('dataMartDeuANf: as leituras de fora do Data Mart só saem sem a NF dele', () => {
+    it('a NF da primeira remessa, ou a do Tiny válida, bastam', () => {
+        expect(dataMartDeuANf(leiturasApice())).toBe(true);
+        expect(dataMartDeuANf(leiturasApice({ intelipost: { ok: true, dados: [{ ...REMESSA, nf: null }] } }))).toBe(true);
+        expect(dataMartDeuANf(leiturasApice({ intelipost: FALHA }))).toBe(true);
+        expect(dataMartDeuANf(leiturasDenavita())).toBe(true);
+    });
+
+    it('sem remessa com NF, nem NF do Tiny válida (cancelada, do pedido cancelado, fora da tabela), não', () => {
+        expect(dataMartDeuANf(leituras1832330())).toBe(false);
+        expect(dataMartDeuANf(leituras1832330({ tiny: { ok: true, dados: [{ ...ES_CANCELADO, idNotaFiscal: '1' }] }, nota: { ok: true, dados: NOTA } }))).toBe(false);
+        expect(dataMartDeuANf(leituras1832330({ nota: { ok: true, dados: { ...NOTA_183916, situacao: 'Cancelada' } } }))).toBe(false);
+        expect(dataMartDeuANf(leiturasDenavita({ intelipost: { ok: true, dados: [] } }))).toBe(false);
+        expect(dataMartDeuANf(leiturasDenavita({ intelipost: FALHA }))).toBe(false);
+    });
+});
+
+describe('derivarContextoDoPedido — a NF fora do Data Mart (2026-11-19)', () => {
+    /** O Data Mart responde e não tem a NF: na Yenzah, a Intelipost do gold ainda sem a remessa. */
+    const yenzahSemNf = (foraDoDataMart?: LeiturasDaNfForaDoDataMart) =>
+        leiturasDenavita({ marca: 'yenzah', numero: '11249', intelipost: { ok: true, dados: [] }, foraDoDataMart });
+
+    it('achada pela Shopify: o metacampo vale, com a origem', () => {
+        const c = derivarContextoDoPedido(yenzahSemNf({ shopify: { ok: true, dados: '1588301' } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '1588301', origem: 'shopify' });
+        expect(c.avisos.some((a) => a.includes('NF'))).toBe(false);
+    });
+
+    it('achada pela Intelipost ao vivo: vale a dela, com a origem', () => {
+        const c = derivarContextoDoPedido(yenzahSemNf({ shopify: { ok: true, dados: null }, intelipost: { ok: true, dados: '1588242' } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '1588242', origem: 'intelipost' });
+    });
+
+    it('a NF do Data Mart vale antes das de fora (que nem são lidas, mas se viessem)', () => {
+        const c = derivarContextoDoPedido(leiturasApice({ foraDoDataMart: { intelipost: { ok: true, dados: '999' } } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '10157987', origem: 'datamart' });
+    });
+
+    it('as três fontes sem NF: ausente (Data Mart, metacampo e Intelipost ao vivo)', () => {
+        expect(derivarContextoDoPedido(yenzahSemNf(SEM_NF_FORA_YENZAH)).nf).toEqual({ estado: 'ausente', numero: null });
+    });
+
+    it('leitura nova com erro, ou que não saiu: desconhecida, sem resposta, com o aviso e a nota delas', () => {
+        const erro = { ok: false as const, motivo: 'chave recusada pelo gateway (HTTP 401)' };
+        const semResposta = { estado: 'desconhecida', numero: null, motivo: 'sem_resposta', foraDoDataMart: true };
+        for (const fora of [
+            { shopify: { ok: true as const, dados: null }, intelipost: erro },
+            { shopify: erro, intelipost: { ok: true as const, dados: null } },
+            { shopify: { ok: true as const, dados: null } },
+            undefined,
+        ]) {
+            const c = derivarContextoDoPedido(yenzahSemNf(fora));
+            expect(c.nf).toEqual(semResposta);
+            expect(c.avisos[0]).toBe('O Data Mart ainda não tem a NF deste pedido, e a Shopify e a Intelipost não responderam a tempo '
+                + 'para confirmar. Confira o número na Intelipost; ao gravar, o servidor confere de novo.');
+            expect(motivosDoNaoConferido(c)).toEqual({ nf: 'consulta_ao_vivo_sem_resposta' });
+            expect(notaDeNaoConferido(['nf'], motivosDoNaoConferido(c))).toBe('[NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]');
+        }
+    });
+
+    it('na Ápice e na Denavita, sem o metacampo, só a Intelipost ao vivo conta', () => {
+        const apice = (fora: LeiturasDaNfForaDoDataMart) => derivarContextoDoPedido(leiturasApice({
+            intelipost: { ok: true, dados: [] }, tiny: { ok: true, dados: [] }, nota: { ok: true, dados: null }, foraDoDataMart: fora,
+        }));
+        expect(apice(SEM_NF_FORA).nf.estado).toBe('ausente');
+        const semResposta = apice({ intelipost: { ok: false, motivo: 'sem resposta em 4000 ms' } });
+        expect(semResposta.nf).toMatchObject({ estado: 'desconhecida', motivo: 'sem_resposta' });
+        expect(semResposta.avisos[0]).toContain('e a Intelipost não respondeu a tempo');
+    });
+
+    it('o caso SH1832330AP: a NF do RJ fora da tabela do Tiny, achada na Intelipost ao vivo', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ foraDoDataMart: { intelipost: { ok: true, dados: '183916' } } }));
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916', origem: 'intelipost' });
+        expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
+        expect(c.avisos).toEqual(['Pedido encontrado em mais de um CD (ES cancelado, RJ); usando o CD RJ.']);
+    });
+
+    it('Ápice cancelada no Tiny, e a Intelipost ao vivo sem NF: continua desconhecida pelo cancelamento', () => {
+        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO] }, foraDoDataMart: SEM_NF_FORA }));
+        expect(c.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' });
+        // Com a Intelipost ao vivo fora, também: o cancelamento é o que o Data Mart já disse.
+        const semResposta = derivarContextoDoPedido(leituras1832330({
+            tiny: { ok: true, dados: [ES_CANCELADO] }, foraDoDataMart: { intelipost: { ok: false, motivo: 'HTTP 503' } },
+        }));
+        expect(semResposta.nf).toEqual({ estado: 'desconhecida', numero: null, motivo: 'pedido_cancelado_no_tiny' });
     });
 });
 
@@ -333,14 +442,14 @@ describe('derivarContextoDoPedido — o pedido refeito em outro CD (o caso real 
 
     it('com a Intelipost: vale a NF 183916 dela, e o CD RJ', () => {
         const c = derivarContextoDoPedido(leituras1832330({ intelipost: { ok: true, dados: [REMESSA_1832330] } }));
-        expect(c.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916', origem: 'datamart' });
         expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
         expect(c.avisos).toEqual([AVISO_DOIS_CDS]);
     });
 
     it('a NF do RJ já na tabela, ainda sem a Intelipost: achada pelo Tiny', () => {
         const c = derivarContextoDoPedido(leituras1832330({ nota: { ok: true, dados: NOTA_183916 } }));
-        expect(c.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916', origem: 'datamart' });
         expect(c.cd).toEqual({ valor: 'CD RJ', conferido: true });
     });
 
@@ -361,7 +470,7 @@ describe('derivarContextoDoPedido — o pedido refeito em outro CD (o caso real 
         expect(semNf.cd).toEqual({ valor: 'CD RJ', conferido: true });
 
         const comNf = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO] }, intelipost: { ok: true, dados: [REMESSA_1832330] } }));
-        expect(comNf.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(comNf.nf).toEqual({ estado: 'achada', numero: '183916', origem: 'datamart' });
         expect(comNf.cd).toEqual({ valor: 'CD RJ', conferido: true });
         // O aviso do cancelamento fica, sem pedir a NF, que já foi achada.
         expect(comNf.avisos).toEqual([AVISO_CANCELADO]);
@@ -388,13 +497,17 @@ describe('derivarContextoDoPedido — o pedido refeito em outro CD (o caso real 
     });
 
     it('pedido ativo sem o id da NF: ausente, mesmo com um cancelado ao lado', () => {
-        const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [ES_CANCELADO, { ...RJ_REFEITO, idNotaFiscal: null }] } }));
+        const c = derivarContextoDoPedido(leituras1832330({
+            tiny: { ok: true, dados: [ES_CANCELADO, { ...RJ_REFEITO, idNotaFiscal: null }] }, foraDoDataMart: SEM_NF_FORA,
+        }));
         expect(c.nf).toEqual({ estado: 'ausente', numero: null });
         expect(c.avisos[0]).toBe('O pedido ainda não tem NF de venda autorizada no Tiny nem na Intelipost.');
     });
 
     it('NF achada e cancelada: ausente', () => {
-        const c = derivarContextoDoPedido(leituras1832330({ nota: { ok: true, dados: { ...NOTA_183916, situacao: 'Cancelada' } } }));
+        const c = derivarContextoDoPedido(leituras1832330({
+            nota: { ok: true, dados: { ...NOTA_183916, situacao: 'Cancelada' } }, foraDoDataMart: SEM_NF_FORA,
+        }));
         expect(c.nf).toEqual({ estado: 'ausente', numero: null });
     });
 
@@ -408,7 +521,7 @@ describe('derivarContextoDoPedido — o pedido refeito em outro CD (o caso real 
     it('no desempate, ganha o pedido com NF: a cópia sem NF, mais recente, não vira "sem NF"', () => {
         const copiaSemNf = { ...RJ_REFEITO, idPedido: '858100000', idNotaFiscal: null, dataPedido: '2026-12-01' };
         const c = derivarContextoDoPedido(leituras1832330({ tiny: { ok: true, dados: [RJ_REFEITO, copiaSemNf] }, nota: { ok: true, dados: NOTA_183916 } }));
-        expect(c.nf).toEqual({ estado: 'achada', numero: '183916' });
+        expect(c.nf).toEqual({ estado: 'achada', numero: '183916', origem: 'datamart' });
         // Os dois no mesmo CD: o aviso não diz "mais de um CD".
         expect(c.avisos).toEqual(['Pedido encontrado mais de uma vez no Tiny (RJ, RJ); usando o CD RJ.']);
     });
@@ -524,6 +637,7 @@ describe('derivarContextoDoPedido — avisos', () => {
                 nota: { ok: true, dados: null },
                 tiny: { ok: true, dados: [{ ...TINY, cd: 'es' as const, idNotaFiscal: null }, { ...TINY, cd: 'rj' as const, idNotaFiscal: null }] },
                 shopify: { ok: true, dados: null },
+                foraDoDataMart: SEM_NF_FORA,
             }),
         );
         expect(c.avisos.map((a) => a.slice(0, 22))).toEqual([
