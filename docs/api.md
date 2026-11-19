@@ -52,7 +52,7 @@ não é `gdk_`.
 | POST | `/api/cosmos/resends/{id}/cancel?brand=` | Cancela um reenvio no Cosmos (sem volta); o cancelamento vai à gold pela fila |
 | GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify, pelo integrations-gateway com o nome da marca (as 10), e o Data Mart de reserva. Sem token de loja |
 | GET | `/api/datamart/products?brand=apice\|yenzah\|denavita` | O catálogo de produtos avulsos da marca no Data Mart, no formato dos produtos do Cosmos: o mimo e a troca do reenvio das marcas sem Cosmos. Guardado por 6 h em memória |
-| GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, `ausente` ou `desconhecida`, esta com o `nfMotivo`: `sem_resposta`, `nf_fora_do_data_mart` ou `pedido_cancelado_no_tiny`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
+| GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, com o `nfOrigem`: `datamart`, `shopify` ou `intelipost`; `ausente`; ou `desconhecida`, com o `nfMotivo`: `sem_resposta`, `nf_fora_do_data_mart` ou `pedido_cancelado_no_tiny`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
 | POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h (com a conferência no Data Mart junto, nas três sem Cosmos com planilha), Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava |
 | POST | `/api/reenvio/bot` | O reenvio do Typebot: busca o pedido, aplica as guardas e registra; toda dúvida vira registro sem automação. `testMode: true` não grava |
@@ -104,7 +104,8 @@ quer dizer "registrado, não repita", e o chamador depende disso.
     CD (Ápice: a tabela do Tiny do pedido ativo; Yenzah: a UF de origem da Intelipost; Denavita: `CD MG`) entram no lugar
     dos que vieram. A NF que veio e difere vai para o log;
   - o Data Mart prova que o pedido não foi faturado ⇒ `422 UNKNOWN_ERROR`, nada gravado (no bot,
-    `reason: ORDER_NOT_INVOICED`, sem aviso). O que conta como prova está no item seguinte;
+    `reason: ORDER_NOT_INVOICED`, sem aviso). O que conta como prova está nos itens seguintes: desde 2026-11-19, a
+    prova do Data Mart só vale com a Intelipost ao vivo (e, na Yenzah, o metacampo da Shopify) respondendo sem NF;
   - o "Valor da NF de reenvio (R$)" é calculado; na Ápice e na Yenzah vai para a coluna da operação (AC), junto com as
     fórmulas;
   - a chave Pix do reembolso **não é mais validada** (v14, 16/11/2026): é gravada como veio (`trim()`), em toda marca com
@@ -140,12 +141,48 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   - sem a Intelipost no gold, a busca no Tiny por data procura o número no `numero_ordem_compra` ou no
     `numero_ecommerce`, nos dois CDs. A janela vai de 1 dia antes da criação na Shopify a 12 dias depois no ES e a 60
     no RJ, que recebe os pedidos cancelados no ES e refeitos lá. As medidas estão no comentário de `sqlDoTinyPorData`.
+- **A NF procurada em todas as fontes antes de dar "sem NF" (2026-11-19, decisão deste app):** o Data Mart leva cerca
+  de 1 h para receber a NF da Intelipost, e nessa janela o reenvio e o reembolso da Ápice, da Yenzah e da Denavita de
+  pedido já faturado eram recusados (a pergunta do Nai na thread dos reembolsos de cancelamento: "só puxa se tiver
+  NF?"; o portal de cancelamento também chama o CX Hub direto). Agora, sem a NF no Data Mart (nem a da primeira remessa
+  da Intelipost, nem, na Ápice, a do Tiny), a conferência lê, nesta ordem e cada uma só se a anterior não deu a NF:
+  - o metacampo `custom.nf_numero` da Shopify pelo integrations-gateway (`INTEGRATIONS_GATEWAY_READ_KEY`), só nas marcas
+    que o preenchem. Medido em 19/11 nos 50 pedidos de 05 a 15/11 de cada marca: 100% dos despachados das 6 do Cosmos
+    e da Yenzah, 0% da Ápice (0/42), da Denavita (0/46) e da Gobeaute (0/32), e nenhum dos 71 cancelados. Das três sem
+    Cosmos, só a Yenzah o lê;
+  - a Intelipost ao vivo pelo gateway (`INTEGRATIONS_GATEWAY_WRITE_KEY`, a chave com `intelipost:read`):
+    `GET {gateway}/intelipost/{conta}/shipment_order/sales_order_number/SH{n}{sigla}` e, se o envio enxuto vier sem a
+    NF, `GET …/shipment_order/{order_number}`. Contas: `apice`, `denavita`, `beautyhub` (Yenzah, Barbours, Rituária) e
+    `lescent` (Lescent, Kokeshi, BySamia, Auá). 400 e 404 são "não achou"; 401, 403, 429 e 5xx, erro.
+
+  As duas têm até 4 s cada, dentro do teto da conferência (12 s); com a NF no Data Mart, nenhuma sai. O que conta como
+  prova de `ausente` passa a ser a do Data Mart (acima) **com** a Intelipost ao vivo e, na Yenzah, o metacampo
+  respondendo sem NF. A leitura nova que falha (sem a chave, chave recusada, limite, gateway fora, prazo) nunca vira
+  `ausente`: a NF fica `desconhecida` com `sem_resposta`, o aviso diz que a Shopify ou a Intelipost não responderam, e a
+  nota é `[NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]`. A NF achada fora do Data Mart vale como a dele, e a
+  `order-context` diz de onde ela veio no campo novo `nfOrigem` (`datamart`, `shopify` ou `intelipost`); nenhum outro
+  campo mudou. A Ápice cancelada no Tiny continua `desconhecida` (`pedido_cancelado_no_tiny`). A recusa da Yenzah diz
+  "não tem NF de venda na Intelipost nem na Shopify". Código: `cxhub/shared/lib/datamart/nfForaDoDataMartServer.ts`,
+  `cxhub/shared/lib/intelipost/`, `nfNoMetacampoDaShopify` em `cxhub/shared/lib/shopify/buscarPedidoNoGateway.ts` e
+  `derivarContextoDoPedido`.
+
+  **Risco que não deu para conferir (19/11):** a chave `INTEGRATIONS_GATEWAY_WRITE_KEY` do `.env` local respondeu 401 no
+  gateway (no `/whoami` também), então a Intelipost ao vivo não foi testada daqui em marca nenhuma. O contrato é o que o
+  usuário testou com a chave dele em 18/11 para a Central. Em especial, o `sales_order_number` da Ápice (o SH1832330AP,
+  com a NF 183916 esperada): a anotação de 16/11 diz que "na Ápice, a Intelipost não acha pelo número da Shopify". Se a
+  Intelipost não achar o envio de uma marca pelo SH, ela responde 400, e a marca fica, na prática, só com o Data Mart (e
+  o Tiny, na Ápice), como antes. Com a chave do app recusada, nenhum pedido sem a NF no Data Mart dá `ausente`: fica
+  `desconhecida` e é gravado com a nota.
 - **A NF das marcas do Cosmos pela Intelipost (2026-11-17, decisão deste app):** o pedido do Cosmos V3 (desde 21/10)
   vem sem `invoice_number`, e a NF chegava como `"-"`. No `/api/sheets/append` e no `/api/refund/submit` (e no bot, que
   passa por eles), a NF vazia, `-`, `na` ou só zeros das 6 marcas do Cosmos vira a da primeira remessa da Intelipost
-  (`gold.fct_intelipost_orders`, uma consulta pelo índice, teto de 12 s junto do dedup), sem os zeros à esquerda. A NF
-  que veio nunca é trocada, e sem resposta do Data Mart fica a que veio. Código:
+  (`gold.fct_intelipost_orders`, uma consulta pelo índice, teto de 12 s junto do dedup), sem os zeros à esquerda. Desde
+  2026-11-19, sem ela no Data Mart, vale a do metacampo `custom.nf_numero` da Shopify e, depois, a da Intelipost ao vivo
+  (`nfDoPedidoDoCosmos`). A NF que veio nunca é trocada, e sem resposta fica a que veio. Código:
   `cxhub/shared/lib/datamart/nfDaIntelipostServer.ts`.
+- **A NF no `/api/shopify/orders` (2026-11-19):** o `note_attributes.nf_number` que a tela e a Central leem (pelo
+  `adaptShopifyOrder`, em `numeroNF`) vem do metacampo `custom.nf_numero` do pedido. O atributo `nf_number` da Shopify,
+  que era o lido, não existe em nenhum pedido consultado em 19/11; fica de reserva.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.

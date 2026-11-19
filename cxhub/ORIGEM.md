@@ -182,6 +182,28 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   os zeros à esquerda, com a BySamia como `by_samia`; nunca lança). O `processResend` e o `processRefund` a consultam
   junto do dedup, com o teto da conferência, só nas marcas do Cosmos e só quando a NF não veio; sem resposta, fica a
   que veio. A NF que veio nunca é trocada. O Cosmos não recebe a NF, então o reenvio automático não muda.
+- A NF é procurada em todas as fontes antes de dar "sem NF" (2026-11-19). O Data Mart leva cerca de 1 h para receber a
+  NF da Intelipost, e nessa janela o reenvio e o reembolso da Ápice, da Yenzah e da Denavita de pedido já faturado
+  davam 422 (a pergunta do Nai: "só puxa se tiver NF?"). Sem a NF no Data Mart, a conferência e a NF das marcas do
+  Cosmos leem, nesta ordem, o metacampo `custom.nf_numero` da Shopify (só nas marcas que o preenchem: as 6 do Cosmos e
+  a Yenzah, medido em 19/11) e a Intelipost ao vivo, as duas pelo integrations-gateway, até 4 s cada.
+  - Arquivos novos: `shared/lib/nfDaVenda.ts` (puro: `OrigemDaNf`, `normalizarNf`, `MARCAS_COM_NF_NA_SHOPIFY`),
+    `shared/lib/intelipost/gateway.ts` (puro: as contas, o SH de cada marca, a leitura da resposta e a NF do envio),
+    `shared/lib/intelipost/nfNaIntelipostServer.ts` (`nfNaIntelipostAoVivo`, com a `INTEGRATIONS_GATEWAY_WRITE_KEY`) e
+    `shared/lib/datamart/nfForaDoDataMartServer.ts` (`lerNfForaDoDataMart`: o metacampo, depois a Intelipost).
+  - `shared/lib/shopify/gateway.ts`: a `CONSULTA_DO_PEDIDO` pede o metacampo, e o `pedidoDoGatewayParaShopify` põe a
+    NF dele no `note_attributes` `nf_number` (o atributo `nf_number`, que não existe em nenhum pedido consultado, fica
+    de reserva); a `CONSULTA_DA_NF` (só o nome e o metacampo) e o `nfDoMetacampo` são novos.
+    `shared/lib/shopify/buscarPedidoNoGateway.ts`: `nfNoMetacampoDaShopify`, e o `consultarGateway` recebe a consulta.
+  - `shared/lib/datamart/pedidoTipos.ts` e `pedido.ts`: as `LeiturasDoPedido` ganham `foraDoDataMart`; a NF `achada`
+    ganha a `origem`; `dataMartDeuANf` decide se as leituras novas saem; e a NF só fica `ausente` com as fontes de fora
+    respondendo sem NF. A que não respondeu deixa a NF `desconhecida` com `sem_resposta` e `foraDoDataMart: true`
+    (aviso e nota `[NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]` próprios, motivo `consulta_ao_vivo_sem_resposta`
+    só na nota). `conferenciaServer.ts` faz as leituras novas quando o Data Mart não deu a NF.
+  - `app/api/datamart/order-context/route.ts`: o campo `nfOrigem`, só com a NF achada.
+  - `modules/*/actions/conferenciaDo*.ts`: a recusa da Yenzah diz "na Intelipost nem na Shopify".
+  - `shared/lib/datamart/nfDaIntelipostServer.ts`: `nfDoPedidoDoCosmos` (o Data Mart, o metacampo e a Intelipost ao
+    vivo), que o `processResend` e o `processRefund` chamam no lugar do `nfDaIntelipost`.
 
 ## Testes
 
