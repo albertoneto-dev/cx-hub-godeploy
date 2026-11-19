@@ -256,7 +256,8 @@ Como cada desfecho é medido (código em `api/saude/`):
   entregar nada (o Airflow sem resposta, a DAG pausada). Nos logs de 17/11, cada caso chega à raw em até ~20 min.
 - **As dependências pelo `fetch` global:** o `worker.ts` põe um envoltório na frente dele (`api/saude/medidor.ts`), que
   olha só o host e anota o desfecho, sem mudar a chamada. Assim o `cxhub/` não foi editado. O 401/403 do Cosmos é o token
-  de quem chama, e não conta. Sem nenhuma chamada há 15 min, a rota faz uma sonda só de leitura: a DAG no Airflow (que
+  de quem chama, e não conta. O `dep_gateway` mede o host do integrations-gateway inteiro: a Shopify e, desde
+  2026-11-19, a Intelipost ao vivo; o 400/404 da Intelipost (envio que não existe) não é falha, e a chave recusada é. Sem nenhuma chamada há 15 min, a rota faz uma sonda só de leitura: a DAG no Airflow (que
   também diz se ela está pausada) e `select 1` no Data Mart. O Cosmos não tem sonda.
 - **Gravação:** `anotarSaude` guarda em memória; o `worker.ts` grava no fim de cada requisição e de cada tarefa do
   `after()`, no `ctx.waitUntil`. A falha do registro só vai ao log (`[saude] registro não gravado`). Tabelas no `env.DB`:

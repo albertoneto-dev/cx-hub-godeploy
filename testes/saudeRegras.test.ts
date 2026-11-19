@@ -272,6 +272,8 @@ describe("medidor do fetch", () => {
     expect(dependenciaDaUrl("https://oauth2.googleapis.com/token", env)?.componente).toBe("dep_sheets");
     expect(dependenciaDaUrl("https://metabase.exemplo/api/dataset", env)?.componente).toBe("dep_datamart");
     expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/shopify/apice/graphql", env)?.componente).toBe("dep_gateway");
+    // A Intelipost ao vivo (a NF fora do Data Mart, 19/11/2026) passa pelo mesmo host.
+    expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/intelipost/apice/shipment_order/sales_order_number/SH1AP", env)?.componente).toBe("dep_gateway");
     expect(dependenciaDaUrl("https://rota-dados.exemplo/api/v1/form-data", env)?.componente).toBe("dep_rota_dados");
     expect(dependenciaDaUrl("https://hooks.slack.exemplo/services/x", env)).toBeNull();
     expect(dependenciaDaUrl("http://fila.cx-hub.interno/api/v1/casos", env)).toBeNull();

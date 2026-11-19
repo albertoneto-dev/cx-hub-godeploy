@@ -66,7 +66,8 @@ export const CATALOGO: RegraComponente[] = [
   { id: "dep_sheets", nome: "Google Planilhas", tipo: "dependencia", critico: false, lentaMs: 4000 },
   // O Metabase roda SQL: demora mais que uma API comum.
   { id: "dep_datamart", nome: "Data Mart (Metabase Gobeaute)", tipo: "dependencia", critico: false, lentaMs: 8000 },
-  { id: "dep_gateway", nome: "integrations-gateway (Shopify)", tipo: "dependencia", critico: false, lentaMs: 3000 },
+  // O mesmo host atende a Shopify e, desde 19/11/2026, a Intelipost ao vivo (a NF fora do Data Mart).
+  { id: "dep_gateway", nome: "integrations-gateway (Shopify e Intelipost)", tipo: "dependencia", critico: false, lentaMs: 3000 },
   { id: "dep_rota_dados", nome: "Rota dados (rota-dados-cxhub)", tipo: "dependencia", critico: false, lentaMs: 3000 },
 ];
 
