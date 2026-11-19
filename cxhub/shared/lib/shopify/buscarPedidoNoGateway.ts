@@ -1,7 +1,11 @@
 import type { ShopifyOrder } from '../../types/index';
+import type { Leitura } from '../datamart/pedidoTipos';
+import { NF_FORA_DO_DATA_MART_MIN_PRAZO_MS, NF_FORA_DO_DATA_MART_TIMEOUT_MS } from '../nfDaVenda';
 import {
+    CONSULTA_DA_NF,
     CONSULTA_DO_PEDIDO,
     escolherPedido,
+    nfDoMetacampo,
     pausaDepoisDoLimite,
     pedidoDoGatewayParaShopify,
     urlDoGateway,
@@ -47,6 +51,7 @@ async function consultarGateway(
     chave: string,
     nome: string,
     timeoutMs: number,
+    consulta: string = CONSULTA_DO_PEDIDO,
 ): Promise<{ res: Response; corpo: RespostaDoGateway | null }> {
     if (timeoutMs <= 0) throw new PrazoEsgotado('prazo esgotado antes da consulta');
     const controller = new AbortController();
@@ -55,7 +60,7 @@ async function consultarGateway(
         const res = await fetch(`${urlDoGateway()}/shopify/${marca}/graphql`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${chave}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ query: CONSULTA_DO_PEDIDO, variables: { q: `name:${nome}` } }),
+            body: JSON.stringify({ query: consulta, variables: { q: `name:${nome}` } }),
             signal: controller.signal,
         });
         const corpo = await res.json().catch(() => null) as RespostaDoGateway | null;
@@ -127,5 +132,54 @@ export async function buscarPedidoNoGateway(
         }
         console.error(`${LOG} ${marca}: falha de rede:`, error instanceof Error ? error.message : error);
         return { tipo: 'falha', status: 500, erro: 'Failed to fetch from Shopify' };
+    }
+}
+
+/**
+ * A NF do metacampo `custom.nf_numero` do pedido, para a conferência da NF fora do Data Mart (2026-11-19): pede só o
+ * nome e o metacampo (`CONSULTA_DA_NF`), sem dado da cliente, com o teto de 4 s (`NF_FORA_DO_DATA_MART_TIMEOUT_MS`).
+ * Procura só o primeiro nome de `nomesDoPedidoNaShopify` (`SH{n}{sufixo}` nas sem Cosmos, os dígitos nas do Cosmos): o
+ * `#n` antigo é de antes do metacampo e passa dos 60 dias que o gateway enxerga, e a segunda busca só gastaria o prazo.
+ * O `escolherPedido` confere o nome, então o reenvio `SH…-R-1`, que vem junto no filtro com a NF dele, não vale.
+ *
+ * Nunca lança. `{ ok: true, dados: null }` só quando o gateway respondeu: o pedido não está lá, ou está sem o
+ * metacampo. Sem a chave, sem prazo, com erro HTTP ou do GraphQL, ou sem resposta a tempo, volta `{ ok: false }` com o
+ * motivo, e a conferência não conclui que o pedido não tem NF.
+ */
+export async function nfNoMetacampoDaShopify(
+    marca: MarcaNoGateway,
+    pedido: string,
+    prazo: number,
+    agora: () => number = Date.now,
+): Promise<Leitura<string | null>> {
+    const falhou = (motivo: string): Leitura<string | null> => {
+        console.warn(`${LOG} ${marca}: a NF do metacampo do pedido ${pedido} ficou sem resposta (${motivo})`);
+        return { ok: false, motivo };
+    };
+    const chave = process.env.INTEGRATIONS_GATEWAY_READ_KEY;
+    if (!chave) return falhou('sem a INTEGRATIONS_GATEWAY_READ_KEY');
+    const nome = nomesDoPedidoNaShopify(marca, pedido)[0];
+    if (!nome) return falhou('número do pedido sem dígitos');
+    const prazoDaConsulta = () => Math.min(NF_FORA_DO_DATA_MART_TIMEOUT_MS, prazo - agora());
+    if (prazoDaConsulta() < NF_FORA_DO_DATA_MART_MIN_PRAZO_MS) return falhou('prazo esgotado antes da consulta');
+
+    try {
+        let { res, corpo } = await consultarGateway(marca, chave, nome, prazoDaConsulta(), CONSULTA_DA_NF);
+        // O limite de taxa da chave: uma nova tentativa só, e só se a pausa e a consulta couberem no prazo.
+        if (res.status === 429) {
+            const pausa = pausaDepoisDoLimite(res.headers.get('retry-after'));
+            if (agora() + pausa + NF_FORA_DO_DATA_MART_MIN_PRAZO_MS > prazo) return falhou('HTTP 429, sem prazo para a nova tentativa');
+            await new Promise((resolve) => setTimeout(resolve, pausa));
+            ({ res, corpo } = await consultarGateway(marca, chave, nome, prazoDaConsulta(), CONSULTA_DA_NF));
+        }
+        if (!res.ok) return falhou(`HTTP ${res.status}`);
+        if (!corpo) return falhou('resposta 200 sem JSON');
+        if (corpo.errors?.length) return falhou('erro do GraphQL');
+
+        const pedidos = (corpo.data?.orders?.edges ?? []).flatMap((e) => (e?.node ? [e.node] : []));
+        const achado = escolherPedido(pedidos, nome);
+        return { ok: true, dados: achado ? nfDoMetacampo(achado) : null };
+    } catch (erro) {
+        return falhou(erro instanceof Error && erro.name === 'AbortError' ? 'sem resposta no prazo' : 'falha de rede');
     }
 }

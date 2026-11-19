@@ -105,6 +105,19 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo integrations-gat
         expect(corpo.orders.map((o: { name: string }) => o.name)).toEqual(['SH1452727BB']);
     });
 
+    it('a NF vem do metacampo custom.nf_numero do pedido procurado, e não do reenvio SH…-R-1 que vem junto (2026-11-19)', async () => {
+        const fetchSpy = gateway({
+            'name:52988': [no('SH52988BS-R-1', { nf: { value: '001905557' } }), no('SH52988BS', { nf: { value: '001834451' } })],
+        });
+
+        const { orders } = await (await pedir('bysamia', '52988')).json();
+
+        expect(orders.map((o: { name: string }) => o.name)).toEqual(['SH52988BS']);
+        expect(orders[0].note_attributes).toEqual([{ name: 'nf_number', value: '1834451' }]);
+        expect(adaptShopifyOrder(orders[0], 'bysamia').numeroNF).toBe('1834451');
+        expect(JSON.parse(String(fetchSpy.mock.calls[0][1]?.body)).query).toContain('metafield(namespace: "custom", key: "nf_numero")');
+    });
+
     it('devolve o formato REST que o adapter lê, e o adapter segue as regras da marca do Cosmos', async () => {
         gateway({ 'name:39996': [no('SH39996BS')] });
 

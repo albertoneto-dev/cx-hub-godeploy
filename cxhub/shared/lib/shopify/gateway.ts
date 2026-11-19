@@ -1,5 +1,6 @@
 import type { ShopifyOrder } from '../../types/index';
 import { ehMarcaCxHub, type MarcaCxHub } from '../constants';
+import { normalizarNf } from '../nfDaVenda';
 
 /**
  * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **integrations-gateway**: uma chave só
@@ -54,7 +55,9 @@ export function pausaDepoisDoLimite(retryAfter: string | null): number {
 /**
  * Os campos que o formulário usa, e só eles. **Fora de propósito:** `tags` (trazem o CPF da cliente), `note`, e
  * `fulfillmentOrders` — o gateway nega esse campo (`ACCESS_DENIED`) e, quando ele vem na consulta, o `data` volta nulo
- * para a consulta inteira. `customAttributes` vem para achar o `nf_number`, mas só ele segue para o navegador.
+ * para a consulta inteira. A NF de venda vem do metacampo `custom.nf_numero` (`MARCAS_COM_NF_NA_SHOPIFY`, medido em
+ * 19/11/2026); `customAttributes` fica de reserva, para o `nf_number`, que não apareceu em nenhum pedido consultado.
+ * Dos atributos, só ele segue para o navegador.
  */
 export const CONSULTA_DO_PEDIDO = `query ($q: String!) {
   orders(first: 5, query: $q) {
@@ -67,6 +70,7 @@ export const CONSULTA_DO_PEDIDO = `query ($q: String!) {
       shippingAddress { name address1 address2 city zip province provinceCode phone }
       shippingLines(first: 1) { edges { node { title } } }
       customAttributes { key value }
+      nf: metafield(namespace: "custom", key: "nf_numero") { value }
       lineItems(first: 50) { edges { node {
         id name sku vendor quantity
         originalUnitPriceSet { shopMoney { amount } }
@@ -74,6 +78,16 @@ export const CONSULTA_DO_PEDIDO = `query ($q: String!) {
       } } }
       fulfillments(first: 5) { trackingInfo { company number } }
     } }
+  }
+}`;
+
+/**
+ * Só o nome e a NF do metacampo, para a conferência da NF fora do Data Mart: nada de cliente, endereço ou tags. O nome
+ * vem para conferir o pedido (o filtro `name:` também traz o reenvio `SH…-R-1`, que tem a NF dele).
+ */
+export const CONSULTA_DA_NF = `query ($q: String!) {
+  orders(first: 5, query: $q) {
+    edges { node { name nf: metafield(namespace: "custom", key: "nf_numero") { value } } }
   }
 }`;
 
@@ -98,6 +112,8 @@ export interface PedidoDoGateway {
     } | null;
     shippingLines?: { edges?: Array<{ node?: { title?: string | null } | null }> | null } | null;
     customAttributes?: Array<{ key?: string | null; value?: string | null }> | null;
+    /** O metacampo `custom.nf_numero`: a NF de venda, nas marcas que o preenchem. `null` quando o pedido não o tem. */
+    nf?: { value?: string | null } | null;
     lineItems?: {
         edges?: Array<{ node?: {
             id?: string | null; name?: string | null; sku?: string | null; vendor?: string | null; quantity?: number | null;
@@ -128,14 +144,20 @@ function numeroDoGid(gid: string | null | undefined): number {
     return Number(String(gid ?? '').split('/').pop());
 }
 
+/** A NF do metacampo `custom.nf_numero`, sem os zeros à esquerda; `null` quando o pedido não a tem. */
+export function nfDoMetacampo(p: PedidoDoGateway): string | null {
+    return normalizarNf(p.nf?.value);
+}
+
 /**
  * O nó GraphQL no formato REST que o `adaptShopifyOrder` lê. Leva só os campos que o adapter usa; o resto do
- * `ShopifyOrder` (REST) não existe nesta leitura, e o tipo é afirmado de propósito. Dos atributos do pedido, só o
- * `nf_number` passa (os outros trazem endereço e CPF, que a tela não usa).
+ * `ShopifyOrder` (REST) não existe nesta leitura, e o tipo é afirmado de propósito. O `nf_number` dos `note_attributes`
+ * é a NF do metacampo `custom.nf_numero`, onde as lojas a guardam; o atributo `nf_number` do pedido fica de reserva.
+ * Dos atributos do pedido, só ele passa (os outros trazem endereço e CPF, que a tela não usa).
  */
 export function pedidoDoGatewayParaShopify(p: PedidoDoGateway): ShopifyOrder {
     const endereco = p.shippingAddress;
-    const nf = (p.customAttributes ?? []).find((a) => a.key === 'nf_number');
+    const nf = nfDoMetacampo(p) ?? ((p.customAttributes ?? []).find((a) => a.key === 'nf_number')?.value || null);
     const pedido = {
         id: Number(p.legacyResourceId ?? numeroDoGid(p.id)),
         name: p.name ?? '',
@@ -156,7 +178,7 @@ export function pedidoDoGatewayParaShopify(p: PedidoDoGateway): ShopifyOrder {
             }
             : null,
         shipping_lines: (p.shippingLines?.edges ?? []).map((e) => ({ title: e?.node?.title ?? '' })),
-        note_attributes: nf?.value ? [{ name: 'nf_number', value: nf.value }] : [],
+        note_attributes: nf ? [{ name: 'nf_number', value: nf }] : [],
         line_items: (p.lineItems?.edges ?? []).flatMap((e) => (e?.node ? [e.node] : [])).map((item) => ({
             id: numeroDoGid(item.id),
             name: item.name ?? '',
