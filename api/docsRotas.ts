@@ -2744,6 +2744,12 @@ export const ENDPOINTS: Endpoint[] = [
           "description": "Comentários gerais; vão só à planilha. Na apice, na yenzah e na denavita, o que não deu para conferir no Data Mart ganha uma nota na frente com o motivo, como [CD/NF/VALOR NÃO CONFERIDOS: DATA MART SEM RESPOSTA], [NF NÃO CONFERIDA: AINDA FORA DO DATA MART] ou [CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY]."
         },
         {
+          "name": "data.fotoAvaria",
+          "type": "boolean",
+          "required": false,
+          "description": "Com o motivo \"Avaria informada pelo cliente\": true quando o cliente mandou foto da caixa ou do produto, false quando não mandou. Vai à fila do Metabase como foto_avaria (a coluna da gold, para o controle de ressarcimento); a planilha não muda. Opcional: sem ele, ou com um valor que não é booleano, o caso vai sem o campo."
+        },
+        {
           "name": "data.itensOriginaisReenviados",
           "type": "array",
           "required": false,
@@ -4833,6 +4839,12 @@ export const ENDPOINTS: Endpoint[] = [
           "type": "string | null",
           "required": false,
           "description": "Observações do agente; vão só para a planilha, nunca para a fila. Na apice, o que não deu para conferir no Data Mart ganha uma nota na frente com o motivo, como [CD/NF NÃO CONFERIDOS: DATA MART SEM RESPOSTA] ou [NF NÃO CONFERIDA: AINDA FORA DO DATA MART]; a planilha de reembolso da yenzah e da denavita não tem observações, e a nota fica só no log."
+        },
+        {
+          "name": "data.damagePhotoSent",
+          "type": "boolean | null",
+          "required": false,
+          "description": "Com o motivo \"Avaria informada pelo cliente\": true quando o cliente mandou foto da caixa ou do produto, false quando não mandou. Vai à fila do Metabase como foto_avaria (a coluna da gold, para o controle de ressarcimento); a planilha não muda. Opcional: sem ele, com null ou com um valor que não é booleano, o caso vai sem o campo."
         },
         {
           "name": "data.pixKey",

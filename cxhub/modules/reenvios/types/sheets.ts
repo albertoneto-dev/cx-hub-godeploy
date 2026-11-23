@@ -65,6 +65,13 @@ export interface ResendSubmissionData {
     comentarios: string;             // COMENTÁRIOS GERAIS
 
     /**
+     * Com o motivo "Avaria informada pelo cliente" (23/11/2026): o cliente mandou foto da caixa ou do produto? Vai à
+     * fila do Metabase como `foto_avaria`; a planilha não muda (quem chama põe a resposta nos `comentarios`, se quiser).
+     * Opcional: quem não manda (a tela do CX Hub, o bot) segue igual, e o caso vai sem o campo.
+     */
+    fotoAvaria?: boolean;
+
+    /**
      * Só nas marcas sem Cosmos com planilha (ADR-018): os itens do pedido que vão no reenvio, como foram marcados (o kit
      * ou o componente), **antes** da troca e sem os mimos. É a base do "Valor da NF de reenvio (R$)" que o servidor
      * calcula: o `produtoReenviar` já chega com o substituto e o mimo somados por SKU, e dele não dá para separar o

@@ -62,5 +62,7 @@ export function casoDoReenvio(input: CasoDoReenvioInput): CasoCxhub {
         transportadora_reenvio: data.transportadoraReenvio,
         tipo_solicitacao: tipoSolicitacao(data.tipoSolicitacao),
         ticket_transportadora: data.ticketTransportadora,
+        // Só o booleano vai: outro tipo faria a DAG falhar o run. Sem resposta, o caso fica igual ao de antes.
+        ...(typeof data.fotoAvaria === 'boolean' ? { foto_avaria: data.fotoAvaria } : {}),
     };
 }

@@ -41,5 +41,7 @@ export function casoDoReembolso(input: CasoDoReembolsoInput): CasoCxhub {
         // O Bot nunca reembolsa como exceção, mesmo que o campo venha `true` (regra que o n8n aplicava na linha).
         excecao_politica: data.handledBy !== 'Bot' && data.policyException === true,
         ticket_transportadora: data.carrierTicketId ?? undefined,
+        // Só o booleano vai: outro tipo faria a DAG falhar o run. Sem resposta, o caso fica igual ao de antes.
+        ...(typeof data.damagePhotoSent === 'boolean' ? { foto_avaria: data.damagePhotoSent } : {}),
     };
 }

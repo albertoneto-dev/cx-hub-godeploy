@@ -60,6 +60,13 @@ export interface CasoCxhub {
     ticket_transportadora?: string;
     /** Só cancelamento: a tratativa que o acompanha (`Reenvio` ou `Reembolso`). */
     tratativa?: string;
+    /**
+     * Reenvio e reembolso com o motivo "Avaria informada pelo cliente" (23/11/2026): `true` quando o cliente mandou
+     * foto da caixa ou do produto, `false` quando não mandou. É o controle de ressarcimento com a transportadora. Só
+     * vai quando quem chama responde (hoje, a Central de Tickets); ausente, a coluna da gold fica nula. Opcional na
+     * DAG, como todo campo do caso: o caso sem ele continua valendo.
+     */
+    foto_avaria?: boolean;
 }
 
 export type StatusExecucaoCxhub = 'Realizado' | 'Cancelado' | 'Pendente';

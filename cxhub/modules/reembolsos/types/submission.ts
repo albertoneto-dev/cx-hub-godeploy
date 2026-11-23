@@ -33,6 +33,12 @@ export interface RefundSubmissionData {
      * para ele, o servidor a grava normalizada; em qualquer outro caso grava o texto como veio, sem recusar.
      */
     pixKeyType?: string | null;
+    /**
+     * Com o motivo "Avaria informada pelo cliente" (23/11/2026): o cliente mandou foto da caixa ou do produto? Vai à
+     * fila do Metabase como `foto_avaria`; a planilha não muda (quem chama põe a resposta nas `notes`, se quiser).
+     * Opcional: quem não manda segue igual, e o caso vai sem o campo.
+     */
+    damagePhotoSent?: boolean | null;
 }
 
 export type RefundWebhookResponseCode =

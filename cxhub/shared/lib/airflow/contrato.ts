@@ -18,6 +18,9 @@ const CAMPOS_CASO = [
     // a criação os descarta em silêncio e a atualização que os mandar falha o run.
     'produtos_reenvio', 'transportadora_reenvio', 'tipo_solicitacao', 'escopo_reembolso', 'excecao_politica',
     'ticket_transportadora', 'tratativa',
+    // A foto da avaria informada pelo cliente (23/11/2026). Opcional como os outros. Antes de a DAG aceitá-la, a
+    // criação a descarta em silêncio; nenhuma atualização a manda.
+    'foto_avaria',
 ];
 const CAMPOS_EXECUCAO = ['status_execucao', 'data_execucao', 'responsavel_execucao', 'cod_nfd'];
 const PERMITIDOS_NA_ATUALIZACAO = new Set([...IDENTIDADE, ...CAMPOS_CASO, ...CAMPOS_EXECUCAO]);
@@ -34,6 +37,8 @@ const VOCABULARIO: Record<string, string[]> = {
     tipo_solicitacao: ['reenvio', 'cashback'],
     tratativa: ['reenvio', 'reembolso'],
 };
+/** Campos só booleanos (`BOOLEANOS_CASO` da DAG): outro tipo falha o run sem retry. Ausente e `null` passam. */
+const BOOLEANOS = ['excecao_politica', 'foto_avaria'];
 
 const texto = (valor: unknown) => (valor === null || valor === undefined ? '' : String(valor).trim());
 
@@ -43,9 +48,11 @@ function problemaDeValor(campos: Record<string, unknown>): string | null {
         const valor = texto(campos[campo]);
         if (valor && !aceitos.includes(valor.toLowerCase())) return `${campo} fora do vocabulário da DAG: ${campos[campo]}`;
     }
-    const excecao = campos.excecao_politica;
-    if (excecao !== undefined && excecao !== null && typeof excecao !== 'boolean') {
-        return `excecao_politica precisa ser booleano: ${JSON.stringify(excecao)}`;
+    for (const campo of BOOLEANOS) {
+        const valor = campos[campo];
+        if (valor !== undefined && valor !== null && typeof valor !== 'boolean') {
+            return `${campo} precisa ser booleano: ${JSON.stringify(valor)}`;
+        }
     }
     return null;
 }

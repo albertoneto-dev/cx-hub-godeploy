@@ -54,9 +54,9 @@ não é `gdk_`.
 | GET | `/api/datamart/products?brand=apice\|yenzah\|denavita` | O catálogo de produtos avulsos da marca no Data Mart, no formato dos produtos do Cosmos: o mimo e a troca do reenvio das marcas sem Cosmos. Guardado por 6 h em memória |
 | GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, com o `nfOrigem`: `datamart`, `shopify` ou `intelipost`; `ausente`; ou `desconhecida`, com o `nfMotivo`: `sem_resposta`, `nf_fora_do_data_mart` ou `pedido_cancelado_no_tiny`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
-| POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h (com a conferência no Data Mart junto, nas três sem Cosmos com planilha), Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava |
+| POST | `/api/sheets/append` | Registra um reenvio da tela: dedup de 24 h (com a conferência no Data Mart junto, nas três sem Cosmos com planilha), Cosmos (`POST /resend`), fila e planilha. `testMode: true` não grava. O `data.fotoAvaria` (booleano, opcional) vai à fila como `foto_avaria` |
 | POST | `/api/reenvio/bot` | O reenvio do Typebot: busca o pedido, aplica as guardas e registra; toda dúvida vira registro sem automação. `testMode: true` não grava |
-| POST | `/api/refund/submit` | Registra um reembolso: chave Pix gravada como veio (toda marca com planilha), dedup de 24 h com a conferência no Data Mart junto, fila e planilha |
+| POST | `/api/refund/submit` | Registra um reembolso: chave Pix gravada como veio (toda marca com planilha), dedup de 24 h com a conferência no Data Mart junto, fila e planilha. O `data.damagePhotoSent` (booleano, opcional) vai à fila como `foto_avaria` |
 | POST | `/api/cancellation/submit` | Registra um cancelamento junto do reenvio ou do reembolso: fila e planilha |
 | POST | `/api/refund/cancel` | Cancela o reembolso mais recente do pedido (fila, depois planilha) |
 | POST | `/api/refund/update` | Edita valor e motivo do reembolso |

@@ -154,6 +154,15 @@ describe('processRefund (registro na fila do Metabase e na planilha)', () => {
             expect(Object.values(caso)).not.toContain(DATA.notes);
             expect(caso).toMatchObject({ escopo_reembolso: 'SKU01 - 1;Frete', ticket_transportadora: 'TK-1' });
             expect(problemaNoCaso(caso)).toBeNull();
+            expect(caso).not.toHaveProperty('foto_avaria');
+        });
+
+        it('a foto da avaria (damagePhotoSent) chega à fila como foto_avaria e passa no contrato da DAG', async () => {
+            await processRefund('barbours', { ...DATA, damagePhotoSent: false }, { agora: AGORA });
+            const [caso] = casosEnfileirados();
+
+            expect(caso.foto_avaria).toBe(false);
+            expect(problemaNoCaso(caso)).toBeNull();
         });
 
         it('usa o prazoFila de quem chama', async () => {

@@ -11,7 +11,7 @@ const CAMPOS_DO_CONTRATO = new Set([
     'motivo', 'skus', 'uf', 'cd_origem', 'status_pedido', 'transportadora', 'lote', 'erp', 'pedido_completo',
     'devolucao', 'responsavel', 'origem', 'id_atendimento', 'automacao',
     'produtos_reenvio', 'transportadora_reenvio', 'tipo_solicitacao', 'escopo_reembolso', 'excecao_politica',
-    'ticket_transportadora', 'tratativa',
+    'ticket_transportadora', 'tratativa', 'foto_avaria',
 ]);
 
 const DATA: ResendSubmissionData = {
@@ -148,5 +148,19 @@ describe('casoDoReenvio', () => {
         const c = caso({ data: { ...DATA, ReenvioCompleto: 'Sim', devolucao: 'Não' } });
         expect(c.pedido_completo).toBe(true);
         expect(c.devolucao).toBe(false);
+    });
+
+    // A foto da avaria informada pelo cliente (23/11/2026): só a Central de Tickets manda, por enquanto.
+    it.each([true, false])('fotoAvaria %j vai como foto_avaria', (valor) => {
+        expect(caso({ data: { ...DATA, fotoAvaria: valor } }).foto_avaria).toBe(valor);
+    });
+
+    it('sem fotoAvaria (a tela do CX Hub, o bot) o caso não tem o campo: fica igual ao de antes', () => {
+        expect(caso()).not.toHaveProperty('foto_avaria');
+    });
+
+    it('fotoAvaria que não é booleano não vai: a DAG falharia o run', () => {
+        const data = { ...DATA, fotoAvaria: 'Sim' } as unknown as ResendSubmissionData;
+        expect(caso({ data })).not.toHaveProperty('foto_avaria');
     });
 });

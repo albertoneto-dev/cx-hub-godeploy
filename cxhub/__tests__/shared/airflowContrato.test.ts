@@ -215,3 +215,20 @@ describe('campos com vocabulário ou tipo fixo (tipo_solicitacao, tratativa, exc
         );
     });
 });
+
+// A foto da avaria informada pelo cliente (23/11/2026): booleano opcional, como o excecao_politica.
+describe('foto_avaria', () => {
+    it.each([true, false, null, undefined])('%j passa na criação: o campo é opcional', (valor) => {
+        expect(problemaNoCaso(caso({ tipo: 'REENVIO', foto_avaria: valor }))).toBeNull();
+    });
+
+    it('é do contrato: a atualização que a mandar não é recusada como campo desconhecido', () => {
+        expect(problemaNaAtualizacao(ID, { foto_avaria: true })).toBeNull();
+    });
+
+    it.each(['Sim', 'true', 1])('%j não é booleano: recusado, porque a DAG falharia o run', (valor) => {
+        const esperado = `foto_avaria precisa ser booleano: ${JSON.stringify(valor)}`;
+        expect(problemaNoCaso(caso({ foto_avaria: valor }))).toBe(esperado);
+        expect(problemaNaAtualizacao(ID, atualizacao({ foto_avaria: valor }))).toBe(esperado);
+    });
+});

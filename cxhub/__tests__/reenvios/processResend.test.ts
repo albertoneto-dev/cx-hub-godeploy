@@ -560,6 +560,14 @@ describe('processResend (registro na fila do Metabase e na planilha)', () => {
             expect(body.idSolicitacao).toBe(caso.id_solicitacao);
             expect(enfileirar.mock.calls[0][1]).toBe(PRAZO_PADRAO);
         });
+
+        it('a foto da avaria (fotoAvaria) chega à fila como foto_avaria e passa no contrato da DAG', async () => {
+            await processResend({ ...base, data: { ...RESEND_DATA, fotoAvaria: true } });
+
+            const caso = casoEnfileirado();
+            expect(caso.foto_avaria).toBe(true);
+            expect(problemaNoCaso(caso)).toBeNull();
+        });
     });
 
     // ADR-010 e ADR-012: a planilha anda junto da fila. Ordem: config → dedup → Cosmos → fila → planilha.

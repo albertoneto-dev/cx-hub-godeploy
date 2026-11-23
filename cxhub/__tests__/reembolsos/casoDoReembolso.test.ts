@@ -85,4 +85,14 @@ describe('casoDoReembolso', () => {
         expect(c.skus).toBeUndefined();
         expect(c.automacao).toBeUndefined();
     });
+
+    // A foto da avaria informada pelo cliente (23/11/2026): só a Central de Tickets manda, por enquanto.
+    it.each([true, false])('damagePhotoSent %j vai como foto_avaria', (valor) => {
+        expect(caso({ ...DATA, damagePhotoSent: valor }).foto_avaria).toBe(valor);
+    });
+
+    it('sem damagePhotoSent, ou com null, o caso não tem o campo: fica igual ao de antes', () => {
+        expect(caso()).not.toHaveProperty('foto_avaria');
+        expect(caso({ ...DATA, damagePhotoSent: null })).not.toHaveProperty('foto_avaria');
+    });
 });

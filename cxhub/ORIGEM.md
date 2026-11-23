@@ -216,6 +216,16 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
     Com o reenvio, registra como automação sem `POST`, com a nota `[REENVIO JÁ EXISTIA NO COSMOS: …]` nas observações
     e a mensagem dizendo qual (decisão do usuário: registrar, e não recusar como duplicado). Sem dar para saber,
     `API_ERROR` sem criar nem registrar. As mensagens de `SHEETS_ERROR` dizem "já estava no Cosmos" nesse caso.
+- A foto da avaria informada pelo cliente vai à fila (2026-11-23, pedido do Alberto: controle de ressarcimento com a
+  transportadora). Com o motivo "Avaria informada pelo cliente", a Central de Tickets pergunta se o cliente mandou foto
+  da caixa ou do produto e manda a resposta como `data.fotoAvaria` (reenvio) e `data.damagePhotoSent` (reembolso). O
+  caso leva `foto_avaria` (booleano), uma coluna nova da gold. Sem o campo, o caso fica igual ao de antes, e a tela do
+  CX Hub e o bot não mudam. A DAG ganha o campo como opcional (`CAMPOS_CASO` e `BOOLEANOS_CASO`); antes dela, a criação
+  o descarta em silêncio, e nenhuma atualização o manda. Arquivos: `shared/lib/airflow/types.ts` e `contrato.ts` (o
+  campo e a régua de booleano, junto do `excecao_politica`), `modules/reenvios/types/sheets.ts`,
+  `modules/reembolsos/types/submission.ts`, `modules/reenvios/actions/casoDoReenvio.ts` e
+  `modules/reembolsos/actions/casoDoReembolso.ts`. O CX Hub de origem não tem o campo: numa atualização a partir dele,
+  mantenha esta adaptação.
 
 ## Testes
 
