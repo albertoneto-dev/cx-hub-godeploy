@@ -2491,7 +2491,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/sheets/append",
     "tag": "Reenvio",
     "summary": "Registra o reenvio montado pela tela do CX Hub e, com automação, executa no Cosmos.",
-    "description": "Recebe a solicitação já montada pela tela (data); se data.automacao vier preenchida numa marca com Cosmos e fora do modo de teste, chama POST /resend no Cosmos com o token do agente, depois entrega o caso à fila do Metabase e grava a linha na planilha da marca (a gobeaute só vai à fila). Antes de tudo barra duplicata do mesmo pedido e marca nas últimas 24 h (fila e raw). Na apice, na yenzah e na denavita, junto do dedup, o pedido é conferido no Data Mart (ADR-018): pedido sem NF de venda é recusado com 422, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). testMode: true roda o dedup e a conferência mas não chama o Cosmos nem grava nada; a rota foi dimensionada para caber em 120 s.",
+    "description": "Recebe a solicitação já montada pela tela (data); se data.automacao vier preenchida numa marca com Cosmos e fora do modo de teste, chama POST /resend no Cosmos com o token do agente, depois entrega o caso à fila do Metabase e grava a linha na planilha da marca (a gobeaute só vai à fila). Antes de tudo barra duplicata do mesmo pedido e marca nas últimas 24 h (fila e raw). Com automação, antes do POST /resend, pergunta ao Cosmos se o pedido já tem reenvio criado nas últimas 24 h e não cancelado: com um, registra a solicitação com ele, sem criar outro (SUCCESS); sem conseguir saber (o Cosmos sem resposta em duas tentativas e o reenvio fora do Data Mart), não cria nem registra nada (API_ERROR), e repetir é seguro. Na apice, na yenzah e na denavita, junto do dedup, o pedido é conferido no Data Mart (ADR-018): pedido sem NF de venda é recusado com 422, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). testMode: true roda o dedup e a conferência mas não chama o Cosmos nem grava nada; a rota foi dimensionada para caber em 120 s.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -2917,7 +2917,7 @@ export const ENDPOINTS: Endpoint[] = [
     "responses": [
       {
         "status": 200,
-        "description": "SUCCESS: o Cosmos criou o reenvio, o caso entrou na fila do Metabase e a linha na planilha; não repita (repetir despacharia outra caixa).",
+        "description": "SUCCESS: o Cosmos criou o reenvio (ou o pedido já tinha um das últimas 24 h, e nenhum outro foi criado), o caso entrou na fila do Metabase e a linha na planilha; não repita (repetir despacharia outra caixa).",
         "fields": [
           {
             "name": "code",
@@ -2932,13 +2932,13 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "message",
             "type": "string",
             "required": true,
-            "description": "Frase em português para exibir à pessoa."
+            "description": "Frase em português para exibir à pessoa. Quando o pedido já tinha reenvio no Cosmos, começa por \"O reenvio <SH…-R-n> já estava no Cosmos (nenhum outro foi criado).\", e a linha da planilha leva na frente das observações a nota [REENVIO JÁ EXISTIA NO COSMOS: <SH…-R-n>]."
           },
           {
             "name": "sentToAPI",
             "type": "boolean",
             "required": true,
-            "description": "true: o reenvio foi criado no Cosmos."
+            "description": "true: o reenvio está no Cosmos (criado agora ou já existente)."
           },
           {
             "name": "idSolicitacao",
@@ -3091,7 +3091,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "API_ERROR: o Cosmos recusou, não respondeu, o prazo acabou antes da chamada ou faltou dado da automação (token, apiData, cosmosId); nada foi registrado; repita só depois de corrigir, e quando o message diz que o reenvio PODE ter sido criado, confira no Cosmos antes.",
+        "description": "API_ERROR: o Cosmos recusou, não respondeu, o prazo acabou antes da chamada, faltou dado da automação (token, apiData, cosmosId) ou não deu para conferir se o pedido já tem reenvio; nada foi registrado; repita só depois de corrigir. Quando o message diz que o reenvio PODE ter sido criado, repetir é seguro: a nova chamada acha o reenvio no Cosmos e só o registra.",
         "fields": [
           {
             "name": "code",
@@ -3106,7 +3106,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "message",
             "type": "string",
             "required": true,
-            "description": "Uma de: \"O Cosmos recusou o reenvio: <erro>\", \"Ocorreu um erro ao se conectar ao servidor do Cosmos.\", \"O Cosmos não respondeu — o reenvio PODE ter sido criado. Confira no Cosmos antes de repetir.\", \"O tempo acabou antes de chamar o Cosmos — o reenvio não foi enviado.\" ou \"Os dados da automação estão incompletos — o reenvio não foi enviado ao Cosmos.\"."
+            "description": "Uma de: \"O Cosmos recusou o reenvio: <erro>\", \"Ocorreu um erro ao se conectar ao servidor do Cosmos.\", \"O Cosmos não respondeu — o reenvio PODE ter sido criado. Confira no Cosmos antes de repetir.\", \"O tempo acabou antes de chamar o Cosmos — o reenvio não foi enviado.\", \"Os dados da automação estão incompletos — o reenvio não foi enviado ao Cosmos.\" ou \"Não deu para conferir no Cosmos se o pedido já tem reenvio (<motivo>). Nenhum reenvio foi criado e nada foi registrado: tente de novo em alguns instantes.\"."
           },
           {
             "name": "sentToAPI",
@@ -3123,7 +3123,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "SHEETS_ERROR com reason RECORD_UNAVAILABLE: a fila do Metabase recusou o caso, então nada foi registrado (nem na planilha); com sentToAPI false pode repetir, com sentToAPI true o reenvio já saiu no Cosmos e repetir criaria outro.",
+        "description": "SHEETS_ERROR com reason RECORD_UNAVAILABLE: a fila do Metabase recusou o caso, então nada foi registrado (nem na planilha); com sentToAPI false pode repetir, com sentToAPI true o reenvio já está no Cosmos e repetir só o registraria (nenhum outro é criado).",
         "fields": [
           {
             "name": "code",
@@ -3455,10 +3455,11 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Decida pelo code (e pelo reason) do corpo, não pelo status HTTP: DUPLICATE_RESEND, OUT_OF_STOCK, API_ERROR e SHEETS_ERROR chegam como 200.",
       "A rota não confere credencial própria: o token do Cosmos vai no corpo (token), e o header x-cosmos-token não é lido aqui.",
-      "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha, e a busca da NF que não veio, nas do Cosmos) → POST /resend no Cosmos → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
+      "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha, a busca da NF que não veio e a do reenvio que o pedido já tem, nas do Cosmos) → POST /resend no Cosmos, só sem reenvio anterior → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
+      "O reenvio que o pedido já tem: com automação, a rota lista os reenvios do pedido no Cosmos (GET /organizations/{org}/orders?external_id=<dígitos>&origin=resend, com o token do agente, até 5 s por tentativa e duas tentativas quando o Cosmos não responde ou dá 5xx) e conta o criado nas últimas 24 h e não cancelado. Sem resposta do Cosmos, procura a remessa do reenvio na Intelipost do Data Mart, que só a recebe cerca de 1 h depois; sem ela lá, a resposta é API_ERROR, porque o reenvio pode ser de minutos atrás. O motivo: em 19/11/2026 o Cosmos criou reenvios de 10 a 50 s depois de a rota desistir do POST, e a repetição do agente criava outro.",
       "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai na frente dos comentários. Sem a NF no Data Mart, ela é procurada no metacampo da Shopify (yenzah) e na Intelipost ao vivo, no mesmo teto. Só o pedido que o Data Mart prova não faturado, e que essas fontes confirmam sem NF, é recusado (422). As 6 marcas do Cosmos e a gobeaute não passam por ela.",
       "O dedup procura o mesmo tipo (REENVIO), marca e data.numeroPedido nas últimas 24 h, na fila e na raw; um reenvio cancelado libera o pedido.",
-      "O POST /resend no Cosmos não é retentado; o prazo dele é a env TIMEOUT (10 s sem ela), contado do início da requisição.",
+      "O POST /resend no Cosmos não é retentado; o prazo dele é a env TIMEOUT (10 s sem ela), contado do início da requisição, e a consulta do reenvio anterior gasta desse mesmo prazo.",
       "Marcas sem Cosmos (apice, yenzah, denavita, gobeaute) nunca executam no Cosmos, mesmo com data.automacao preenchida; a gobeaute não tem planilha e o registro termina na fila.",
       "Corpo que não é JSON válido responde 500, não 400.",
       "O código API_TIMEOUT existe no tipo WebhookResponseCode, mas esta rota não o produz mais.",
@@ -3472,6 +3473,7 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/app/api/sheets/append/route.ts",
       "cxhub/modules/reenvios/actions/postResendWebhook.ts",
       "cxhub/modules/reenvios/actions/processResend.ts",
+      "cxhub/modules/reenvios/actions/reenvioRecenteNoCosmos.ts",
       "cxhub/modules/reenvios/actions/conferenciaDoReenvio.ts",
       "cxhub/modules/reenvios/actions/cosmosResend.ts",
       "cxhub/modules/reenvios/actions/buildResendRow.ts",
@@ -4619,7 +4621,8 @@ export const ENDPOINTS: Endpoint[] = [
       "Toda reprovação de guarda grava a solicitação sem automação, então corrigir o dado (endereço, CEP, número) e chamar de novo para o mesmo pedido em 24 h volta DUPLICATE_RESEND; não confirmado se há um caminho previsto para reenviar com a correção.",
       "OUT_OF_STOCK é a única recusa do Cosmos que a rota não regrava como ERP_REFUSED (ela só reposta quando o code é API_ERROR): pelo código, a solicitação não fica registrada em lugar nenhum, sem reason e sem aviso ao time.",
       "API_ERROR e API_TIMEOUT nunca chegam a quem chama esta rota: API_ERROR vira a repostagem com reason ERP_REFUSED, e API_TIMEOUT não é mais produzido.",
-      "ERP_REFUSED cobre recusa e falta de resposta do Cosmos; o erro do ERP vai só aos comentários da linha e ao aviso, não ao message, e quando o Cosmos não respondeu a remessa pode ter saído.",
+      "ERP_REFUSED cobre recusa e falta de resposta do Cosmos, e também a consulta do reenvio anterior sem resposta (nada foi criado); o erro do ERP vai só aos comentários da linha e ao aviso, não ao message, e quando o Cosmos não respondeu ao POST a remessa pode ter saído.",
+      "Antes de criar o reenvio, o registro pergunta ao Cosmos se o pedido já tem um das últimas 24 h e não cancelado (a mesma consulta do /api/sheets/append): com um, a solicitação é registrada com automação e com ele, sem criar outro, e a resposta é a de sucesso.",
       "Sem addressChange (ou com enabled false) o reenvio executa no endereço original do pedido; o CEP do endereço novo só tem o formato conferido (8 dígitos), não a existência.",
       "Em marca com Cosmos, a remessa é sempre montada a partir do pedido real: o pedido inteiro, ou só reshipment.items no parcial; problemItems e reshipmentItems são texto da linha.",
       "Exemplo de reenvio parcial (Portal de Cancelamento): \"reshipment\": { \"isFullReshipment\": false, \"items\": [{ \"sku\": \"KS01002\", \"quantity\": 1, \"lineItemId\": 9912001 }], \"removedItems\": [{ \"sku\": \"KS05007\", \"quantity\": 1, \"lineItemId\": 9912003 }] }, e a resposta ecoa items: [{ \"sku\": \"KS01002\", \"quantity\": 1 }].",
@@ -4644,6 +4647,7 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/modules/reenvios/actions/marcasDoBot.ts",
       "cxhub/modules/reenvios/actions/postResendWebhook.ts",
       "cxhub/modules/reenvios/actions/processResend.ts",
+      "cxhub/modules/reenvios/actions/reenvioRecenteNoCosmos.ts",
       "cxhub/modules/reenvios/actions/conferenciaDoReenvio.ts",
       "cxhub/modules/reenvios/actions/cosmosResend.ts",
       "cxhub/modules/reenvios/types/sheets.ts",

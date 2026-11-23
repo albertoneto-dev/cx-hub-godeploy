@@ -19,6 +19,7 @@ import { buildResendRow } from './buildResendRow';
 import { casoDoReenvio } from './casoDoReenvio';
 import { aplicarConferenciaAoReenvio, type ConferenciaDoReenvio } from './conferenciaDoReenvio';
 import { buildCosmosResendBody, interpretarErroCosmos, type FalhaCosmos } from './cosmosResend';
+import { notaDoReenvioExistente, reenvioRecenteNoCosmos, type ReenvioNoCosmos } from './reenvioRecenteNoCosmos';
 
 const LOG = '[Resend Direct]';
 
@@ -47,7 +48,9 @@ export interface ProcessResendInput {
  *    Yenzah e na Denavita, junto dele, a **conferência do pedido no Data Mart** (ADR-018): pedido sem NF de venda é
  *    recusado aqui, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram;
  * 2. **reenvio no Cosmos**, só com automação e fora do modo de teste (era o IF "Order should be sent to API2" —
- *    é aqui que mora o INV-02);
+ *    é aqui que mora o INV-02). Antes do `POST /resend`, o Cosmos é perguntado se o pedido já tem reenvio das últimas
+ *    24 h (`reenvioRecenteNoCosmos`, 2026-11-22, decisão deste app): com um, a solicitação é registrada com ele, sem
+ *    criar outro; sem dar para saber, nada é criado nem registrado (`API_ERROR`, e repetir é seguro);
  * 3. **fila do Metabase** — o caso vai à fila do app `cx-hub`, e o lote o leva à gold em até 20 min (ADR-012);
  * 4. **linha na planilha** (era o append do n8n) — só depois da fila, e só se a fila não recusou: o dedup lê a fila,
  *    e uma linha na planilha sem ela deixaria o agente repetir e duplicá-la. Com a fila `incerto` a linha vai também
@@ -112,6 +115,11 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     const nfIntelipost = temOrganizacaoNoCosmos(brand) && nfAusente(data.numeroNF)
         ? nfDoPedidoDoCosmos(brand, data.numeroPedido, prazoDaConferencia(prazo))
         : null;
+    // O reenvio que o pedido já tem no Cosmos (2026-11-22), também junto do dedup: as duas só leem, e o tempo dela sai do
+    // mesmo prazo do `POST /resend`. Nunca lança.
+    const reenvioAnterior = executar && temOrganizacaoNoCosmos(brand)
+        ? reenvioRecenteNoCosmos(brand, data.numeroPedido, token, prazo, agora)
+        : null;
     try {
         const existente = await solicitacaoRecenteNoRegistro('REENVIO', brand, data.numeroPedido);
         if (existente) {
@@ -163,10 +171,37 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     }
 
     // ─── 2. Reenvio no Cosmos ─────────────────────────────────────────────────────────────────────
+    // O reenvio que já estava no Cosmos: a solicitação é registrada como automação (o reenvio existe e sai), sem um 2º.
+    let jaNoCosmos: ReenvioNoCosmos | null = null;
     if (executar && temOrganizacaoNoCosmos(brand)) {
-        const falha = await executarNoCosmos(brand, dados, token, prazo, idSolicitacao);
-        if (falha) return { body: { ...falha, sentToAPI: false }, status: 200 };
+        const anterior = reenvioAnterior ? await reenvioAnterior : ({ tipo: 'nenhum' } as const);
+        if (anterior.tipo === 'indefinido') {
+            // Sem saber se o pedido já tem reenvio, criar outro arriscaria a 2ª caixa de 19/11. Nada sai, então repetir é seguro.
+            console.error(`${LOG} ${idSolicitacao}: sem conferir se o pedido ${data.numeroPedido} já tem reenvio (${anterior.motivo}) — nada criado nem registrado`);
+            return {
+                body: {
+                    code: 'API_ERROR',
+                    message: `Não deu para conferir no Cosmos se o pedido já tem reenvio (${anterior.motivo}). `
+                        + 'Nenhum reenvio foi criado e nada foi registrado: tente de novo em alguns instantes.',
+                    sentToAPI: false,
+                },
+                status: 200,
+            };
+        }
+        if (anterior.tipo === 'existe') {
+            const reenvio: ReenvioNoCosmos = { externalId: anterior.externalId, criadoEm: anterior.criadoEm, fonte: anterior.fonte };
+            jaNoCosmos = reenvio;
+            console.log(`${LOG} ${idSolicitacao}: o pedido ${data.numeroPedido} já tem o reenvio ${reenvio.externalId} `
+                + `(criado ${reenvio.criadoEm}, visto no ${reenvio.fonte === 'cosmos' ? 'Cosmos' : 'Data Mart'}) — registrando sem criar outro`);
+            dados = { ...dados, comentarios: [notaDoReenvioExistente(reenvio.externalId), dados.comentarios].filter(Boolean).join(' | ') };
+        } else {
+            const falha = await executarNoCosmos(brand, dados, token, prazo, idSolicitacao);
+            if (falha) return { body: { ...falha, sentToAPI: false }, status: 200 };
+        }
     }
+    const noCosmos = jaNoCosmos
+        ? `O reenvio ${jaNoCosmos.externalId} já estava no Cosmos (nenhum outro foi criado)`
+        : 'O reenvio foi processado com sucesso no Cosmos';
 
     // Ensaio: o Cosmos não foi chamado, e nada é registrado — a DAG não tem modo de teste e a fila leva à gold real.
     if (testMode) {
@@ -191,7 +226,7 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
             body: {
                 code: 'SHEETS_ERROR',
                 message: executar
-                    ? `O reenvio foi processado com sucesso no Cosmos, porém houve um erro ao registrar a solicitação (${fila.motivo}).`
+                    ? `${noCosmos}, porém houve um erro ao registrar a solicitação (${fila.motivo}).`
                     : `Houve um erro ao registrar o reenvio (${fila.motivo}). Tente novamente.`,
                 sentToAPI: executar,
                 reason: 'RECORD_UNAVAILABLE',
@@ -220,7 +255,7 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         { numeroPedido: dados.numeroPedido, idAtendimento: dados.idAtendimento, statusDaFila: fila.status },
     );
 
-    const feito = executar ? 'O reenvio foi processado com sucesso no Cosmos e a' : 'A';
+    const feito = executar ? `${noCosmos} e a` : 'A';
 
     if (!planilha.ok) {
         console.error(`${LOG} ${idSolicitacao}: fila ${fila.status}, planilha não (sentToAPI=${executar}) — ${planilha.motivo}`);
@@ -263,7 +298,7 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     return {
         body: {
             code: executar ? 'SUCCESS' : 'SUCCESS_SHEETS_ONLY',
-            message: 'Reenvio registrado com sucesso. O Metabase recebe no próximo lote (até 20 min).',
+            message: (jaNoCosmos ? `${noCosmos}. ` : '') + 'Reenvio registrado com sucesso. O Metabase recebe no próximo lote (até 20 min).',
             sentToAPI: executar,
             idSolicitacao,
         },

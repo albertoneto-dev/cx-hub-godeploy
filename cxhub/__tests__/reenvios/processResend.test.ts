@@ -14,6 +14,12 @@ vi.mock('@shared/lib/sheets/gravarLinha', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/sheets/gravarLinha')>()),
     gravarNasPlanilhas: vi.fn(),
 }));
+// A consulta ao Cosmos antes do POST /resend tem testes próprios (`reenvioRecenteNoCosmos.test.ts`): aqui, o que a rota
+// faz com cada resposta. Por padrão, o pedido não tem reenvio.
+vi.mock('@modules/reenvios/actions/reenvioRecenteNoCosmos', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('@modules/reenvios/actions/reenvioRecenteNoCosmos')>()),
+    reenvioRecenteNoCosmos: vi.fn(),
+}));
 
 import { problemaNoCaso, type CasoCxhub } from '@shared/lib/airflow';
 import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro, type ResultadoFila } from '@shared/lib/fila';
@@ -22,6 +28,7 @@ import { gravarNasPlanilhas } from '@shared/lib/sheets/gravarLinha';
 import { processResend, type ProcessResendInput } from '@modules/reenvios/actions/processResend';
 import { buildCosmosResendBody } from '@modules/reenvios/actions/cosmosResend';
 import { buildResendRow } from '@modules/reenvios/actions/buildResendRow';
+import { reenvioRecenteNoCosmos } from '@modules/reenvios/actions/reenvioRecenteNoCosmos';
 import type { ResendSubmissionData, SheetsAppendResponse } from '@modules/reenvios/types';
 import { RESEND_DATA } from '../helpers/resend-fixtures';
 import { CONFIG_OBRIGATORIA, stubRegistroEnv } from '../helpers/registro-env';
@@ -30,6 +37,7 @@ const buscar = vi.mocked(solicitacaoRecenteNoRegistro);
 const enfileirar = vi.mocked(enfileirarCasos);
 const prazoPadrao = vi.mocked(prazoDaFila);
 const planilhas = vi.mocked(gravarNasPlanilhas);
+const recente = vi.mocked(reenvioRecenteNoCosmos);
 
 // 27/10/2026 15:00 em SP
 const AGORA = new Date(Date.UTC(2026, 9, 27, 18, 0, 0));
@@ -70,6 +78,7 @@ describe('processResend (registro na fila do Metabase e na planilha)', () => {
         enfileirar.mockReset().mockResolvedValue({ status: 'enfileirado' });
         prazoPadrao.mockReset().mockReturnValue(PRAZO_PADRAO);
         planilhas.mockReset().mockResolvedValue({ ok: true });
+        recente.mockReset().mockResolvedValue({ tipo: 'nenhum' });
         cosmos = espionarCosmos();
         stubRegistroEnv();
         vi.stubEnv('COSMOS_API_URL', COSMOS_URL);
@@ -146,6 +155,103 @@ describe('processResend (registro na fila do Metabase e na planilha)', () => {
             expect(init?.method).toBe('POST');
             expect(init?.headers).toMatchObject({ Authorization: 'Bearer cosmos-token', 'Content-Type': 'application/json' });
             expect(JSON.parse(String(init?.body))).toEqual(buildCosmosResendBody(RESEND_DATA));
+        });
+    });
+
+    describe('o reenvio que o pedido já tem no Cosmos (2026-11-22)', () => {
+        const EXISTENTE = { tipo: 'existe', externalId: 'SH220183KS-R-1', criadoEm: '2026-10-27T14:59:30-03:00', fonte: 'cosmos' } as const;
+
+        it('é perguntado com a marca, o pedido, o token, o prazo e a hora da solicitação, antes do POST', async () => {
+            await processResend({ ...base, timeoutMs: 12_000 });
+
+            expect(recente).toHaveBeenCalledTimes(1);
+            const [marca, pedido, token, prazo, agora] = recente.mock.calls[0];
+            expect([marca, pedido, token, agora]).toEqual(['kokeshi', '#SHOPIFY220183', 'cosmos-token', AGORA]);
+            expect(prazo).toBeGreaterThan(Date.now());
+            expect(prazo).toBeLessThanOrEqual(Date.now() + 12_000);
+            expect(recente.mock.invocationCallOrder[0]).toBeLessThan(cosmos.mock.invocationCallOrder[0]);
+        });
+
+        it('já existe ⇒ SUCCESS sem POST, registrado como automação, com a nota na frente das observações', async () => {
+            recente.mockResolvedValue(EXISTENTE);
+
+            const { body, status } = await processResend({ ...base, idSolicitacao: 'req-9' });
+
+            expect(status).toBe(200);
+            expect(body).toEqual({
+                code: 'SUCCESS',
+                message: `O reenvio SH220183KS-R-1 já estava no Cosmos (nenhum outro foi criado). ${SUCESSO}`,
+                sentToAPI: true,
+                idSolicitacao: 'req-9',
+            });
+            expect(cosmos).not.toHaveBeenCalled();
+            expect(casoEnfileirado().automacao).toBe(true);
+            const linha = planilhas.mock.calls[0][0][0].linha;
+            expect(linha).toEqual(buildResendRow('kokeshi', {
+                ...RESEND_DATA,
+                comentarios: '[REENVIO JÁ EXISTIA NO COSMOS: SH220183KS-R-1] | COMENT',
+            }, CARIMBO));
+        });
+
+        it('achado pelo Data Mart vale igual', async () => {
+            recente.mockResolvedValue({ ...EXISTENTE, fonte: 'datamart' });
+
+            const { body } = await processResend(base);
+
+            expect(body.code).toBe('SUCCESS');
+            expect(cosmos).not.toHaveBeenCalled();
+        });
+
+        it('já existe e a fila recusa ⇒ SHEETS_ERROR dizendo que o reenvio já estava no Cosmos', async () => {
+            recente.mockResolvedValue(EXISTENTE);
+            enfileirar.mockResolvedValue({ status: 'recusado', motivo: 'fila fora' });
+
+            const { body } = await processResend(base);
+
+            expect(body).toEqual({
+                code: 'SHEETS_ERROR',
+                message: 'O reenvio SH220183KS-R-1 já estava no Cosmos (nenhum outro foi criado), porém houve um erro ao registrar a solicitação (fila fora).',
+                sentToAPI: true,
+                reason: 'RECORD_UNAVAILABLE',
+            });
+        });
+
+        it('sem dar para saber ⇒ API_ERROR com o motivo, sem POST e sem registro (repetir é seguro)', async () => {
+            recente.mockResolvedValue({ tipo: 'indefinido', motivo: 'o Cosmos não respondeu em 5000 ms' });
+
+            const { body, status } = await processResend(base);
+
+            expect(status).toBe(200);
+            expect(body).toEqual({
+                code: 'API_ERROR',
+                message: 'Não deu para conferir no Cosmos se o pedido já tem reenvio (o Cosmos não respondeu em 5000 ms). '
+                    + 'Nenhum reenvio foi criado e nada foi registrado: tente de novo em alguns instantes.',
+                sentToAPI: false,
+            });
+            expect(cosmos).not.toHaveBeenCalled();
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(planilhas).not.toHaveBeenCalled();
+        });
+
+        it.each([
+            ['sem automação', { data: SEM_AUTOMACAO }],
+            ['no modo de teste', { testMode: true }],
+            // A Gobeaute, e não a Ápice: a Ápice passaria pela conferência no Data Mart, que não é o assunto aqui.
+            ['em marca sem Cosmos', { brand: 'gobeaute' as const }],
+        ])('%s ⇒ não pergunta', async (_caso, ajuste) => {
+            await processResend({ ...base, ...ajuste });
+
+            expect(recente).not.toHaveBeenCalled();
+        });
+
+        it('duplicata na fila ⇒ DUPLICATE_RESEND como antes, mesmo com reenvio no Cosmos', async () => {
+            buscar.mockResolvedValue(DUPLICATA);
+            recente.mockResolvedValue(EXISTENTE);
+
+            const { body } = await processResend(base);
+
+            expect(body.code).toBe('DUPLICATE_RESEND');
+            expect(enfileirar).not.toHaveBeenCalled();
         });
     });
 

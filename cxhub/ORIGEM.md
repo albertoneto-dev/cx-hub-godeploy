@@ -204,6 +204,18 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   - `modules/*/actions/conferenciaDo*.ts`: a recusa da Yenzah diz "na Intelipost nem na Shopify".
   - `shared/lib/datamart/nfDaIntelipostServer.ts`: `nfDoPedidoDoCosmos` (o Data Mart, o metacampo e a Intelipost ao
     vivo), que o `processResend` e o `processRefund` chamam no lugar do `nfDaIntelipost`.
+- O reenvio que o pedido já tem no Cosmos é perguntado antes do `POST /resend` (2026-11-22). Em 19/11 o Cosmos criou
+  reenvios de 10 a 50 s depois de o `processResend` desistir do `POST` (no `TIMEOUT`), a resposta "PODE ter sido criado"
+  não registrava nada, e a repetição do agente criava outro: 8 pedidos com dois reenvios ativos, um com três. O que
+  mudou:
+  - arquivo novo `modules/reenvios/actions/reenvioRecenteNoCosmos.ts`: lista os reenvios do pedido no Cosmos
+    (`origin=resend`, 5 s por tentativa, duas tentativas) e conta o das últimas 24 h não cancelado, pelo
+    `matchResendsOfOrder`; sem resposta, procura a remessa na `gold.fct_intelipost_orders`; sem ela, `indefinido`
+    (o Data Mart recebe o reenvio cerca de 1 h depois). Nunca lança;
+  - `modules/reenvios/actions/processResend.ts`: a consulta corre junto do dedup, só com automação e marca do Cosmos.
+    Com o reenvio, registra como automação sem `POST`, com a nota `[REENVIO JÁ EXISTIA NO COSMOS: …]` nas observações
+    e a mensagem dizendo qual (decisão do usuário: registrar, e não recusar como duplicado). Sem dar para saber,
+    `API_ERROR` sem criar nem registrar. As mensagens de `SHEETS_ERROR` dizem "já estava no Cosmos" nesse caso.
 
 ## Testes
 
@@ -252,6 +264,15 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   - `integration/api-marcas-sem-cosmos`: saiu o caso "as outras 5 marcas do Cosmos seguem no REST", e o `beforeEach`
     não estuba mais o token;
   - `shared/pedidoDaShopifyNoDataMart`: as 5 marcas novas na reserva, e a BySamia como `by_samia` no SQL.
+- O reenvio que o pedido já tem no Cosmos (2026-11-22):
+  - novo `reenvios/reenvioRecenteNoCosmos.test.ts` (28 casos): a URL e o token da listagem, os dois formatos do pedido,
+    o mais recente, o cancelado, o de mais de 24 h, o de número parecido e o que não é reenvio fora da conta, a 2ª
+    tentativa, o teto de cada tentativa (relógio falso), o Data Mart achando e não achando, o 401 sem repetição, sem
+    prazo, sem token, pedido ou URL, e o SQL por igualdade com a sigla de cada marca;
+  - `reenvios/processResend.test.ts`: a consulta passa a ser substituída (por padrão, `nenhum`), e 9 casos novos: o que
+    ela recebe e que corre antes do `POST`, o registro sem `POST` com a nota e a mensagem, o achado pelo Data Mart, a
+    fila recusando depois, o `API_ERROR` sem registro, e que não roda sem automação, no teste, na marca sem Cosmos nem
+    antes da duplicata da fila.
 
 ## Atualizar para um commit novo do CX Hub
 

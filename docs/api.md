@@ -183,6 +183,29 @@ quer dizer "registrado, não repita", e o chamador depende disso.
 - **A NF no `/api/shopify/orders` (2026-11-19):** o `note_attributes.nf_number` que a tela e a Central leem (pelo
   `adaptShopifyOrder`, em `numeroNF`) vem do metacampo `custom.nf_numero` do pedido. O atributo `nf_number` da Shopify,
   que era o lido, não existe em nenhum pedido consultado em 19/11; fica de reserva.
+- **O reenvio que o pedido já tem no Cosmos (2026-11-22, decisão deste app):** em 19/11 o Cosmos levou de 10 a 50 s
+  para criar reenvios. O `processResend` desiste do `POST /resend` no `TIMEOUT` (12 s, do início da requisição) e
+  respondia "o reenvio PODE ter sido criado" sem registrar nada; o Cosmos criava o reenvio mesmo assim, o agente
+  repetia, e 8 pedidos ficaram com dois reenvios ativos (o Lescent 716185 com três). O dedup não via o primeiro, que não
+  tinha registro. Agora, com automação, o `/api/sheets/append` e o bot perguntam antes ao Cosmos
+  (`reenvioRecenteNoCosmos`, junto do dedup e no mesmo prazo do `POST /resend`):
+  - `GET /organizations/{org}/orders?external_id=<dígitos>&origin=resend&per_page=100`, com o token de quem pede, até
+    5 s por tentativa, e uma segunda tentativa quando o Cosmos não responde, cai ou dá 5xx/429;
+  - conta o reenvio do pedido (o mesmo filtro `SH<n><sigla>-R-<k>` / `#SHOPIFY<n>-R-<k>` da gestão de reenvios)
+    criado nas últimas 24 h e não cancelado. Com um, a solicitação é registrada como automação e sem `POST`: `SUCCESS`,
+    com a mensagem "O reenvio <SH…-R-n> já estava no Cosmos (nenhum outro foi criado)." e a nota
+    `[REENVIO JÁ EXISTIA NO COSMOS: …]` na frente das observações da linha (a fila não leva as observações);
+  - sem resposta do Cosmos, procura a remessa na `gold.fct_intelipost_orders` (pelo `sales_order_number`, com a marca e
+    a data: os reenvios não têm o `shopify_order_number`). Ela só chega lá cerca de 1 h depois da criação (15 min até a
+    Intelipost, no SH1585904KS-R-1, mais a cópia ao Data Mart), então acha o reenvio antigo, mas não o de minutos atrás.
+    Sem ele lá, nada é criado nem registrado: `API_ERROR` "Não deu para conferir no Cosmos se o pedido já tem reenvio
+    (…)". No bot, isso vira a linha sem automação com `ERP_REFUSED`, como a recusa do ERP;
+  - a decisão de registrar com o reenvio que já existia (e não recusar como duplicado) é do usuário, em 22/11. O reenvio
+    feito à mão no Cosmos nas últimas 24 h, sem registro no CX Hub, também é aproveitado, e a linha sai como automação.
+
+  O `POST /resend` continua sem retentativa. A consulta gasta do mesmo prazo, então, com o Cosmos lento, sobra menos
+  tempo para o `POST`; a repetição, que antes duplicava, agora acha o reenvio. Código:
+  `cxhub/modules/reenvios/actions/reenvioRecenteNoCosmos.ts`.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.

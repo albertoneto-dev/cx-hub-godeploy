@@ -423,6 +423,13 @@ const GUIA_HTML = `
         Intelipost</strong> no Data Mart ou, sem ela, a do metacampo <code>custom.nf_numero</code> da Shopify ou a da
         Intelipost ao vivo, sem os zeros à esquerda, na planilha e na fila. A NF que veio nunca é trocada, e sem resposta
         fica a que veio. Na Vercel, valia o que a tela mandava.</td></tr>
+      <tr><td>Reenvio automático no Cosmos (<code>/api/sheets/append</code> e o bot)</td><td>Antes de criar o reenvio, o
+        servidor pergunta ao Cosmos se o pedido já tem um das <strong>últimas 24 h</strong>, não cancelado. Com um, a
+        solicitação é registrada com ele e <strong>nenhum outro é criado</strong>: a resposta é a de sucesso, a mensagem
+        diz qual reenvio já existia, e a linha da planilha leva a nota <code>[REENVIO JÁ EXISTIA NO COSMOS: …]</code>. Sem
+        resposta do Cosmos em duas tentativas, vale a Intelipost do Data Mart, que só recebe o reenvio cerca de 1 h depois;
+        sem ele lá, nada é criado nem registrado (<code>API_ERROR</code>), e repetir é seguro. Assim, repetir depois de
+        "o reenvio PODE ter sido criado" não cria uma segunda caixa. Na Vercel, a repetição criava outro reenvio.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.
         Para ensaiar, use <code>testMode: true</code>.</td></tr>
       <tr><td>Tempo de execução</td><td>Não há o <code>maxDuration</code> da Vercel. O bot continua planejando o trabalho para
