@@ -12,7 +12,7 @@ import type { LeiturasDaNfForaDoDataMart } from './pedidoTipos';
  *    menos de 1 s;
  * 2. a Intelipost ao vivo.
  *
- * As duas pelo integrations-gateway, com até 4 s cada e nunca além do `prazo`. Quem decide o que as leituras querem
+ * As duas pelo gateway, com até 4 s cada e nunca além do `prazo`. Quem decide o que as leituras querem
  * dizer é `derivarContextoDoPedido` (marcas sem Cosmos) ou `nfDoPedidoDoCosmos`.
  *
  * ⚠️ **Server-only** (lê as chaves do gateway): fora do barrel. Nunca lança.

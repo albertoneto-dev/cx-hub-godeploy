@@ -37,8 +37,8 @@ export const ALERT_POLICY: Record<AlertReason, AlertPolicy> = {
     },
     SHOPIFY_UNAVAILABLE: {
         severidade: 'alta',
-        titulo: '🔴 O integrations-gateway não devolveu o pedido da Shopify',
-        acao: 'Verifique se o integrations-gateway está de pé e se a INTEGRATIONS_GATEWAY_READ_KEY está certa. As '
+        titulo: '🔴 O gateway da Shopify não devolveu o pedido',
+        acao: 'Verifique se o gateway está de pé e se a SHOPIFY_GATEWAY_URL e a SHOPIFY_GATEWAY_KEY estão certas. As '
             + 'solicitações do bot deste período (marcas sem Cosmos) foram registradas só com o que o bot informou, '
             + 'sem os itens e o endereço do pedido: confira o pedido na Shopify antes da execução.',
         agrupar: true,

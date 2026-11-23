@@ -3,9 +3,9 @@ import { ehMarcaCxHub, type MarcaCxHub } from '../constants';
 import { normalizarNf } from '../nfDaVenda';
 
 /**
- * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **integrations-gateway**: uma chave só
- * (`INTEGRATIONS_GATEWAY_READ_KEY`) para as 10 lojas, e a Admin API em **GraphQL** (`POST /shopify/{marca}/graphql`, com
- * o nome da marca na URL). O app não guarda token de loja nenhum (decisão de 2026-11-17: os tokens das lojas vão ser
+ * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **gateway de integrações**: uma chave só
+ * (`SHOPIFY_GATEWAY_KEY`) para as 10 lojas, e a Admin API em **GraphQL** (`POST {SHOPIFY_GATEWAY_URL}/{marca}/graphql`,
+ * com o nome da marca na URL). O app não guarda token de loja nenhum (decisão de 2026-11-17: os tokens das lojas vão ser
  * trocados, e o gateway já lê todas). Contrato e testes do gateway em `docs/integrations-gateway-shopify.md`.
  *
  * Aqui fica só o que é puro: a URL, a consulta, a escolha do pedido certo entre os que o filtro devolve e a tradução do
@@ -14,17 +14,40 @@ import { normalizarNf } from '../nfDaVenda';
  * do bot usam.
  */
 
-/** A base do gateway de produção: vale quando a `INTEGRATIONS_GATEWAY_URL` não está cadastrada. */
-export const URL_PADRAO_DO_GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+/** Os serviços do gateway que o app lê, cada um com a URL e a chave próprias. */
+export type ServicoDoGateway = 'shopify' | 'intelipost';
+
+const SECRETS_DO_SERVICO: Record<ServicoDoGateway, { url: string; chave: string }> = {
+    shopify: { url: 'SHOPIFY_GATEWAY_URL', chave: 'SHOPIFY_GATEWAY_KEY' },
+    intelipost: { url: 'INTELIPOST_GATEWAY_URL', chave: 'INTELIPOST_GATEWAY_KEY' },
+};
 
 /**
- * A base do gateway, sem `/` no fim: a `INTEGRATIONS_GATEWAY_URL` quando cadastrada, senão a de produção. Lida a cada
- * chamada, porque no Worker o `process.env` só é preenchido quando a requisição chega (e um segredo trocado vale sem
- * deploy).
+ * A base de um serviço no gateway, sem `/` no fim e com o nome do serviço no caminho. O secret pode vir com ele
+ * (`https://api.gogroup.cc/v1/intelipost`, como o app de extravios grava) ou sem ele (`https://api.gogroup.cc/v1`): o
+ * nome só é acrescentado quando falta, e nunca fica duplicado. Só https, porque a chave vai no header. Sem padrão no
+ * código (o integrations-gateway antigo foi descontinuado em 2026-11-23): sem URL válida, `null`.
  */
-export function urlDoGateway(): string {
-    const configurada = (process.env.INTEGRATIONS_GATEWAY_URL ?? '').trim().replace(/\/+$/, '');
-    return configurada || URL_PADRAO_DO_GATEWAY;
+export function baseDoServicoNoGateway(url: string | undefined, servico: ServicoDoGateway): string | null {
+    const limpa = (url ?? '').trim().replace(/\/+$/, '');
+    if (!/^https:\/\/[^\s/]+/i.test(limpa)) return null;
+    return limpa.toLowerCase().endsWith(`/${servico}`) ? limpa : `${limpa}/${servico}`;
+}
+
+export type AcessoAoGateway = { ok: true; base: string; chave: string } | { ok: false; motivo: string };
+
+/**
+ * A base e a chave de um serviço do gateway (`SHOPIFY_GATEWAY_*` ou `INTELIPOST_GATEWAY_*`, desde 2026-11-23). Lidas a
+ * cada chamada, porque no Worker o `process.env` só é preenchido quando a requisição chega (e um segredo trocado vale
+ * sem deploy). Faltando uma das duas, o serviço não está configurado, e o motivo diz qual secret falta.
+ */
+export function acessoAoGateway(servico: ServicoDoGateway): AcessoAoGateway {
+    const nomes = SECRETS_DO_SERVICO[servico];
+    const chave = process.env[nomes.chave]?.trim();
+    if (!chave) return { ok: false, motivo: `sem a ${nomes.chave}` };
+    const base = baseDoServicoNoGateway(process.env[nomes.url], servico);
+    if (!base) return { ok: false, motivo: `sem a ${nomes.url} (https)` };
+    return { ok: true, base, chave };
 }
 
 /**

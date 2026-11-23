@@ -2,20 +2,22 @@ import { SUFIXO_DO_PEDIDO, type MarcaSemCosmosComPlanilha, type SupportedBrand }
 import { normalizarNf } from '../nfDaVenda';
 
 /**
- * A Intelipost ao vivo pelo integrations-gateway (2026-11-19), puro: a conta de cada marca, os caminhos e a leitura da
- * resposta. A chamada HTTP é do `nfNaIntelipostServer.ts`, server-only.
+ * A Intelipost ao vivo pelo gateway (2026-11-19), puro: a conta de cada marca, os caminhos e a leitura da resposta. A
+ * chamada HTTP é do `nfNaIntelipostServer.ts`, server-only.
  *
  * O Data Mart (`gold.fct_intelipost_orders`) leva cerca de 1 h para receber um envio novo, e nessa janela o pedido já
  * faturado parecia "sem NF". A API da Intelipost tem o envio na hora. As chaves da API por marca respondem 401 desde
- * 01/10/2026; o gateway a lê com uma chave só, a `INTEGRATIONS_GATEWAY_WRITE_KEY` (a que tem `intelipost:read`).
+ * 01/10/2026; o gateway a lê com uma chave só. Desde 2026-11-23 são a `INTELIPOST_GATEWAY_URL` e a
+ * `INTELIPOST_GATEWAY_KEY` (o integrations-gateway, com a `INTEGRATIONS_GATEWAY_WRITE_KEY`, foi descontinuado).
  *
- * Contrato do gateway (o mesmo que a Central de Tickets usa, testado pelo usuário com a chave dele em 18/11/2026, só
- * leitura; ver `docs/integrations-gateway-shopify.md`):
- * - `GET {gateway}/intelipost/{conta}/shipment_order/sales_order_number/{SH…}` com `Authorization: Bearer <chave>`: o
- *   envio enxuto do pedido. `GET …/shipment_order/{order_number}`: o envio completo;
+ * Contrato do gateway (o mesmo que a Central de Tickets e o app de extravios usam, só leitura; ver
+ * `docs/integrations-gateway-shopify.md`):
+ * - `GET {INTELIPOST_GATEWAY_URL}/{conta}/shipment_order/sales_order_number/{SH…}` com `Authorization: Bearer <chave>`:
+ *   o envio enxuto do pedido. `GET …/shipment_order/{order_number}`: o envio completo;
  * - a resposta é a da API: `{ status: 'OK', content }`, com o envio direto no `content`, num array ou em
  *   `content.shipment_orders[]`;
- * - envio que não existe: 400; rota que o gateway não conhece: 404. Chave inválida: 401; sem `intelipost:read`: 403.
+ * - envio que não existe: 400; rota que o gateway não conhece: 404. Sem chave ou com chave inválida: 401 no gateway
+ *   antigo e 403 `invalid_key` no novo (visto em 23/11); sem `intelipost:read`: 403.
  */
 
 /** As marcas com conta na Intelipost: as 6 do Cosmos e as 3 sem Cosmos com planilha (a Gobeaute não tem envio próprio). */
@@ -93,7 +95,7 @@ export type RespostaDaIntelipost = { envio: EnvioIntelipost } | { naoAchou: true
  */
 export function lerRespostaDaIntelipost(status: number, corpo: unknown): RespostaDaIntelipost {
     if (status === 401) return { erro: 'chave recusada pelo gateway (HTTP 401)' };
-    if (status === 403) return { erro: 'chave sem permissão de leitura da Intelipost (HTTP 403)' };
+    if (status === 403) return { erro: 'chave recusada ou sem permissão de leitura da Intelipost (HTTP 403)' };
     if (status === 429) return { erro: 'limite de consultas do gateway (HTTP 429)' };
     if (status >= 500) return { erro: `gateway ou Intelipost fora do ar (HTTP ${status})` };
     if (status === 400 || status === 404) return { naoAchou: true };

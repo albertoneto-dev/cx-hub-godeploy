@@ -9,16 +9,24 @@ import {
 import { nfNaIntelipostAoVivo } from '@shared/lib/intelipost/nfNaIntelipostServer';
 import { MARCAS_COM_NF_NA_SHOPIFY, normalizarNf } from '@shared/lib/nfDaVenda';
 import { nfNoMetacampoDaShopify } from '@shared/lib/shopify/buscarPedidoNoGateway';
-import { CONSULTA_DA_NF, CONSULTA_DO_PEDIDO, escolherPedido, pedidoDoGatewayParaShopify, type PedidoDoGateway } from '@shared/lib/shopify/gateway';
+import {
+    acessoAoGateway,
+    baseDoServicoNoGateway,
+    CONSULTA_DA_NF,
+    CONSULTA_DO_PEDIDO,
+    escolherPedido,
+    pedidoDoGatewayParaShopify,
+    type PedidoDoGateway,
+} from '@shared/lib/shopify/gateway';
 import { adaptShopifyOrder } from '@shared/lib/shopify/adapter';
 
 /**
  * A NF de venda fora do Data Mart (2026-11-19): o metacampo `custom.nf_numero` da Shopify e a Intelipost ao vivo, as duas
- * pelo integrations-gateway. Os números de pedido e de NF são os da medição de 19/11 (SH52988BS tem o metacampo 1834451;
+ * pelo gateway. Os números de pedido e de NF são os da medição de 19/11 (SH52988BS tem o metacampo 1834451;
  * o reenvio dele, SH52988BS-R-1, o 1905557); o resto é de mentira. Nenhuma chamada real.
  */
 
-const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+const GATEWAY = 'https://api.gateway.test/v1';
 
 const json = (corpo: unknown, status = 200) => new Response(JSON.stringify(corpo), { status });
 
@@ -51,8 +59,10 @@ const responder = (porUrl: (url: string, init?: RequestInit) => Response | Promi
 const prazo = () => Date.now() + 10_000;
 
 beforeEach(() => {
-    vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_leitura_de_teste');
-    vi.stubEnv('INTEGRATIONS_GATEWAY_WRITE_KEY', 'igw_intelipost_de_teste');
+    vi.stubEnv('SHOPIFY_GATEWAY_URL', `${GATEWAY}/shopify`);
+    vi.stubEnv('SHOPIFY_GATEWAY_KEY', 'igw_leitura_de_teste');
+    vi.stubEnv('INTELIPOST_GATEWAY_URL', `${GATEWAY}/intelipost`);
+    vi.stubEnv('INTELIPOST_GATEWAY_KEY', 'igw_intelipost_de_teste');
     for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation(() => {});
 });
 
@@ -143,8 +153,8 @@ describe('nfNoMetacampoDaShopify', () => {
 
         const semChamada = responder(() => pedidos());
         expect(await nfNoMetacampoDaShopify('yenzah', '11249', Date.now() + 100)).toEqual({ ok: false, motivo: 'prazo esgotado antes da consulta' });
-        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', '');
-        expect(await nfNoMetacampoDaShopify('yenzah', '11249', prazo())).toEqual({ ok: false, motivo: 'sem a INTEGRATIONS_GATEWAY_READ_KEY' });
+        vi.stubEnv('SHOPIFY_GATEWAY_KEY', '');
+        expect(await nfNoMetacampoDaShopify('yenzah', '11249', prazo())).toEqual({ ok: false, motivo: 'sem a SHOPIFY_GATEWAY_KEY' });
         expect(semChamada).not.toHaveBeenCalled();
     });
 
@@ -234,7 +244,7 @@ describe('nfNaIntelipostAoVivo', () => {
     it('não respondeu: chave recusada, limite, fora do ar, rede, sem a chave ou sem prazo — nunca "sem NF"', async () => {
         for (const [status, motivo] of [
             [401, 'chave recusada pelo gateway (HTTP 401)'],
-            [403, 'chave sem permissão de leitura da Intelipost (HTTP 403)'],
+            [403, 'chave recusada ou sem permissão de leitura da Intelipost (HTTP 403)'],
             [429, 'limite de consultas do gateway (HTTP 429)'],
             [503, 'gateway ou Intelipost fora do ar (HTTP 503)'],
         ] as const) {
@@ -249,8 +259,8 @@ describe('nfNaIntelipostAoVivo', () => {
 
         const semChamada = responder(() => json({}));
         expect(await nfNaIntelipostAoVivo('denavita', '430489', Date.now() + 100)).toEqual({ ok: false, motivo: 'prazo esgotado antes da consulta' });
-        vi.stubEnv('INTEGRATIONS_GATEWAY_WRITE_KEY', ' ');
-        expect(await nfNaIntelipostAoVivo('denavita', '430489', prazo())).toEqual({ ok: false, motivo: 'sem a INTEGRATIONS_GATEWAY_WRITE_KEY' });
+        vi.stubEnv('INTELIPOST_GATEWAY_KEY', ' ');
+        expect(await nfNaIntelipostAoVivo('denavita', '430489', prazo())).toEqual({ ok: false, motivo: 'sem a INTELIPOST_GATEWAY_KEY' });
         expect(semChamada).not.toHaveBeenCalled();
     });
 
@@ -304,5 +314,59 @@ describe('lerNfForaDoDataMart: o metacampo antes da Intelipost ao vivo', () => {
         expect(await lerNfForaDoDataMart('yenzah', '11249', 1, d)).toEqual({
             shopify: { ok: false, motivo: 'falha inesperada' }, intelipost: { ok: false, motivo: 'falha inesperada' },
         });
+    });
+});
+
+describe('a URL e a chave de cada serviço do gateway (2026-11-23)', () => {
+    it('a base aceita a URL com ou sem o nome do serviço no fim, sem duplicá-lo, e só em https', () => {
+        expect(baseDoServicoNoGateway('https://api.gateway.test/v1/intelipost', 'intelipost')).toBe('https://api.gateway.test/v1/intelipost');
+        expect(baseDoServicoNoGateway(' https://api.gateway.test/v1/Shopify/ ', 'shopify')).toBe('https://api.gateway.test/v1/Shopify');
+        expect(baseDoServicoNoGateway('https://api.gateway.test/v1/', 'intelipost')).toBe('https://api.gateway.test/v1/intelipost');
+        expect(baseDoServicoNoGateway('https://api.gateway.test', 'shopify')).toBe('https://api.gateway.test/shopify');
+        // A URL de um serviço não vale pela do outro: ganha o caminho certo no fim (e o gateway responde 404).
+        expect(baseDoServicoNoGateway('https://api.gateway.test/v1/shopify', 'intelipost')).toBe('https://api.gateway.test/v1/shopify/intelipost');
+        for (const invalida of [undefined, '', '   ', 'http://api.gateway.test/v1', 'api.gateway.test/v1', 'https://']) {
+            expect(baseDoServicoNoGateway(invalida, 'shopify'), String(invalida)).toBeNull();
+        }
+    });
+
+    it('cada serviço lê os secrets dele, e o motivo diz qual falta', () => {
+        expect(acessoAoGateway('shopify')).toEqual({ ok: true, base: `${GATEWAY}/shopify`, chave: 'igw_leitura_de_teste' });
+        expect(acessoAoGateway('intelipost')).toEqual({ ok: true, base: `${GATEWAY}/intelipost`, chave: 'igw_intelipost_de_teste' });
+        vi.stubEnv('SHOPIFY_GATEWAY_URL', '');
+        expect(acessoAoGateway('shopify')).toEqual({ ok: false, motivo: 'sem a SHOPIFY_GATEWAY_URL (https)' });
+        expect(acessoAoGateway('intelipost').ok).toBe(true);
+        vi.stubEnv('INTELIPOST_GATEWAY_KEY', '');
+        expect(acessoAoGateway('intelipost')).toEqual({ ok: false, motivo: 'sem a INTELIPOST_GATEWAY_KEY' });
+    });
+
+    it('as INTEGRATIONS_GATEWAY_* antigas não valem por nenhum dos dois', () => {
+        for (const nome of ['SHOPIFY_GATEWAY_URL', 'SHOPIFY_GATEWAY_KEY', 'INTELIPOST_GATEWAY_URL', 'INTELIPOST_GATEWAY_KEY']) vi.stubEnv(nome, '');
+        vi.stubEnv('INTEGRATIONS_GATEWAY_URL', 'https://integrations-gateway.antigo.test');
+        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_antiga');
+        vi.stubEnv('INTEGRATIONS_GATEWAY_WRITE_KEY', 'igw_antiga');
+        expect(acessoAoGateway('shopify')).toEqual({ ok: false, motivo: 'sem a SHOPIFY_GATEWAY_KEY' });
+        expect(acessoAoGateway('intelipost')).toEqual({ ok: false, motivo: 'sem a INTELIPOST_GATEWAY_KEY' });
+    });
+
+    it('a Intelipost com a URL sem o /intelipost: o caminho é acrescentado, com a chave dela', async () => {
+        vi.stubEnv('INTELIPOST_GATEWAY_URL', 'https://api.gateway.test/v1/');
+        const espiao = responder(() => json({ status: 'OK', content: envio('SH1832330AP001', '000183916') }));
+
+        expect(await nfNaIntelipostAoVivo('apice', '1832330', prazo())).toEqual({ ok: true, dados: '183916' });
+        const [url, init] = espiao.mock.calls[0];
+        expect(url).toBe('https://api.gateway.test/v1/intelipost/apice/shipment_order/sales_order_number/SH1832330AP');
+        expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer igw_intelipost_de_teste');
+    });
+
+    it('sem a INTELIPOST_GATEWAY_URL, ou em http: não respondeu, sem chamar nada (nunca "sem NF")', async () => {
+        const semChamada = responder(() => json({}));
+        for (const url of ['', 'http://api.gateway.test/v1/intelipost']) {
+            vi.stubEnv('INTELIPOST_GATEWAY_URL', url);
+            expect(await nfNaIntelipostAoVivo('denavita', '430489', prazo())).toEqual({ ok: false, motivo: 'sem a INTELIPOST_GATEWAY_URL (https)' });
+        }
+        vi.stubEnv('SHOPIFY_GATEWAY_URL', '');
+        expect(await nfNoMetacampoDaShopify('yenzah', '11249', prazo())).toEqual({ ok: false, motivo: 'sem a SHOPIFY_GATEWAY_URL (https)' });
+        expect(semChamada).not.toHaveBeenCalled();
     });
 });

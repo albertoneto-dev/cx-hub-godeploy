@@ -50,7 +50,7 @@ não é `gdk_`.
 | GET | `/api/cosmos/resends?brand=&orderId=` | Os reenvios (`-R-n`) de um pedido |
 | PATCH | `/api/cosmos/resends/{id}?brand=` | Edita endereço, transportadora ou cliente de um reenvio; endereço novo vai à gold pela fila, depois da resposta |
 | POST | `/api/cosmos/resends/{id}/cancel?brand=` | Cancela um reenvio no Cosmos (sem volta); o cancelamento vai à gold pela fila |
-| GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify, pelo integrations-gateway com o nome da marca (as 10), e o Data Mart de reserva. Sem token de loja |
+| GET | `/api/shopify/orders?brand=&orderId=` | O pedido na Shopify, pelo gateway da Shopify com o nome da marca (as 10), e o Data Mart de reserva. Sem token de loja |
 | GET | `/api/datamart/products?brand=apice\|yenzah\|denavita` | O catálogo de produtos avulsos da marca no Data Mart, no formato dos produtos do Cosmos: o mimo e a troca do reenvio das marcas sem Cosmos. Guardado por 6 h em memória |
 | GET | `/api/datamart/order-context?brand=apice\|yenzah\|denavita&order=` | O que o servidor vai gravar para o pedido (ADR-018): `nf` e `nfStatus` (`achada`, com o `nfOrigem`: `datamart`, `shopify` ou `intelipost`; `ausente`; ou `desconhecida`, com o `nfMotivo`: `sem_resposta`, `nf_fora_do_data_mart` ou `pedido_cancelado_no_tiny`), `cd`, `statusSugerido`, `avisos`, a composição dos `kits` e o que ficou em `naoConferidos`. Data Mart fora dá 200 com `desconhecida`, não erro. Sem cache |
 | GET | `/api/resend/data?origin=reenvio\|reembolso\|logistica` | Os dropdowns do formulário (app `rota-dados-cxhub`) |
@@ -77,9 +77,9 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   não existe responde `404 { code: "NOT_FOUND" }`, e método errado responde `405 { code: "METHOD_NOT_ALLOWED" }` com
   `Allow`.
 - Os avisos que iam ao Google Chat vão ao Slack (`SLACK_ALERT_WEBHOOK_URL`, o mesmo canal da fila), com o mesmo texto.
-- **Nenhum token de loja da Shopify (2026-11-17).** O `/api/shopify/orders` lê toda marca pelo integrations-gateway:
-  `POST {INTEGRATIONS_GATEWAY_URL}/shopify/{marca}/graphql`, com a `INTEGRATIONS_GATEWAY_READ_KEY`. Sem a
-  `INTEGRATIONS_GATEWAY_URL` cadastrada, vale o gateway de produção. Na Vercel, Lescent, Kokeshi, BySamia, Auá, Barbours
+- **Nenhum token de loja da Shopify (2026-11-17).** O `/api/shopify/orders` lê toda marca pelo gateway da Shopify:
+  `POST {SHOPIFY_GATEWAY_URL}/{marca}/graphql`, com a `SHOPIFY_GATEWAY_KEY` (veja "Um gateway por serviço", abaixo).
+  Na Vercel, Lescent, Kokeshi, BySamia, Auá, Barbours
   e Rituária liam o REST `orders.json` da loja com os `SHOPIFY_TOKEN_*`. Aqui a Rituária passou ao gateway em
   2026-11-10, e as outras 5 em 2026-11-17, porque os tokens das lojas vão ser trocados. O que muda para quem chama, nas
   6 marcas do Cosmos:
@@ -90,7 +90,23 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   - só os últimos 60 dias vêm da Shopify; o resto vem do Data Mart (abaixo).
 
   No Cosmos e no bot, as marcas do Cosmos seguem iguais. Código: `cxhub/shared/lib/shopify/gateway.ts`.
-- O pedido que o integrations-gateway não acha (ele só enxerga os últimos 60 dias) ou com ele fora do ar vem do Data
+- **Um gateway por serviço (2026-11-23, decisão deste app).** O integrations-gateway (`INTEGRATIONS_GATEWAY_URL`,
+  `INTEGRATIONS_GATEWAY_READ_KEY` e `INTEGRATIONS_GATEWAY_WRITE_KEY`) foi descontinuado. A Shopify e a Intelipost têm
+  agora a URL e a chave próprias: `SHOPIFY_GATEWAY_URL` e `SHOPIFY_GATEWAY_KEY` (o pedido e o metacampo da NF),
+  `INTELIPOST_GATEWAY_URL` e `INTELIPOST_GATEWAY_KEY` (a Intelipost ao vivo). Os caminhos e o `Authorization: Bearer`
+  são os mesmos de antes:
+  - a URL vale com ou sem o nome do serviço no fim (`https://…/v1/shopify` ou `https://…/v1`): o app acrescenta o
+    `/shopify` ou o `/intelipost` só quando falta, e nunca o duplica (`baseDoServicoNoGateway`);
+  - não há endereço padrão, e só https vale, porque a chave vai no header. Sem a URL ou a chave, o serviço conta como não
+    configurado: o `/api/shopify/orders` responde 500 (`Shopify gateway key not configured`), o bot registra com
+    `SHOPIFY_UNAVAILABLE` e a NF fora do Data Mart fica `desconhecida`, nunca `ausente`;
+  - o gateway novo responde `403 {"error":"invalid_key"}` à chave ausente ou recusada (o antigo respondia 401), antes de
+    olhar a rota. Para o app, os dois são erro: o 502 no `/api/shopify/orders` e "sem resposta" na Intelipost;
+  - as `INTEGRATIONS_GATEWAY_*` não são lidas por nenhuma rota.
+
+  Código: `acessoAoGateway` em `cxhub/shared/lib/shopify/gateway.ts`, usado por `buscarPedidoNoGateway.ts` e
+  `cxhub/shared/lib/intelipost/nfNaIntelipostServer.ts`.
+- O pedido que o gateway da Shopify não acha (ele só enxerga os últimos 60 dias) ou com ele fora do ar vem do Data
   Mart (`api.vw_shopify_orders`, pela chave do Metabase), no mesmo formato: no `/api/shopify/orders` (as 9 marcas com
   planilha; a BySamia é `by_samia` lá) e no bot (as sem Cosmos). Na Ápice, quando a Shopify não tem o telefone, vale o
   do Tiny. Na Vercel, o pedido de mais de 60 dias das sem Cosmos voltava como não encontrado e a agente não conseguia
@@ -146,12 +162,12 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   pedido já faturado eram recusados (a pergunta do Nai na thread dos reembolsos de cancelamento: "só puxa se tiver
   NF?"; o portal de cancelamento também chama o CX Hub direto). Agora, sem a NF no Data Mart (nem a da primeira remessa
   da Intelipost, nem, na Ápice, a do Tiny), a conferência lê, nesta ordem e cada uma só se a anterior não deu a NF:
-  - o metacampo `custom.nf_numero` da Shopify pelo integrations-gateway (`INTEGRATIONS_GATEWAY_READ_KEY`), só nas marcas
+  - o metacampo `custom.nf_numero` da Shopify pelo gateway (`SHOPIFY_GATEWAY_URL` e `SHOPIFY_GATEWAY_KEY`), só nas marcas
     que o preenchem. Medido em 19/11 nos 50 pedidos de 05 a 15/11 de cada marca: 100% dos despachados das 6 do Cosmos
     e da Yenzah, 0% da Ápice (0/42), da Denavita (0/46) e da Gobeaute (0/32), e nenhum dos 71 cancelados. Das três sem
     Cosmos, só a Yenzah o lê;
-  - a Intelipost ao vivo pelo gateway (`INTEGRATIONS_GATEWAY_WRITE_KEY`, a chave com `intelipost:read`):
-    `GET {gateway}/intelipost/{conta}/shipment_order/sales_order_number/SH{n}{sigla}` e, se o envio enxuto vier sem a
+  - a Intelipost ao vivo pelo gateway (`INTELIPOST_GATEWAY_URL` e `INTELIPOST_GATEWAY_KEY`, desde 2026-11-23):
+    `GET {INTELIPOST_GATEWAY_URL}/{conta}/shipment_order/sales_order_number/SH{n}{sigla}` e, se o envio enxuto vier sem a
     NF, `GET …/shipment_order/{order_number}`. Contas: `apice`, `denavita`, `beautyhub` (Yenzah, Barbours, Rituária) e
     `lescent` (Lescent, Kokeshi, BySamia, Auá). 400 e 404 são "não achou"; 401, 403, 429 e 5xx, erro.
 
@@ -279,8 +295,10 @@ Como cada desfecho é medido (código em `api/saude/`):
   entregar nada (o Airflow sem resposta, a DAG pausada). Nos logs de 17/11, cada caso chega à raw em até ~20 min.
 - **As dependências pelo `fetch` global:** o `worker.ts` põe um envoltório na frente dele (`api/saude/medidor.ts`), que
   olha só o host e anota o desfecho, sem mudar a chamada. Assim o `cxhub/` não foi editado. O 401/403 do Cosmos é o token
-  de quem chama, e não conta. O `dep_gateway` mede o host do integrations-gateway inteiro: a Shopify e, desde
-  2026-11-19, a Intelipost ao vivo; o 400/404 da Intelipost (envio que não existe) não é falha, e a chave recusada é. Sem nenhuma chamada há 15 min, a rota faz uma sonda só de leitura: a DAG no Airflow (que
+  de quem chama, e não conta. O `dep_gateway` mede os hosts da `SHOPIFY_GATEWAY_URL` e da `INTELIPOST_GATEWAY_URL`
+  (desde 2026-11-23; antes, o do integrations-gateway inteiro): a Shopify e, desde 2026-11-19, a Intelipost ao vivo; o
+  400/404 da Intelipost (envio que não existe) não é falha, e a chave recusada (401 ou 403) é. Sem nenhuma chamada há
+  15 min, a rota faz uma sonda só de leitura: a DAG no Airflow (que
   também diz se ela está pausada) e `select 1` no Data Mart. O Cosmos não tem sonda.
 - **Gravação:** `anotarSaude` guarda em memória; o `worker.ts` grava no fim de cada requisição e de cada tarefa do
   `after()`, no `ctx.waitUntil`. A falha do registro só vai ao log (`[saude] registro não gravado`). Tabelas no `env.DB`:

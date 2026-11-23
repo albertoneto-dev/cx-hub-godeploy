@@ -11,12 +11,12 @@ import { createRequest } from '../helpers/api-test-utils';
 const AUTH = 'Bearer test-token';
 const COSMOS = 'https://api.cosmos.test';
 const METABASE = 'https://metabase.test';
-const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+const GATEWAY = 'https://api.gateway.test/v1';
 
 let tokenCosmos: number;
 let respostaMetabase: (sql: string) => Response;
 /**
- * O integrations-gateway (2026-11-19): o metacampo da Shopify (`/shopify/…`) e a Intelipost ao vivo (`/intelipost/…`),
+ * O gateway (2026-11-19): o metacampo da Shopify (`/shopify/…`) e a Intelipost ao vivo (`/intelipost/…`),
  * que só são lidos quando o Data Mart não tem a NF. Por padrão, a Intelipost não acha o envio (400) e a Shopify não tem
  * o pedido.
  */
@@ -77,8 +77,10 @@ beforeEach(() => {
     vi.stubEnv('METABASE_URL', METABASE);
     vi.stubEnv('METABASE_API_KEY', 'chave');
     vi.stubEnv('METABASE_DATABASE_ID', '43');
-    vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_leitura_de_teste');
-    vi.stubEnv('INTEGRATIONS_GATEWAY_WRITE_KEY', 'igw_intelipost_de_teste');
+    vi.stubEnv('SHOPIFY_GATEWAY_URL', `${GATEWAY}/shopify`);
+    vi.stubEnv('SHOPIFY_GATEWAY_KEY', 'igw_leitura_de_teste');
+    vi.stubEnv('INTELIPOST_GATEWAY_URL', `${GATEWAY}/intelipost`);
+    vi.stubEnv('INTELIPOST_GATEWAY_KEY', 'igw_intelipost_de_teste');
     tokenCosmos = 200;
     respostaMetabase = dataMartDoPedidoReal;
     respostaGateway = semEnvioNemPedido;

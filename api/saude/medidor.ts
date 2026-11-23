@@ -6,7 +6,8 @@
 // desfecho; a chamada segue igual: mesmo argumento, mesma resposta, mesma exceção. Ele nunca lê o corpo.
 //
 // O host é comparado com o que o app tem cadastrado (AIRFLOW_BASE_URL, COSMOS_API_URL, METABASE_URL,
-// INTEGRATIONS_GATEWAY_URL, FORM_DATA_API_URL), lido do process.env na hora da chamada, como o código do CX Hub lê.
+// SHOPIFY_GATEWAY_URL, INTELIPOST_GATEWAY_URL, FORM_DATA_API_URL), lido do process.env na hora da chamada, como o código
+// do CX Hub lê.
 
 import type { Busca } from "../../servidor/contexto";
 import { type Ambiente, envDoProcesso } from "../ambiente";
@@ -29,16 +30,15 @@ export const DEPENDENCIAS = {
   cosmos: { componente: "dep_cosmos", nome: "Cosmos", falha: falhaDoCosmos },
   sheets: { componente: "dep_sheets", nome: "Google Planilhas", falha: falhaHttp },
   datamart: { componente: "dep_datamart", nome: "Data Mart", falha: falhaHttp },
-  gateway: { componente: "dep_gateway", nome: "integrations-gateway", falha: falhaHttp },
+  gateway: { componente: "dep_gateway", nome: "gateway de integrações", falha: falhaHttp },
   rotaDados: { componente: "dep_rota_dados", nome: "Rota dados", falha: falhaHttp },
 } satisfies Record<string, Dependencia>;
 
 const MEDIDO = Symbol.for("cx-hub.saude.fetch-medido");
 const BASE = Symbol.for("cx-hub.saude.fetch-base");
 
-// Os padrões do código do CX Hub quando a variável não está cadastrada (cxhub/shared/lib/shopify/gateway.ts e o
-// .env.example).
-const GATEWAY_PADRAO = "integrations-gateway-prod.rpa-ia.workers.dev";
+// O padrão do código do CX Hub quando a variável não está cadastrada (o .env.example). O gateway não tem padrão desde
+// 2026-11-23: sem a URL cadastrada, o código nem o chama.
 const ROTA_DADOS_PADRAO = "rota-dados-cxhub.devgogroup.com";
 const HOSTS_DO_GOOGLE = new Set(["sheets.googleapis.com", "oauth2.googleapis.com", "www.googleapis.com"]);
 
@@ -59,7 +59,8 @@ export function dependenciaDaUrl(url: string, env: Ambiente = envDoProcesso()): 
   if (h === hostDe(env.COSMOS_API_URL)) return DEPENDENCIAS.cosmos;
   if (HOSTS_DO_GOOGLE.has(h)) return DEPENDENCIAS.sheets;
   if (h === hostDe(env.METABASE_URL)) return DEPENDENCIAS.datamart;
-  if (h === (hostDe(env.INTEGRATIONS_GATEWAY_URL) ?? GATEWAY_PADRAO)) return DEPENDENCIAS.gateway;
+  // A Shopify e a Intelipost têm URL própria (2026-11-23), e podem estar no mesmo host: as duas contam no dep_gateway.
+  if (h === hostDe(env.SHOPIFY_GATEWAY_URL) || h === hostDe(env.INTELIPOST_GATEWAY_URL)) return DEPENDENCIAS.gateway;
   if (h === (hostDe(env.FORM_DATA_API_URL) ?? ROTA_DADOS_PADRAO)) return DEPENDENCIAS.rotaDados;
   return null;
 }

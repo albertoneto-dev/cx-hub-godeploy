@@ -85,7 +85,7 @@ async function rede(req) {
   saidas.push({ url, metodo: req.method, authorization: req.headers.get("authorization"), chave: req.headers.get("x-api-key") });
   if (url.startsWith(`${COSMOS}/organizations/`)) return Response.json([]);
   if (url === `${METABASE}/api/dataset`) return Response.json({ status: "completed", data: { rows: [] } }, { status: 202 });
-  // A Intelipost ao vivo pelo integrations-gateway: o envio não existe (o 400 da Intelipost).
+  // A Intelipost ao vivo pelo gateway (INTELIPOST_GATEWAY_*): o envio não existe (o 400 da Intelipost).
   if (url.startsWith(`${GATEWAY}/intelipost/`)) return Response.json({ status: "ERROR" }, { status: 400 });
   if (url === TOKEN_URL) {
     const problema = jwtValido(new URLSearchParams(await req.text()).get("assertion"));
@@ -129,8 +129,8 @@ async function rodada(dataDeCompatibilidade) {
       METABASE_URL: METABASE,
       METABASE_API_KEY: "chave-do-metabase",
       METABASE_DATABASE_ID: "43",
-      INTEGRATIONS_GATEWAY_URL: GATEWAY,
-      INTEGRATIONS_GATEWAY_WRITE_KEY: "igw_intelipost_de_teste",
+      INTELIPOST_GATEWAY_URL: GATEWAY, // sem o /intelipost: o código acrescenta
+      INTELIPOST_GATEWAY_KEY: "igw_intelipost_de_teste",
       GOOGLE_PLANILHAS_EMAIL: EMAIL_GOOGLE,
       GOOGLE_PLANILHAS_TOKEN: chavePrivadaPem,
       SHEETS_ENV: "staging",

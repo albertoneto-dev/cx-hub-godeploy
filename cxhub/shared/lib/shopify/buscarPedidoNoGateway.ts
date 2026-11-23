@@ -7,26 +7,26 @@ import {
     escolherPedido,
     nfDoMetacampo,
     pausaDepoisDoLimite,
+    acessoAoGateway,
     pedidoDoGatewayParaShopify,
-    urlDoGateway,
     type MarcaNoGateway,
     type PedidoDoGateway,
 } from './gateway';
 import { nomesDoPedidoNaShopify } from './nomeDoPedido';
 
 /**
- * A busca do pedido de toda marca do CX Hub (`MarcaNoGateway`) no **integrations-gateway**, do lado do servidor, com o
+ * A busca do pedido de toda marca do CX Hub (`MarcaNoGateway`) no **gateway da Shopify**, do lado do servidor, com o
  * nome da marca na URL: a rota `/api/shopify/orders` (a tela) e a rota do bot (ADR-015, só as sem Cosmos) a chamam pelo
  * `buscarPedidoNoGatewayOuNoDataMart`, que tem o Data Mart de reserva (decisão deste app). Nas sem Cosmos procura
  * `SH{n}{sufixo}` e depois só os dígitos (o `#n` antigo); nas 6 do Cosmos, só os dígitos. Confere o nome do resultado
  * (o filtro é tolerante) e devolve o pedido no formato REST de sempre, que o `adaptShopifyOrder` lê. O gateway só
  * enxerga os últimos 60 dias de pedidos (falta o `read_all_orders` nas lojas).
  *
- * Nunca lança: a falha volta com o status HTTP que a rota da tela responde (`500` sem chave ou na rede, `502` quando o
- * gateway responde errado, `504` no prazo) e com a mensagem dela.
+ * Nunca lança: a falha volta com o status HTTP que a rota da tela responde (`500` sem a URL ou a chave, ou na rede,
+ * `502` quando o gateway responde errado, `504` no prazo) e com a mensagem dela.
  *
- * ⚠️ Server-only (lê a `INTEGRATIONS_GATEWAY_READ_KEY`), fora do barrel. O pedido tem nome, telefone e endereço da
- * cliente: nunca vai ao log.
+ * ⚠️ Server-only (lê a `SHOPIFY_GATEWAY_URL` e a `SHOPIFY_GATEWAY_KEY`, desde 2026-11-23), fora do barrel. O pedido tem
+ * nome, telefone e endereço da cliente: nunca vai ao log.
  */
 
 export type ResultadoDaBuscaNoGateway =
@@ -48,7 +48,7 @@ class PrazoEsgotado extends Error {
 /** Uma consulta ao gateway, com o prazo dela. Estourou o prazo ⇒ lança `AbortError`. */
 async function consultarGateway(
     marca: MarcaNoGateway,
-    chave: string,
+    acesso: { base: string; chave: string },
     nome: string,
     timeoutMs: number,
     consulta: string = CONSULTA_DO_PEDIDO,
@@ -57,9 +57,9 @@ async function consultarGateway(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const res = await fetch(`${urlDoGateway()}/shopify/${marca}/graphql`, {
+        const res = await fetch(`${acesso.base}/${marca}/graphql`, {
             method: 'POST',
-            headers: { Authorization: `Bearer ${chave}`, 'Content-Type': 'application/json' },
+            headers: { Authorization: `Bearer ${acesso.chave}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: consulta, variables: { q: `name:${nome}` } }),
             signal: controller.signal,
         });
@@ -81,9 +81,9 @@ export async function buscarPedidoNoGateway(
     timeoutMs: number,
     prazo?: number,
 ): Promise<ResultadoDaBuscaNoGateway> {
-    const chave = process.env.INTEGRATIONS_GATEWAY_READ_KEY;
-    if (!chave) {
-        console.error(`${LOG} INTEGRATIONS_GATEWAY_READ_KEY ausente: a busca do pedido na Shopify é pelo integrations-gateway, em toda marca`);
+    const acesso = acessoAoGateway('shopify');
+    if (!acesso.ok) {
+        console.error(`${LOG} ${acesso.motivo}: a busca do pedido na Shopify é pelo gateway, em toda marca`);
         return { tipo: 'falha', status: 500, erro: 'Shopify gateway key not configured' };
     }
 
@@ -92,7 +92,7 @@ export async function buscarPedidoNoGateway(
     try {
         for (const nome of nomesDoPedidoNaShopify(marca, orderId)) {
             console.log(`${LOG} ${marca}: buscando ${nome}`);
-            let { res, corpo } = await consultarGateway(marca, chave, nome, prazoDaConsulta());
+            let { res, corpo } = await consultarGateway(marca, acesso, nome, prazoDaConsulta());
             // Limite de taxa da chave: uma nova tentativa só, depois da pausa. Se persistir, vira 502 como os outros
             // erros — e a tela, que não distingue erro de "não encontrado", diria que o pedido não existe.
             if (res.status === 429) {
@@ -102,7 +102,7 @@ export async function buscarPedidoNoGateway(
                 }
                 console.warn(`${LOG} ${marca}: 429, nova tentativa em ${pausa} ms`);
                 await new Promise((resolve) => setTimeout(resolve, pausa));
-                ({ res, corpo } = await consultarGateway(marca, chave, nome, prazoDaConsulta()));
+                ({ res, corpo } = await consultarGateway(marca, acesso, nome, prazoDaConsulta()));
             }
 
             if (!res.ok) {
@@ -156,21 +156,21 @@ export async function nfNoMetacampoDaShopify(
         console.warn(`${LOG} ${marca}: a NF do metacampo do pedido ${pedido} ficou sem resposta (${motivo})`);
         return { ok: false, motivo };
     };
-    const chave = process.env.INTEGRATIONS_GATEWAY_READ_KEY;
-    if (!chave) return falhou('sem a INTEGRATIONS_GATEWAY_READ_KEY');
+    const acesso = acessoAoGateway('shopify');
+    if (!acesso.ok) return falhou(acesso.motivo);
     const nome = nomesDoPedidoNaShopify(marca, pedido)[0];
     if (!nome) return falhou('número do pedido sem dígitos');
     const prazoDaConsulta = () => Math.min(NF_FORA_DO_DATA_MART_TIMEOUT_MS, prazo - agora());
     if (prazoDaConsulta() < NF_FORA_DO_DATA_MART_MIN_PRAZO_MS) return falhou('prazo esgotado antes da consulta');
 
     try {
-        let { res, corpo } = await consultarGateway(marca, chave, nome, prazoDaConsulta(), CONSULTA_DA_NF);
+        let { res, corpo } = await consultarGateway(marca, acesso, nome, prazoDaConsulta(), CONSULTA_DA_NF);
         // O limite de taxa da chave: uma nova tentativa só, e só se a pausa e a consulta couberem no prazo.
         if (res.status === 429) {
             const pausa = pausaDepoisDoLimite(res.headers.get('retry-after'));
             if (agora() + pausa + NF_FORA_DO_DATA_MART_MIN_PRAZO_MS > prazo) return falhou('HTTP 429, sem prazo para a nova tentativa');
             await new Promise((resolve) => setTimeout(resolve, pausa));
-            ({ res, corpo } = await consultarGateway(marca, chave, nome, prazoDaConsulta(), CONSULTA_DA_NF));
+            ({ res, corpo } = await consultarGateway(marca, acesso, nome, prazoDaConsulta(), CONSULTA_DA_NF));
         }
         if (!res.ok) return falhou(`HTTP ${res.status}`);
         if (!corpo) return falhou('resposta 200 sem JSON');

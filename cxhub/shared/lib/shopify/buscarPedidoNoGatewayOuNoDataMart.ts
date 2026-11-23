@@ -4,7 +4,7 @@ import { buscarPedidoNoGateway, type ResultadoDaBuscaNoGateway } from './buscarP
 import type { MarcaNoGateway } from './gateway';
 
 /**
- * O pedido de uma marca do CX Hub na Shopify (todas lidas pelo integrations-gateway, `MarcaNoGateway`): o gateway
+ * O pedido de uma marca do CX Hub na Shopify (todas lidas pelo gateway da Shopify, `MarcaNoGateway`): o gateway
  * primeiro — o pedido ao vivo, sem o atraso de carga do Data Mart — e, quando ele não o acha ou falha, o Data Mart
  * (`pedidoDaShopifyServer.ts`; a Gobeaute não está lá). O gateway só enxerga os últimos 60 dias de pedidos; o Data
  * Mart, todos. É o que a rota `/api/shopify/orders` (a tela) e a rota do bot chamam. Decisão deste app

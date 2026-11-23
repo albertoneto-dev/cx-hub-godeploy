@@ -86,13 +86,17 @@ O contrato é o da Vercel: os mesmos caminhos, métodos, corpos e respostas de s
   este app é a produção.
 - **Duplicatas:** o `/api/sheets/append` e o `/api/refund/submit` bloqueiam a mesma solicitação dentro de 24 h.
 - **Planilha junto da fila:** cada registro grava a linha na planilha da marca junto com a fila (ADR-010).
-- **Marcas sem Cosmos:** Ápice, Yenzah e Denavita leem a Shopify pelo integrations-gateway, que só enxerga os últimos 60
-  dias. A Gobeaute registra só na fila. As marcas que o bot aceita vêm da rota dados (ADR-015).
+- **Marcas sem Cosmos:** Ápice, Yenzah e Denavita leem a Shopify pelo gateway, que só enxerga os últimos 60 dias. A
+  Gobeaute registra só na fila. As marcas que o bot aceita vêm da rota dados (ADR-015).
 - **Nenhuma chave da Shopify (decisão de 2026-11-17):** o app não usa token de loja. No `/api/shopify/orders`, o pedido
-  de **toda** marca, inclusive as 6 do Cosmos, vem pelo integrations-gateway, com o nome da marca na URL
-  (`INTEGRATIONS_GATEWAY_URL`, ou o gateway de produção sem ela) e o Data Mart de reserva para o que passa de 60 dias.
-  Não volte a pôr `SHOPIFY_TOKEN_*` nem chamada a `*.myshopify.com`. No Cosmos e no bot, as marcas do Cosmos continuam
-  no Cosmos.
+  de **toda** marca, inclusive as 6 do Cosmos, vem pelo gateway da Shopify, com o nome da marca na URL, e o Data Mart de
+  reserva para o que passa de 60 dias. Não volte a pôr `SHOPIFY_TOKEN_*` nem chamada a `*.myshopify.com`. No Cosmos e no
+  bot, as marcas do Cosmos continuam no Cosmos.
+- **Um gateway por serviço (decisão de 2026-11-23):** o integrations-gateway (`INTEGRATIONS_GATEWAY_URL`, `_READ_KEY` e
+  `_WRITE_KEY`) foi descontinuado. A Shopify usa a `SHOPIFY_GATEWAY_URL` e a `SHOPIFY_GATEWAY_KEY`; a Intelipost ao vivo,
+  a `INTELIPOST_GATEWAY_URL` e a `INTELIPOST_GATEWAY_KEY` (`acessoAoGateway`, em `cxhub/shared/lib/shopify/gateway.ts`).
+  A URL vale com ou sem o `/shopify` ou o `/intelipost` no fim, só em https, e **não tem padrão no código**: sem ela, o
+  serviço fica desligado, como sem a chave. Não volte a ler as `INTEGRATIONS_GATEWAY_*`.
 - **Bot de reenvio (`/api/reenvio/bot`):**
   - pede a `gdk_` **e** o `x-bot-secret`. O login do GoDeploy deixa entrar qualquer pessoa do grupo, e esta rota cria
     pedido no Cosmos;

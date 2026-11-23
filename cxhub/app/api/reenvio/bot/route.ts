@@ -27,7 +27,7 @@ import { sendAlert, deveAvisar, ALERT_TIMEOUT_MS, type AlertContext, type AlertR
  *
  * As marcas aceitas são as que a rota dados lista para o reenvio (ADR-015, `marcasDoBot`). As marcas sem Cosmos
  * (Ápice, Yenzah, Denavita, Gobeaute) seguem outro caminho, sem nenhuma chamada ao Cosmos (INV-07): o pedido vem da
- * Shopify pelo integrations-gateway e a solicitação só é registrada (`registrarMarcaSemCosmos`).
+ * Shopify pelo gateway e a solicitação só é registrada (`registrarMarcaSemCosmos`).
  *
  * **Régua única das guardas (INV-05): toda dúvida degrada para REGISTRO** — a linha é gravada sem
  * automação, com o motivo na resposta. Nunca "executa mesmo assim", e nunca perde a solicitação num
@@ -430,7 +430,7 @@ async function recusarItens(motivo: string, requestId: string): Promise<NextResp
 
 /**
  * Marca sem Cosmos no bot (ADR-015): o desfecho é o mesmo da tela para essas marcas — o pedido vem da Shopify pelo
- * integrations-gateway (ou, fora dos 60 dias dele, do Data Mart: decisão deste app) e a solicitação é **só
+ * gateway da Shopify (ou, fora dos 60 dias dele, do Data Mart: decisão deste app) e a solicitação é **só
  * registrada** (fila e planilha; a Gobeaute, só na fila). Nenhuma chamada
  * ao Cosmos (INV-07), nenhuma guarda de automação (não há o que executar) e nenhum aviso quando tudo dá certo:
  * registrar é o caminho normal dessas marcas, não uma degradação.
@@ -464,7 +464,7 @@ async function registrarMarcaSemCosmos(input: {
             requestId,
             reprovacao: {
                 reason: 'SHOPIFY_UNAVAILABLE',
-                motivo: 'Não foi possível consultar o pedido na Shopify (integrations-gateway indisponível ou mal configurado) — registrado com o que o bot informou',
+                motivo: 'Não foi possível consultar o pedido na Shopify (gateway da Shopify indisponível ou mal configurado) — registrado com o que o bot informou',
                 detalhe: busca.erro,
             },
         });

@@ -262,18 +262,23 @@ describe("resumo das observações e resposta", () => {
 describe("medidor do fetch", () => {
   const env = {
     AIRFLOW_BASE_URL: "http://airflow.exemplo:8080/", COSMOS_API_URL: "https://api.cosmos.exemplo", METABASE_URL: "https://metabase.exemplo",
-    FORM_DATA_API_URL: "https://rota-dados.exemplo",
+    FORM_DATA_API_URL: "https://rota-dados.exemplo", SHOPIFY_GATEWAY_URL: "https://api.gateway.exemplo/v1/shopify",
+    INTELIPOST_GATEWAY_URL: "https://intelipost.gateway.exemplo/v1",
   };
 
-  it("cada host cadastrado vira a dependência dele; o gateway sem cadastro é o de produção; o resto não é medido", () => {
+  it("cada host cadastrado vira a dependência dele; o resto não é medido", () => {
     expect(dependenciaDaUrl("http://airflow.exemplo:8080/api/v2/dags/x", env)?.componente).toBe("dep_airflow");
     expect(dependenciaDaUrl("https://api.cosmos.exemplo/organizations/1/orders", env)?.componente).toBe("dep_cosmos");
     expect(dependenciaDaUrl("https://sheets.googleapis.com/v4/spreadsheets/x", env)?.componente).toBe("dep_sheets");
     expect(dependenciaDaUrl("https://oauth2.googleapis.com/token", env)?.componente).toBe("dep_sheets");
     expect(dependenciaDaUrl("https://metabase.exemplo/api/dataset", env)?.componente).toBe("dep_datamart");
-    expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/shopify/apice/graphql", env)?.componente).toBe("dep_gateway");
-    // A Intelipost ao vivo (a NF fora do Data Mart, 19/11/2026) passa pelo mesmo host.
-    expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/intelipost/apice/shipment_order/sales_order_number/SH1AP", env)?.componente).toBe("dep_gateway");
+    // A Shopify e a Intelipost ao vivo (a NF fora do Data Mart, 19/11/2026) têm URL própria desde 23/11/2026: o host de
+    // cada uma conta no dep_gateway.
+    expect(dependenciaDaUrl("https://api.gateway.exemplo/v1/shopify/apice/graphql", env)?.componente).toBe("dep_gateway");
+    expect(dependenciaDaUrl("https://intelipost.gateway.exemplo/v1/intelipost/apice/shipment_order/sales_order_number/SH1AP", env)?.componente).toBe("dep_gateway");
+    // O integrations-gateway foi descontinuado: sem padrão, o host antigo não é mais medido.
+    expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/shopify/apice/graphql", env)).toBeNull();
+    expect(dependenciaDaUrl("https://api.gateway.exemplo/v1/shopify/apice/graphql", { ...env, SHOPIFY_GATEWAY_URL: undefined })).toBeNull();
     expect(dependenciaDaUrl("https://rota-dados.exemplo/api/v1/form-data", env)?.componente).toBe("dep_rota_dados");
     expect(dependenciaDaUrl("https://hooks.slack.exemplo/services/x", env)).toBeNull();
     expect(dependenciaDaUrl("http://fila.cx-hub.interno/api/v1/casos", env)).toBeNull();

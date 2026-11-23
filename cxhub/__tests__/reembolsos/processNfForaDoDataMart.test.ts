@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 
 // A NF fora do Data Mart no registro (2026-11-19), de ponta a ponta no servidor: a conferência e as leituras são as
-// REAIS, com o Metabase e o integrations-gateway simulados pelo `fetch`. Como em `processSemCosmos.test.ts`, o dedup, a
+// REAIS, com o Metabase e o gateway simulados pelo `fetch`. Como em `processSemCosmos.test.ts`, o dedup, a
 // fila e a planilha têm testes próprios; aqui importa a NF que vai para a fila, e a recusa.
 vi.mock('@shared/lib/fila', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/fila')>()),
@@ -21,7 +21,7 @@ import type { RefundSubmissionData } from '@modules/reembolsos/types';
 import { stubRegistroEnv } from '../helpers/registro-env';
 
 const METABASE = 'https://metabase.test';
-const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+const GATEWAY = 'https://api.gateway.test/v1';
 
 const enfileirar = vi.mocked(enfileirarCasos);
 const planilhas = vi.mocked(gravarNasPlanilhas);
@@ -91,8 +91,10 @@ beforeEach(() => {
     vi.stubEnv('METABASE_URL', METABASE);
     vi.stubEnv('METABASE_API_KEY', 'chave');
     vi.stubEnv('METABASE_DATABASE_ID', '43');
-    vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_leitura_de_teste');
-    vi.stubEnv('INTEGRATIONS_GATEWAY_WRITE_KEY', 'igw_intelipost_de_teste');
+    vi.stubEnv('SHOPIFY_GATEWAY_URL', `${GATEWAY}/shopify`);
+    vi.stubEnv('SHOPIFY_GATEWAY_KEY', 'igw_leitura_de_teste');
+    vi.stubEnv('INTELIPOST_GATEWAY_URL', `${GATEWAY}/intelipost`);
+    vi.stubEnv('INTELIPOST_GATEWAY_KEY', 'igw_intelipost_de_teste');
     gateway = (url) => (url.includes('/intelipost/') ? intelipostSemEnvio() : json({ data: { orders: { edges: [] } } }));
     fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (input, init) => {
         const url = String(input);

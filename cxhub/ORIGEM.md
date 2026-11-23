@@ -226,6 +226,24 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `modules/reembolsos/types/submission.ts`, `modules/reenvios/actions/casoDoReenvio.ts` e
   `modules/reembolsos/actions/casoDoReembolso.ts`. O CX Hub de origem não tem o campo: numa atualização a partir dele,
   mantenha esta adaptação.
+- Um gateway por serviço (2026-11-23). O usuário: "o INTEGRATIONS_GATEWAY_URL, INTEGRATIONS_GATEWAY_READ/WRITE_KEY vai
+  deixar de existir e ser descontinuado", com a `SHOPIFY_GATEWAY_URL`/`_KEY` e a `INTELIPOST_GATEWAY_URL`/`_KEY` já
+  cadastradas no app. Os caminhos (`/shopify/{marca}/graphql` e `/intelipost/{conta}/shipment_order/…`) e o
+  `Authorization: Bearer` são os mesmos; o que mudou é de onde vêm a base e a chave. O que mudou:
+  - `shared/lib/shopify/gateway.ts`: sem o `URL_PADRAO_DO_GATEWAY` e o `urlDoGateway()`. O `acessoAoGateway(servico)`
+    lê a URL e a chave do serviço a cada chamada e diz qual secret falta; o `baseDoServicoNoGateway` (puro) aceita a URL
+    com ou sem o `/shopify` ou o `/intelipost` no fim, sem duplicá-lo (a convenção do app extravios-gobeaute-cx, cujo
+    secret é `…/v1/intelipost`), e só https. Sem padrão no código: sem a URL, o serviço fica desligado, como sem a chave;
+  - `shared/lib/shopify/buscarPedidoNoGateway.ts` e `shared/lib/intelipost/nfNaIntelipostServer.ts`: usam o
+    `acessoAoGateway`. A resposta de quem chama não mudou (`500 Shopify gateway key not configured` sem a URL ou a
+    chave; o motivo do log e da NF não conferida passa a nomear o secret novo);
+  - `shared/lib/intelipost/gateway.ts`: o 403 diz "chave recusada ou sem permissão", porque o gateway novo responde
+    `403 invalid_key` à chave ausente ou errada (o antigo, 401). Visto em 23/11, sem chave, em toda rota;
+  - `shared/lib/alerts/policy.ts`: o aviso `SHOPIFY_UNAVAILABLE` manda conferir a `SHOPIFY_GATEWAY_URL` e a
+    `SHOPIFY_GATEWAY_KEY`; `app/api/reenvio/bot/route.ts`: o motivo diz "gateway da Shopify". Os `reason` não mudaram;
+  - comentários que diziam "integrations-gateway" para o que vale hoje (`nfDaVenda.ts`, `cd-utils.ts`,
+    `pedidoDaShopifyServer.ts`, `nfForaDoDataMartServer.ts`, `buscarPedidoNoGatewayOuNoDataMart.ts`, `alerts/types.ts`,
+    `app/api/shopify/orders/route.ts`). Os que contam uma medição feita nele ficaram.
 
 ## Testes
 
@@ -283,6 +301,14 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
     ela recebe e que corre antes do `POST`, o registro sem `POST` com a nota e a mensagem, o achado pelo Data Mart, a
     fila recusando depois, o `API_ERROR` sem registro, e que não roda sem automação, no teste, na marca sem Cosmos nem
     antes da duplicata da fila.
+- Um gateway por serviço (2026-11-23): os testes que estubavam as `INTEGRATIONS_GATEWAY_*` estubam as
+  `SHOPIFY_GATEWAY_*` e as `INTELIPOST_GATEWAY_*`, com a base de teste `https://api.gateway.test/v1` (as URLs esperadas
+  não mudaram de forma). Casos novos:
+  - `integration/api-shopify-orders`: a URL com e sem o `/shopify` no fim, as `INTEGRATIONS_GATEWAY_*` no ambiente sem
+    ser lidas, a URL ausente, em http ou sem esquema (500 sem chamar nada) e o 403 `invalid_key` do gateway novo (502);
+  - `shared/nfForaDoDataMart`: o `baseDoServicoNoGateway` e o `acessoAoGateway` (cada serviço com os secrets dele, o
+    motivo com o nome do que falta), a Intelipost com a URL sem o `/intelipost` e sem a URL ou em http (sem chamar nada,
+    nunca "sem NF"). O motivo do 403 mudou de texto.
 
 ## Atualizar para um commit novo do CX Hub
 

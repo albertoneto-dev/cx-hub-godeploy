@@ -14,7 +14,7 @@ import { consultarDataMart, MetabaseError } from '@shared/lib/metabase';
 import { adaptShopifyOrder } from '@shared/lib/shopify/adapter';
 
 /**
- * O pedido da Shopify lido no Data Mart, a reserva do integrations-gateway para o pedido fora dos 60 dias que ele
+ * O pedido da Shopify lido no Data Mart, a reserva do gateway da Shopify para o pedido fora dos 60 dias que ele
  * enxerga (decisão deste app, `cxhub/ORIGEM.md`): a consulta, o mapeamento para o formato REST do gateway e o que o
  * `adaptShopifyOrder` faz com ele. Dado pessoal de mentira; os SKUs e o frete são os do pedido #1607929 da Ápice.
  */

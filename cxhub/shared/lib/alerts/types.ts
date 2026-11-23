@@ -26,7 +26,7 @@ export type AlertReason =
     /** ERP inacessível ou mal configurado, **depois** de esgotadas as retentativas */
     | 'COSMOS_UNAVAILABLE'
     /**
-     * Marca sem Cosmos (ADR-015): o integrations-gateway não respondeu ou está mal configurado — a solicitação foi
+     * Marca sem Cosmos (ADR-015): o gateway da Shopify não respondeu ou está mal configurado — a solicitação foi
      * registrada com o que o bot informou, sem os dados do pedido
      */
     | 'SHOPIFY_UNAVAILABLE'

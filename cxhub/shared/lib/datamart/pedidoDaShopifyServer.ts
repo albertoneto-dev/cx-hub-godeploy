@@ -2,7 +2,7 @@ import { consultarDataMart, literalSql } from '../metabase/index';
 import type { ShopifyOrder } from '../../types/index';
 
 /**
- * O pedido da Shopify das marcas do CX Hub (todas lidas pelo integrations-gateway, `MarcaNoGateway`), lido no
+ * O pedido da Shopify das marcas do CX Hub (todas lidas pelo gateway da Shopify, `MarcaNoGateway`), lido no
  * **Data Mart**, pelo Metabase: a reserva do gateway, que só enxerga os últimos 60 dias de pedidos (falta o
  * `read_all_orders` nas lojas). O Data Mart guarda o pedido inteiro, sem janela — em `api.vw_shopify_orders`, com os
  * itens, o frete e os despachos no JSON da própria Shopify. Decisão deste app (`cxhub/ORIGEM.md`, 2026-11-12; as 5

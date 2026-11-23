@@ -1,23 +1,35 @@
-# integrations-gateway: a Shopify e a Intelipost
+# O gateway: a Shopify e a Intelipost
 
 > Trazido do repositório antigo do CX Hub (`docs/integrations-gateway-shopify.md`, testado em **2026-11-06**, só com
 > leitura) em 2026-11-19, quando aquele repositório já estava encerrado. Revisto para o que este app faz desde a v15
 > (toda marca pelo gateway, sem token de loja) e para a NF de venda (o metacampo da Shopify e a Intelipost ao vivo).
 > Tudo o que está aqui foi observado; o que não foi testado está marcado.
+>
+> **2026-11-23: um gateway por serviço.** O integrations-gateway (`integrations-gateway-prod.rpa-ia.workers.dev`, com a
+> `INTEGRATIONS_GATEWAY_URL`, a `_READ_KEY` e a `_WRITE_KEY`) foi descontinuado. A Shopify e a Intelipost têm a URL e a
+> chave próprias, cadastradas pelo usuário no app. As rotas abaixo (o caminho depois do `/shopify` e do `/intelipost`)
+> e o `Bearer` são os mesmos; as medições de 06/11 e 19/11 foram feitas no gateway antigo.
 
 ## Resumo
 
 | Item | Valor |
 |---|---|
-| Base | `https://integrations-gateway-prod.rpa-ia.workers.dev` (a `INTEGRATIONS_GATEWAY_URL`, quando cadastrada) |
-| Autenticação | `Authorization: Bearer <chave igw_…>` |
-| Chave de leitura da Shopify | `INTEGRATIONS_GATEWAY_READ_KEY` (escopo `shopify:read`): o pedido de toda marca e o metacampo da NF |
-| Chave da Intelipost | `INTEGRATIONS_GATEWAY_WRITE_KEY`: a chave com `intelipost:read` (a mesma que a Central de Tickets usa). O nome é histórico: ela também escreve na Shopify (nota e endereço), e o app nunca chama essas rotas |
-| Leitura da Shopify | **`POST /shopify/{marca}/graphql`**: Admin API **GraphQL** da loja da marca |
-| Leitura da Intelipost | **`GET /intelipost/{conta}/shipment_order/…`**: a API da Intelipost, ao vivo |
+| Base da Shopify | a `SHOPIFY_GATEWAY_URL` (https), com ou sem o `/shopify` no fim: o app o acrescenta quando falta |
+| Base da Intelipost | a `INTELIPOST_GATEWAY_URL` (https), com ou sem o `/intelipost` no fim (o app extravios-gobeaute-cx cadastra `https://api.gogroup.cc/v1/intelipost`) |
+| Autenticação | `Authorization: Bearer <chave>` |
+| Chave da Shopify | `SHOPIFY_GATEWAY_KEY` (leitura): o pedido de toda marca e o metacampo da NF |
+| Chave da Intelipost | `INTELIPOST_GATEWAY_KEY` (leitura) |
+| Sem a URL ou a chave | o serviço fica desligado: não há endereço padrão no código (`acessoAoGateway`) |
+| Leitura da Shopify | **`POST {base da Shopify}/{marca}/graphql`**: Admin API **GraphQL** da loja da marca |
+| Leitura da Intelipost | **`GET {base da Intelipost}/{conta}/shipment_order/…`**: a API da Intelipost, ao vivo |
 | Janela da Shopify | **só os últimos 60 dias** de pedidos (sem `read_all_orders`); o resto vem do Data Mart |
 
-## Rotas
+**O gateway novo confere a chave antes da rota (visto em 23/11, sem chave):** `POST /v1/shopify/yenzah/graphql`,
+`GET /v1/intelipost/apice/…`, `GET /v1/whoami` e uma rota que não existe responderam todos
+`403 {"error":"invalid_key"}`. Sem chave, então, não dá para saber se a rota existe. A tabela de respostas abaixo é a
+do gateway antigo, que resolvia a rota primeiro e respondia 401 à chave errada.
+
+## Rotas (no gateway antigo; no novo, depois da base de cada serviço)
 
 | Rota | Método | O que faz |
 |---|---|---|
@@ -101,16 +113,14 @@ na BySamia, na Ápice e na Yenzah.
 
 ## Como testar
 
+Com a URL e a chave no ambiente (as duas URLs aqui com o nome do serviço no fim):
+
 ```bash
-curl -s -H "Authorization: Bearer $INTEGRATIONS_GATEWAY_READ_KEY" https://integrations-gateway-prod.rpa-ia.workers.dev/whoami
+curl -s -X POST "$SHOPIFY_GATEWAY_URL/yenzah/graphql" -H "Authorization: Bearer $SHOPIFY_GATEWAY_KEY" -H "Content-Type: application/json" --data '{"query":"query ($q: String!) { orders(first: 5, query: $q) { edges { node { name nf: metafield(namespace: \"custom\", key: \"nf_numero\") { value } } } } }","variables":{"q":"name:SH10373YE"}}'
 ```
 
 ```bash
-curl -s -X POST https://integrations-gateway-prod.rpa-ia.workers.dev/shopify/yenzah/graphql -H "Authorization: Bearer $INTEGRATIONS_GATEWAY_READ_KEY" -H "Content-Type: application/json" --data '{"query":"query ($q: String!) { orders(first: 5, query: $q) { edges { node { name nf: metafield(namespace: \"custom\", key: \"nf_numero\") { value } } } } }","variables":{"q":"name:SH10373YE"}}'
-```
-
-```bash
-curl -s -H "Authorization: Bearer $INTEGRATIONS_GATEWAY_WRITE_KEY" https://integrations-gateway-prod.rpa-ia.workers.dev/intelipost/apice/shipment_order/sales_order_number/SH1832330AP
+curl -s -H "Authorization: Bearer $INTELIPOST_GATEWAY_KEY" "$INTELIPOST_GATEWAY_URL/apice/shipment_order/sales_order_number/SH1832330AP"
 ```
 
 Nunca escreva a chave no comando, no log ou na mensagem: leia do ambiente. A resposta da Intelipost e a do pedido da

@@ -6,7 +6,7 @@
  * - Lescent / Kokeshi / BySamia / AUA / Gobeaute (o site multimarca, ADR-014): SP→SP, demais→ES
  * - Denavita: sempre MG (sai do CD MG, fora da Unilog — ADR-013)
  * - Ápice / Yenzah: ES, o CD de quase todos os pedidos delas (91% na Ápice). O local de atendimento diria o CD de
- *   verdade, mas o integrations-gateway, por onde o pedido delas é lido, nega esse campo (ADR-013, a confirmar com a
+ *   verdade, mas o gateway da Shopify, por onde o pedido delas é lido, nega esse campo (ADR-013, a confirmar com a
  *   operação)
  * - Sem UF: '-'
  *

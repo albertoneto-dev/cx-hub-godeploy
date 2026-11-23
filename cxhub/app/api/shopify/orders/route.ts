@@ -7,7 +7,7 @@ const DEFAULT_TIMEOUT_MS = 10000;
 /**
  * O pedido da marca na Shopify, para a tela (e a Central de Tickets) quando o Cosmos não o acha, e nas marcas sem Cosmos.
  *
- * Toda marca é lida pelo integrations-gateway, com o nome da marca na URL (`docs/integrations-gateway-shopify.md`), e,
+ * Toda marca é lida pelo gateway da Shopify, com o nome da marca na URL (`docs/integrations-gateway-shopify.md`), e,
  * quando ele não acha o pedido (só enxerga 60 dias) ou falha, pelo Data Mart. Este app não guarda token de loja nenhum
  * (decisão de 2026-11-17, `cxhub/ORIGEM.md`): até ali, Lescent, Kokeshi, BySamia, Auá e Barbours liam o REST
  * `orders.json` da loja com os `SHOPIFY_TOKEN_*`. A resposta segue no formato REST de sempre, com 0 ou 1 pedido e só os

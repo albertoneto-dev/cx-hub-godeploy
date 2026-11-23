@@ -1,6 +1,6 @@
 import type { Leitura } from '../datamart/pedidoTipos';
 import { NF_FORA_DO_DATA_MART_MIN_PRAZO_MS, NF_FORA_DO_DATA_MART_TIMEOUT_MS } from '../nfDaVenda';
-import { urlDoGateway } from '../shopify/gateway';
+import { acessoAoGateway } from '../shopify/gateway';
 import {
     caminhoDoEnvio,
     caminhoPeloPedido,
@@ -13,11 +13,11 @@ import {
 } from './gateway';
 
 /**
- * A NF de venda na Intelipost ao vivo, pelo integrations-gateway (2026-11-19): cobre a hora entre a NF sair e o envio
- * chegar ao Data Mart. As regras puras estão em `gateway.ts`.
+ * A NF de venda na Intelipost ao vivo, pelo gateway (2026-11-19): cobre a hora entre a NF sair e o envio chegar ao Data
+ * Mart. As regras puras estão em `gateway.ts`.
  *
- * ⚠️ **Server-only** (lê a `INTEGRATIONS_GATEWAY_WRITE_KEY`): importe pelo caminho completo. O envio tem nome e endereço
- * da cliente: o corpo nunca vai ao log.
+ * ⚠️ **Server-only** (lê a `INTELIPOST_GATEWAY_URL` e a `INTELIPOST_GATEWAY_KEY`, desde 2026-11-23): importe pelo
+ * caminho completo. O envio tem nome e endereço da cliente: o corpo nunca vai ao log.
  */
 
 const LOG = '[NF na Intelipost ao vivo]';
@@ -64,12 +64,13 @@ export async function nfNaIntelipostAoVivo(
         console.warn(`${LOG} ${marca}: o pedido ${numeroPedido} ficou sem resposta (${motivo})`);
         return { ok: false, motivo };
     };
-    const chave = process.env.INTEGRATIONS_GATEWAY_WRITE_KEY?.trim();
-    if (!chave) return falhou('sem a INTEGRATIONS_GATEWAY_WRITE_KEY');
+    const acesso = acessoAoGateway('intelipost');
+    if (!acesso.ok) return falhou(acesso.motivo);
+    const { chave } = acesso;
     const conta = CONTA_INTELIPOST_NO_GATEWAY[marca];
     const pedido = pedidoNaIntelipost(marca, numeroPedido);
     if (!conta || !pedido) return falhou('sem a conta da marca ou o número do pedido');
-    const base = `${urlDoGateway()}/intelipost/${conta}`;
+    const base = `${acesso.base}/${conta}`;
 
     const enxuto = await consultar(`${base}/${caminhoPeloPedido(pedido)}`, chave, prazo, agora);
     if ('erro' in enxuto) return falhou(enxuto.erro);

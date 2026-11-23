@@ -397,11 +397,11 @@ const GUIA_HTML = `
   <div class="tabela-rolavel"><table class="marca">
     <thead><tr><th>Assunto</th><th>O que muda</th></tr></thead>
     <tbody>
-      <tr><td>Toda marca no <code>/api/shopify/orders</code></td><td>O pedido vem do <strong>integrations-gateway</strong>,
+      <tr><td>Toda marca no <code>/api/shopify/orders</code></td><td>O pedido vem do <strong>gateway da Shopify</strong>,
         com o nome da marca, e não do token da loja: o app não usa chave da Shopify. Nas 6 marcas do Cosmos, a resposta
         traz <strong>0 ou 1 pedido</strong> e só os campos do formulário, como nas sem Cosmos (antes, o objeto completo da
         Shopify). No Cosmos e no bot, nada muda.</td></tr>
-      <tr><td>Pedido com mais de 60 dias no <code>/api/shopify/orders</code> e no bot</td><td>O integrations-gateway só
+      <tr><td>Pedido com mais de 60 dias no <code>/api/shopify/orders</code> e no bot</td><td>O gateway da Shopify só
         enxerga os <strong>últimos 60 dias</strong>. O pedido que ele não acha, ou com ele fora do ar, vem do
         <strong>Data Mart</strong>, no mesmo formato. Na Vercel, o das sem Cosmos voltava como não encontrado. A Gobeaute
         não está no Data Mart e continua com o limite.</td></tr>
@@ -409,7 +409,7 @@ const GUIA_HTML = `
         e o bot)</td><td>O servidor confere o pedido no <strong>Data Mart</strong> (ADR-018). A NF de venda, o CD de origem e
         o valor da NF de reenvio vêm de lá, no lugar dos que vieram. O Data Mart recebe a NF cerca de 1 h depois da
         Intelipost: sem ela lá, o servidor procura no <strong>metacampo da Shopify</strong> (Yenzah) e na
-        <strong>Intelipost ao vivo</strong>, pelo integrations-gateway. Pedido sem NF, com prova do Data Mart (na Ápice, o
+        <strong>Intelipost ao vivo</strong>, pelo gateway. Pedido sem NF, com prova do Data Mart (na Ápice, o
         pedido ativo no Tiny sem NF, a NF cancelada, ou o pedido em lugar nenhum) e as fontes de fora respondendo sem NF, é
         recusado com <span class="status s4xx">422</span>, sem gravar nada (no bot, <code>reason: ORDER_NOT_INVOICED</code>).
         Quando a NF não dá para conferir (o Data Mart fora, a Shopify ou a Intelipost ao vivo sem resposta, a NF já emitida

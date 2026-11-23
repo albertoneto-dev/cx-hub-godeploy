@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
  * O bot com as marcas da rota dados e as marcas sem Cosmos (ADR-015).
  *
  * De ponta a ponta dentro da rota: o `buildBotResendData`, o `buildSubmissionData` e o adapter da Shopify são os
- * REAIS; a rota dados, o integrations-gateway (pelo `fetch`), o Cosmos e o transporte são simulados. A régua: a marca
+ * REAIS; a rota dados, o gateway da Shopify (pelo `fetch`), o Cosmos e o transporte são simulados. A régua: a marca
  * sem Cosmos **nunca** chega ao Cosmos (INV-07) e a solicitação dela é sempre registrada, sem automação.
  */
 
@@ -38,7 +38,7 @@ const mAlerta = vi.mocked(sendAlert);
 
 const URL = 'http://localhost/api/reenvio/bot';
 const BOT_SECRET = 'segredo-do-bot-123';
-const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+const GATEWAY = 'https://api.gateway.test/v1';
 
 function post(body: unknown) {
     return POST(createRequest(URL, { method: 'POST', body, headers: { 'x-bot-secret': BOT_SECRET } }));
@@ -102,7 +102,8 @@ const rotaDadosCom = (marcas: string[]) => ({
 beforeEach(() => {
     vi.stubEnv('TIMEOUT', '10000');
     vi.stubEnv('BOT_RESEND_SECRET', BOT_SECRET);
-    vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_chave_de_teste');
+    vi.stubEnv('SHOPIFY_GATEWAY_URL', `${GATEWAY}/shopify`);
+    vi.stubEnv('SHOPIFY_GATEWAY_KEY', 'igw_chave_de_teste');
     mRotaDados.mockReset().mockResolvedValue(rotaDadosCom(['lescent', 'kokeshi', 'apice', 'yenzah', 'denavita', 'gobeaute']));
     mToken.mockReset();
     mFetchOrder.mockReset();
@@ -303,8 +304,8 @@ describe('POST /api/reenvio/bot — marca sem Cosmos', () => {
         expect(mAlerta.mock.calls[0][0]).toMatchObject({ reason: 'SHOPIFY_UNAVAILABLE', brand: 'denavita', detalhe: 'Shopify gateway error: 401' });
     });
 
-    it('sem a INTEGRATIONS_GATEWAY_READ_KEY ⇒ registra mesmo assim (SHOPIFY_UNAVAILABLE), sem chamar o gateway', async () => {
-        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', '');
+    it('sem a SHOPIFY_GATEWAY_KEY ⇒ registra mesmo assim (SHOPIFY_UNAVAILABLE), sem chamar o gateway', async () => {
+        vi.stubEnv('SHOPIFY_GATEWAY_KEY', '');
         const fetchSpy = gateway({});
 
         const res = await post(corpo('apice'));

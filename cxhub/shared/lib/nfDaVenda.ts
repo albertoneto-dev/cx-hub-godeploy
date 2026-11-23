@@ -4,7 +4,7 @@ import type { MarcaCxHub } from './constants';
  * A NF de venda fora do Data Mart (2026-11-19): o que é comum à Shopify e à Intelipost ao vivo, puro. O Data Mart leva
  * cerca de 1 h para receber a NF da Intelipost, e nessa janela o pedido já faturado era recusado como "sem NF" (a
  * pergunta do Nai na thread dos reembolsos de cancelamento: "só puxa se tiver NF?"). Antes de dizer que não há NF, o
- * servidor procura nas outras fontes: o metacampo da Shopify e a Intelipost ao vivo, as duas pelo integrations-gateway.
+ * servidor procura nas outras fontes: o metacampo da Shopify e a Intelipost ao vivo, as duas pelo gateway.
  */
 
 /** Onde a NF foi achada: no Data Mart (a Intelipost do gold ou, na Ápice, o Tiny), no metacampo da Shopify ou na Intelipost ao vivo. */

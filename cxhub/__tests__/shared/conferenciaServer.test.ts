@@ -16,7 +16,7 @@ const FALHA = { ok: false, motivo: 'Metabase fora' } as const;
 
 beforeEach(() => {
     ler.mockReset();
-    lerFora.mockReset().mockResolvedValue({ intelipost: { ok: false, motivo: 'sem a INTEGRATIONS_GATEWAY_WRITE_KEY' } });
+    lerFora.mockReset().mockResolvedValue({ intelipost: { ok: false, motivo: 'sem a INTELIPOST_GATEWAY_KEY' } });
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
 });

@@ -4,12 +4,14 @@ import { adaptShopifyOrder } from '@shared/lib/shopify/adapter';
 import { createRequest } from '../helpers/api-test-utils';
 
 /**
- * As 6 marcas do Cosmos no `/api/shopify/orders`. Desde 2026-11-17 o pedido delas vem do integrations-gateway, com o
+ * As 6 marcas do Cosmos no `/api/shopify/orders`. Desde 2026-11-17 o pedido delas vem do gateway da Shopify, com o
  * nome da marca na URL, como o das sem Cosmos (`api-marcas-sem-cosmos.test.ts`): o app não lê token de loja nenhum.
- * Antes, Lescent, Kokeshi, BySamia, Auá e Barbours liam o REST `orders.json` da loja com os `SHOPIFY_TOKEN_*`.
+ * Antes, Lescent, Kokeshi, BySamia, Auá e Barbours liam o REST `orders.json` da loja com os `SHOPIFY_TOKEN_*`. Desde
+ * 2026-11-23 o gateway é o da `SHOPIFY_GATEWAY_URL`, com a `SHOPIFY_GATEWAY_KEY` (o integrations-gateway foi
+ * descontinuado).
  */
 
-const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+const GATEWAY = 'https://api.gateway.test/v1';
 
 /** Um pedido no formato GraphQL do gateway, com dado de mentira. */
 const no = (name: string, extra: Record<string, unknown> = {}) => ({
@@ -47,7 +49,8 @@ const pedir = (brand: string, orderId: string) =>
     GET(createRequest(`http://localhost/api/shopify/orders?brand=${brand}&orderId=${orderId}`));
 
 beforeEach(() => {
-    vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_chave_de_teste');
+    vi.stubEnv('SHOPIFY_GATEWAY_URL', `${GATEWAY}/shopify`);
+    vi.stubEnv('SHOPIFY_GATEWAY_KEY', 'igw_chave_de_teste');
     for (const m of ['log', 'warn', 'error'] as const) vi.spyOn(console, m).mockImplementation(() => {});
 });
 
@@ -56,7 +59,7 @@ afterEach(() => {
     vi.unstubAllEnvs();
 });
 
-describe('GET /api/shopify/orders — as marcas do Cosmos, pelo integrations-gateway', () => {
+describe('GET /api/shopify/orders — as marcas do Cosmos, pelo gateway da Shopify', () => {
     it.each(['lescent', 'kokeshi', 'bysamia', 'aua', 'barbours', 'rituaria'])(
         '%s: uma busca no gateway, com o nome da marca na URL, pela chave do gateway e só pelos dígitos',
         async (marca) => {
@@ -133,13 +136,29 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo integrations-gat
         });
     });
 
-    it('com a INTEGRATIONS_GATEWAY_URL cadastrada, a busca vai a ela (sem a / do fim)', async () => {
-        vi.stubEnv('INTEGRATIONS_GATEWAY_URL', ' https://gateway.exemplo.test/ ');
+    it.each([
+        ['com o /shopify no fim e a / depois dele', ' https://gateway.exemplo.test/v1/shopify/ '],
+        ['sem o /shopify (o caminho é acrescentado)', 'https://gateway.exemplo.test/v1/'],
+    ])('a SHOPIFY_GATEWAY_URL %s: a busca vai a ela, sem duplicar o /shopify', async (_caso, url) => {
+        vi.stubEnv('SHOPIFY_GATEWAY_URL', url);
         const fetchSpy = gateway({});
 
         await pedir('aua', '6990');
 
-        expect(fetchSpy.mock.calls[0][0]).toBe('https://gateway.exemplo.test/shopify/aua/graphql');
+        expect(fetchSpy.mock.calls[0][0]).toBe('https://gateway.exemplo.test/v1/shopify/aua/graphql');
+    });
+
+    it('as INTEGRATIONS_GATEWAY_* antigas no ambiente não são lidas (2026-11-23)', async () => {
+        vi.stubEnv('INTEGRATIONS_GATEWAY_URL', 'https://integrations-gateway.antigo.test');
+        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_antiga_que_nao_deve_ser_usada');
+        const fetchSpy = gateway({});
+
+        await pedir('lescent', '592465');
+
+        const chamadas = JSON.stringify(fetchSpy.mock.calls);
+        expect(chamadas).not.toContain('integrations-gateway.antigo.test');
+        expect(chamadas).not.toContain('igw_antiga_que_nao_deve_ser_usada');
+        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/lescent/graphql`);
     });
 
     it('pedido fora dos 60 dias do gateway ⇒ vem do Data Mart, onde a BySamia é by_samia', async () => {
@@ -172,8 +191,8 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo integrations-gat
         expect(consultas[0]).toContain("brand = 'by_samia' and order_number = 39996");
     });
 
-    it('sem a INTEGRATIONS_GATEWAY_READ_KEY ⇒ 500 sem chamar nada: não há mais o REST da loja de reserva', async () => {
-        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', '');
+    it('sem a SHOPIFY_GATEWAY_KEY ⇒ 500 sem chamar nada: não há mais o REST da loja de reserva', async () => {
+        vi.stubEnv('SHOPIFY_GATEWAY_KEY', '');
         vi.stubEnv('SHOPIFY_TOKEN_LESCENT', 'shpat_da_loja');
         const fetchSpy = gateway({});
 
@@ -184,13 +203,28 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo integrations-gat
         expect(fetchSpy).not.toHaveBeenCalled();
     });
 
-    it('o gateway recusa a chave ⇒ 502 (e não o 401, que o REST da loja repassava)', async () => {
-        gateway({}, { status: 401, json: { error: 'invalid_key' } });
+    it.each([
+        ['ausente', ''],
+        ['em http (a chave iria sem TLS)', 'http://gateway.exemplo.test/v1/shopify'],
+        ['sem esquema', 'gateway.exemplo.test/v1/shopify'],
+    ])('a SHOPIFY_GATEWAY_URL %s ⇒ 500 sem chamar nada: o gateway não tem endereço padrão', async (_caso, url) => {
+        vi.stubEnv('SHOPIFY_GATEWAY_URL', url);
+        const fetchSpy = gateway({});
+
+        const res = await pedir('lescent', '592465');
+
+        expect(res.status).toBe(500);
+        expect(await res.json()).toEqual({ error: 'Shopify gateway key not configured' });
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it.each([401, 403])('o gateway recusa a chave (HTTP %i; o novo responde 403 invalid_key) ⇒ 502', async (status) => {
+        gateway({}, { status, json: { error: 'invalid_key' } });
 
         const res = await pedir('kokeshi', '1204230');
 
         expect(res.status).toBe(502);
-        expect(await res.json()).toEqual({ error: 'Shopify gateway error: 401' });
+        expect(await res.json()).toEqual({ error: `Shopify gateway error: ${status}` });
     });
 
     it('400 para marca desconhecida, sem chamar nada', async () => {

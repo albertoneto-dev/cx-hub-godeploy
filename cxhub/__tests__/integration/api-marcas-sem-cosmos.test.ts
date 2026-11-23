@@ -20,7 +20,8 @@ import { RESEND_DATA } from '../helpers/resend-fixtures';
 /**
  * As marcas sem Cosmos (ADR-013) nas rotas: o reenvio da tela e o reembolso as aceitam (o bot também, ADR-015, com
  * testes em `api-reenvio-bot-sem-cosmos.test.ts`), nenhuma rota do Cosmos é chamada com elas, e o pedido delas é lido
- * pelo integrations-gateway (GraphQL), tentando `SH{n}{sufixo}` e depois `#n`.
+ * pelo gateway da Shopify (GraphQL; `SHOPIFY_GATEWAY_URL` e `SHOPIFY_GATEWAY_KEY` desde 2026-11-23), tentando
+ * `SH{n}{sufixo}` e depois `#n`.
  */
 
 beforeEach(() => {
@@ -90,14 +91,15 @@ describe('rotas do Cosmos', () => {
 });
 
 // As 6 marcas do Cosmos, que também passam pelo gateway desde 2026-11-17, estão em `api-shopify-orders.test.ts`.
-describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integrations-gateway', () => {
+describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo gateway da Shopify', () => {
     type GetFn = (req: import('next/server').NextRequest) => Promise<import('next/server').NextResponse>;
     let GET: GetFn;
-    const GATEWAY = 'https://integrations-gateway-prod.rpa-ia.workers.dev';
+    const GATEWAY = 'https://api.gateway.test/v1';
 
     beforeEach(async () => {
-        // A chave do gateway é lida a cada chamada.
-        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', 'igw_chave_de_teste');
+        // A URL e a chave do gateway são lidas a cada chamada.
+        vi.stubEnv('SHOPIFY_GATEWAY_URL', `${GATEWAY}/shopify`);
+        vi.stubEnv('SHOPIFY_GATEWAY_KEY', 'igw_chave_de_teste');
         GET = (await import('../../app/api/shopify/orders/route')).GET;
     });
 
@@ -237,8 +239,8 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integr
         expect(consultas[0]).toContain("brand = 'apice' and order_number = 1607929");
     });
 
-    it('sem a INTEGRATIONS_GATEWAY_READ_KEY ⇒ 500, sem chamar o gateway', async () => {
-        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', '');
+    it('sem a SHOPIFY_GATEWAY_KEY ⇒ 500, sem chamar o gateway', async () => {
+        vi.stubEnv('SHOPIFY_GATEWAY_KEY', '');
         const fetchSpy = gateway({});
 
         const res = await GET(createRequest('http://localhost/api/shopify/orders?brand=yenzah&orderId=3287'));
@@ -323,8 +325,8 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo integr
         expect(adaptShopifyOrder(orders[0], 'rituaria')).toMatchObject({ transportadora: 'NORMAL_J&T', cdOrigem: 'RJ' });
     });
 
-    it('Rituária sem a INTEGRATIONS_GATEWAY_READ_KEY ⇒ 500 sem chamar nada, mesmo com um SHOPIFY_TOKEN_RITUARIA no ambiente', async () => {
-        vi.stubEnv('INTEGRATIONS_GATEWAY_READ_KEY', '');
+    it('Rituária sem a SHOPIFY_GATEWAY_KEY ⇒ 500 sem chamar nada, mesmo com um SHOPIFY_TOKEN_RITUARIA no ambiente', async () => {
+        vi.stubEnv('SHOPIFY_GATEWAY_KEY', '');
         vi.stubEnv('SHOPIFY_TOKEN_RITUARIA', 'shpat_da_loja');
         const fetchSpy = gateway({});
 
