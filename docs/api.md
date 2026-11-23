@@ -78,7 +78,7 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   `Allow`.
 - Os avisos que iam ao Google Chat vão ao Slack (`SLACK_ALERT_WEBHOOK_URL`, o mesmo canal da fila), com o mesmo texto.
 - **Nenhum token de loja da Shopify (2026-11-17).** O `/api/shopify/orders` lê toda marca pelo gateway da Shopify:
-  `POST {SHOPIFY_GATEWAY_URL}/{marca}/graphql`, com a `SHOPIFY_GATEWAY_KEY` (veja "Um gateway por serviço", abaixo).
+  `POST {SHOPIFY_GATEWAY_URL}/{marca}`, com a `SHOPIFY_GATEWAY_KEY` (veja "Um gateway por serviço", abaixo).
   Na Vercel, Lescent, Kokeshi, BySamia, Auá, Barbours
   e Rituária liam o REST `orders.json` da loja com os `SHOPIFY_TOKEN_*`. Aqui a Rituária passou ao gateway em
   2026-11-10, e as outras 5 em 2026-11-17, porque os tokens das lojas vão ser trocados. O que muda para quem chama, nas
@@ -93,8 +93,16 @@ quer dizer "registrado, não repita", e o chamador depende disso.
 - **Um gateway por serviço (2026-11-23, decisão deste app).** O integrations-gateway (`INTEGRATIONS_GATEWAY_URL`,
   `INTEGRATIONS_GATEWAY_READ_KEY` e `INTEGRATIONS_GATEWAY_WRITE_KEY`) foi descontinuado. A Shopify e a Intelipost têm
   agora a URL e a chave próprias: `SHOPIFY_GATEWAY_URL` e `SHOPIFY_GATEWAY_KEY` (o pedido e o metacampo da NF),
-  `INTELIPOST_GATEWAY_URL` e `INTELIPOST_GATEWAY_KEY` (a Intelipost ao vivo). Os caminhos e o `Authorization: Bearer`
-  são os mesmos de antes:
+  `INTELIPOST_GATEWAY_URL` e `INTELIPOST_GATEWAY_KEY` (a Intelipost ao vivo). O gateway novo é o GoAccess
+  (`https://api.gogroup.cc/v1`), com o `Authorization: Bearer` de antes e os caminhos do contrato dele:
+  - **Shopify:** `POST {SHOPIFY_GATEWAY_URL}/{marca}`, o GraphQL da Shopify direto no endereço da marca. O
+    integrations-gateway pedia `…/{marca}/graphql`; com o `/graphql`, o GoAccess responde 400. Foi o defeito da v21
+    (publicada em 23/11 às 19:03 UTC): toda busca caiu no Data Mart, e a produção voltou ao código da v20 às 19:20;
+  - **Intelipost:** `GET {INTELIPOST_GATEWAY_URL}/{marca}/{caminho da API}`. O antigo pedia a conta (`lescent`,
+    `beautyhub`); o app vai pela marca e, se o gateway responder 404 com o `error` dele (rota que não conhece), tenta a
+    conta. Esse 404 nunca vale "envio não existe": antes valia, e um caminho errado daria "sem NF" e a recusa;
+  - o erro do gateway vai ao log com a mensagem dele (`[Shopify Gateway] apice: HTTP 400 (…)`), só o texto de erro;
+  - o cabeçalho `X-On-Behalf-Of` (quem pediu, só para a trilha do GoAccess) é opcional, e o app não o manda;
   - a URL vale com ou sem o nome do serviço no fim (`https://…/v1/shopify` ou `https://…/v1`): o app acrescenta o
     `/shopify` ou o `/intelipost` só quando falta, e nunca o duplica (`baseDoServicoNoGateway`);
   - não há endereço padrão, e só https vale, porque a chave vai no header. Sem a URL ou a chave, o serviço conta como não
@@ -167,9 +175,11 @@ quer dizer "registrado, não repita", e o chamador depende disso.
     e da Yenzah, 0% da Ápice (0/42), da Denavita (0/46) e da Gobeaute (0/32), e nenhum dos 71 cancelados. Das três sem
     Cosmos, só a Yenzah o lê;
   - a Intelipost ao vivo pelo gateway (`INTELIPOST_GATEWAY_URL` e `INTELIPOST_GATEWAY_KEY`, desde 2026-11-23):
-    `GET {INTELIPOST_GATEWAY_URL}/{conta}/shipment_order/sales_order_number/SH{n}{sigla}` e, se o envio enxuto vier sem a
-    NF, `GET …/shipment_order/{order_number}`. Contas: `apice`, `denavita`, `beautyhub` (Yenzah, Barbours, Rituária) e
-    `lescent` (Lescent, Kokeshi, BySamia, Auá). 400 e 404 são "não achou"; 401, 403, 429 e 5xx, erro.
+    `GET {INTELIPOST_GATEWAY_URL}/{marca}/shipment_order/sales_order_number/SH{n}{sigla}` e, se o envio enxuto vier sem
+    a NF, `GET …/shipment_order/{order_number}`. Se o gateway não conhecer a marca, vai a conta do gateway antigo:
+    `beautyhub` (Yenzah, Barbours, Rituária) ou `lescent` (Kokeshi, BySamia, Auá). O 400 da Intelipost e o 404 sem o
+    `error` do gateway são "não achou"; o 404 com o `error` do gateway (rota que ele não conhece), 401, 403, 429 e 5xx,
+    erro.
 
   As duas têm até 4 s cada, dentro do teto da conferência (12 s); com a NF no Data Mart, nenhuma sai. O que conta como
   prova de `ausente` passa a ser a do Data Mart (acima) **com** a Intelipost ao vivo e, na Yenzah, o metacampo

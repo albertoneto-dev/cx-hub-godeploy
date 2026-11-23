@@ -71,7 +71,7 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo gateway da Shopi
             expect((await res.json()).orders.map((o: { name: string }) => o.name)).toEqual(['SH220183XX']);
             expect(fetchSpy).toHaveBeenCalledTimes(1);
             const [url, init] = fetchSpy.mock.calls[0];
-            expect(url).toBe(`${GATEWAY}/shopify/${marca}/graphql`);
+            expect(url).toBe(`${GATEWAY}/shopify/${marca}`);
             expect(init?.method).toBe('POST');
             expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer igw_chave_de_teste');
             expect(JSON.parse(String(init?.body)).variables).toEqual({ q: 'name:220183' });
@@ -97,7 +97,7 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo gateway da Shopi
 
         await pedir('Kokeshi', '1204230');
 
-        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/kokeshi/graphql`);
+        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/kokeshi`);
     });
 
     it('o reenvio do Cosmos (SH…-R-1), que o filtro também devolve e primeiro, não é escolhido no lugar do original', async () => {
@@ -145,7 +145,7 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo gateway da Shopi
 
         await pedir('aua', '6990');
 
-        expect(fetchSpy.mock.calls[0][0]).toBe('https://gateway.exemplo.test/v1/shopify/aua/graphql');
+        expect(fetchSpy.mock.calls[0][0]).toBe('https://gateway.exemplo.test/v1/shopify/aua');
     });
 
     it('as INTEGRATIONS_GATEWAY_* antigas no ambiente não são lidas (2026-11-23)', async () => {
@@ -158,7 +158,7 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo gateway da Shopi
         const chamadas = JSON.stringify(fetchSpy.mock.calls);
         expect(chamadas).not.toContain('integrations-gateway.antigo.test');
         expect(chamadas).not.toContain('igw_antiga_que_nao_deve_ser_usada');
-        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/lescent/graphql`);
+        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/lescent`);
     });
 
     it('pedido fora dos 60 dias do gateway ⇒ vem do Data Mart, onde a BySamia é by_samia', async () => {
@@ -216,6 +216,24 @@ describe('GET /api/shopify/orders — as marcas do Cosmos, pelo gateway da Shopi
         expect(res.status).toBe(500);
         expect(await res.json()).toEqual({ error: 'Shopify gateway key not configured' });
         expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('o POST vai ao endereço da marca, sem o /graphql do gateway antigo (que dava 400 no GoAccess)', async () => {
+        const fetchSpy = gateway({});
+
+        await pedir('apice', '1752720');
+
+        expect(String(fetchSpy.mock.calls[0][0])).toBe(`${GATEWAY}/shopify/apice`);
+        expect(String(fetchSpy.mock.calls[0][0])).not.toContain('/graphql');
+    });
+
+    it('o erro do gateway vai ao log com a mensagem dele (só o texto de erro)', async () => {
+        gateway({}, { status: 400, json: { error: 'rota desconhecida' } });
+
+        const res = await pedir('apice', '1752720');
+
+        expect(res.status).toBe(502);
+        expect(vi.mocked(console.error).mock.calls.map((c) => String(c[0]))).toContain('[Shopify Gateway] apice: HTTP 400 (rota desconhecida)');
     });
 
     it.each([401, 403])('o gateway recusa a chave (HTTP %i; o novo responde 403 invalid_key) ⇒ 502', async (status) => {

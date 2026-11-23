@@ -144,7 +144,7 @@ describe('GET /api/datamart/order-context', () => {
     it('a Yenzah sem NF no Data Mart e com o metacampo: nfStatus achada e nfOrigem shopify, sem ir à Intelipost', async () => {
         const fetchSpy = instalarFetch();
         respostaMetabase = (sql) => (sql.includes('fct_intelipost_orders') ? linhas([]) : dataMartDoPedidoReal(sql));
-        respostaGateway = (url) => (url.includes('/shopify/yenzah/graphql')
+        respostaGateway = (url) => (url.includes('/shopify/yenzah')
             ? new Response(JSON.stringify({ data: { orders: { edges: [{ node: { name: 'SH5478YE', nf: { value: '001588301' } } }] } } }), { status: 200 })
             : semEnvioNemPedido(url));
 
@@ -154,7 +154,7 @@ describe('GET /api/datamart/order-context', () => {
         const corpo = await res.json();
         expect(corpo).toMatchObject({ order: 'SH5478YE', nf: '1588301', nfStatus: 'achada', nfOrigem: 'shopify', naoConferidos: [] });
         expect(corpo).not.toHaveProperty('nfMotivo');
-        expect(chamadasAoGateway(fetchSpy)).toEqual([`${GATEWAY}/shopify/yenzah/graphql`]);
+        expect(chamadasAoGateway(fetchSpy)).toEqual([`${GATEWAY}/shopify/yenzah`]);
     });
 
     it('a Intelipost ao vivo com a chave recusada: desconhecida, sem resposta, com o aviso dela (e não "o Data Mart não respondeu")', async () => {

@@ -8,6 +8,7 @@ import {
     nfDoMetacampo,
     pausaDepoisDoLimite,
     acessoAoGateway,
+    mensagemDeErroDoGateway,
     pedidoDoGatewayParaShopify,
     type MarcaNoGateway,
     type PedidoDoGateway,
@@ -45,7 +46,10 @@ class PrazoEsgotado extends Error {
     name = 'AbortError';
 }
 
-/** Uma consulta ao gateway, com o prazo dela. Estourou o prazo ⇒ lança `AbortError`. */
+/**
+ * Uma consulta ao gateway, com o prazo dela: `POST {base}/{marca}`, o GraphQL da loja direto no endereço da marca.
+ * Estourou o prazo ⇒ lança `AbortError`. A resposta que não é 2xx vai ao log com a mensagem de erro do gateway.
+ */
 async function consultarGateway(
     marca: MarcaNoGateway,
     acesso: { base: string; chave: string },
@@ -57,13 +61,17 @@ async function consultarGateway(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
-        const res = await fetch(`${acesso.base}/${marca}/graphql`, {
+        const res = await fetch(`${acesso.base}/${marca}`, {
             method: 'POST',
             headers: { Authorization: `Bearer ${acesso.chave}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ query: consulta, variables: { q: `name:${nome}` } }),
             signal: controller.signal,
         });
         const corpo = await res.json().catch(() => null) as RespostaDoGateway | null;
+        if (!res.ok) {
+            const mensagem = mensagemDeErroDoGateway(corpo);
+            console.error(`${LOG} ${marca}: HTTP ${res.status}${mensagem ? ` (${mensagem})` : ''}`);
+        }
         return { res, corpo };
     } finally {
         clearTimeout(timeoutId);
@@ -105,10 +113,7 @@ export async function buscarPedidoNoGateway(
                 ({ res, corpo } = await consultarGateway(marca, acesso, nome, prazoDaConsulta()));
             }
 
-            if (!res.ok) {
-                console.error(`${LOG} ${marca}: HTTP ${res.status}`);
-                return { tipo: 'falha', status: 502, erro: `Shopify gateway error: ${res.status}` };
-            }
+            if (!res.ok) return { tipo: 'falha', status: 502, erro: `Shopify gateway error: ${res.status}` };
             // 200 sem JSON não é "pedido não encontrado": a tela diria à agente que o pedido não existe.
             if (!corpo) {
                 console.error(`${LOG} ${marca}: resposta 200 sem JSON`);

@@ -274,11 +274,11 @@ describe("medidor do fetch", () => {
     expect(dependenciaDaUrl("https://metabase.exemplo/api/dataset", env)?.componente).toBe("dep_datamart");
     // A Shopify e a Intelipost ao vivo (a NF fora do Data Mart, 19/11/2026) têm URL própria desde 23/11/2026: o host de
     // cada uma conta no dep_gateway.
-    expect(dependenciaDaUrl("https://api.gateway.exemplo/v1/shopify/apice/graphql", env)?.componente).toBe("dep_gateway");
+    expect(dependenciaDaUrl("https://api.gateway.exemplo/v1/shopify/apice", env)?.componente).toBe("dep_gateway");
     expect(dependenciaDaUrl("https://intelipost.gateway.exemplo/v1/intelipost/apice/shipment_order/sales_order_number/SH1AP", env)?.componente).toBe("dep_gateway");
     // O integrations-gateway foi descontinuado: sem padrão, o host antigo não é mais medido.
-    expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/shopify/apice/graphql", env)).toBeNull();
-    expect(dependenciaDaUrl("https://api.gateway.exemplo/v1/shopify/apice/graphql", { ...env, SHOPIFY_GATEWAY_URL: undefined })).toBeNull();
+    expect(dependenciaDaUrl("https://integrations-gateway-prod.rpa-ia.workers.dev/shopify/apice", env)).toBeNull();
+    expect(dependenciaDaUrl("https://api.gateway.exemplo/v1/shopify/apice", { ...env, SHOPIFY_GATEWAY_URL: undefined })).toBeNull();
     expect(dependenciaDaUrl("https://rota-dados.exemplo/api/v1/form-data", env)?.componente).toBe("dep_rota_dados");
     expect(dependenciaDaUrl("https://hooks.slack.exemplo/services/x", env)).toBeNull();
     expect(dependenciaDaUrl("http://fila.cx-hub.interno/api/v1/casos", env)).toBeNull();

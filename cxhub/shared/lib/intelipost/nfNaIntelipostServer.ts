@@ -8,6 +8,7 @@ import {
     lerRespostaDaIntelipost,
     nfDoEnvio,
     pedidoNaIntelipost,
+    segmentosDaMarcaNoGateway,
     type MarcaComIntelipost,
     type RespostaDaIntelipost,
 } from './gateway';
@@ -67,12 +68,21 @@ export async function nfNaIntelipostAoVivo(
     const acesso = acessoAoGateway('intelipost');
     if (!acesso.ok) return falhou(acesso.motivo);
     const { chave } = acesso;
-    const conta = CONTA_INTELIPOST_NO_GATEWAY[marca];
     const pedido = pedidoNaIntelipost(marca, numeroPedido);
-    if (!conta || !pedido) return falhou('sem a conta da marca ou o número do pedido');
-    const base = `${acesso.base}/${conta}`;
+    if (!CONTA_INTELIPOST_NO_GATEWAY[marca] || !pedido) return falhou('sem a conta da marca ou o número do pedido');
 
-    const enxuto = await consultar(`${base}/${caminhoPeloPedido(pedido)}`, chave, prazo, agora);
+    // A marca no caminho (o contrato do GoAccess); a conta antiga só se o gateway disser que não conhece a rota da marca.
+    // O envio completo, se for preciso, vai pelo mesmo caminho que respondeu.
+    const segmentos = segmentosDaMarcaNoGateway(marca);
+    let base = '';
+    let enxuto: RespostaDaIntelipost = { erro: 'nenhuma rota tentada' };
+    for (const [i, segmento] of segmentos.entries()) {
+        base = `${acesso.base}/${segmento}`;
+        enxuto = await consultar(`${base}/${caminhoPeloPedido(pedido)}`, chave, prazo, agora);
+        if ('erro' in enxuto && enxuto.rotaDesconhecida) continue;
+        if (i > 0) console.warn(`${LOG} ${marca}: o gateway não conhece /${segmentos[0]}; respondeu por /${segmento}`);
+        break;
+    }
     if ('erro' in enxuto) return falhou(enxuto.erro);
     if ('naoAchou' in enxuto) return { ok: true, dados: null };
     const nf = nfDoEnvio(enxuto.envio);

@@ -123,7 +123,7 @@ describe('nfNoMetacampoDaShopify', () => {
 
         expect(await nfNoMetacampoDaShopify('yenzah', '11249', prazo())).toEqual({ ok: true, dados: '1588301' });
         const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-        expect(url).toBe(`${GATEWAY}/shopify/yenzah/graphql`);
+        expect(url).toBe(`${GATEWAY}/shopify/yenzah`);
         expect((init.headers as Record<string, string>).Authorization).toBe('Bearer igw_leitura_de_teste');
         expect(JSON.parse(String(init.body))).toEqual({ query: CONSULTA_DA_NF, variables: { q: 'name:SH11249YE' } });
 
@@ -189,7 +189,7 @@ describe('a Intelipost pelo gateway (puro)', () => {
         expect(pedidoNaIntelipost('apice', 'sem número')).toBeNull();
     });
 
-    it('a resposta: o envio em objeto, array ou shipment_orders[]; 400 e 404 são "não achou"; o resto é erro', () => {
+    it('a resposta: o envio em objeto, array ou shipment_orders[]; 400 e o 404 sem erro do gateway são "não achou"; o resto é erro', () => {
         const e = envio('SH1832330AP001', '000183916');
         for (const content of [e, [e], { shipment_orders: [e] }]) {
             expect(lerRespostaDaIntelipost(200, { status: 'OK', content })).toEqual({ envio: e });
@@ -197,7 +197,11 @@ describe('a Intelipost pelo gateway (puro)', () => {
         expect(lerRespostaDaIntelipost(200, { status: 'OK', content: [] })).toEqual({ naoAchou: true });
         expect(lerRespostaDaIntelipost(200, { status: 'OK', content: { shipment_orders: [] } })).toEqual({ naoAchou: true });
         expect(lerRespostaDaIntelipost(400, null)).toEqual({ naoAchou: true });
-        expect(lerRespostaDaIntelipost(404, { error: 'not_found' })).toEqual({ naoAchou: true });
+        expect(lerRespostaDaIntelipost(404, null)).toEqual({ naoAchou: true });
+        // O 404 com o `error` do gateway é a rota que ele não conhece: nunca "não achou" (seria "sem NF" e a recusa).
+        expect(lerRespostaDaIntelipost(404, { error: 'not_found' })).toEqual({
+            erro: 'o gateway não conhece a rota (HTTP 404 not_found)', rotaDesconhecida: true,
+        });
         for (const status of [401, 403, 429, 500, 502, 302]) expect(lerRespostaDaIntelipost(status, null)).toHaveProperty('erro');
         expect(lerRespostaDaIntelipost(200, null)).toEqual({ erro: 'resposta 200 sem JSON' });
         expect(lerRespostaDaIntelipost(200, { status: 'ERROR', messages: [] })).toHaveProperty('erro');
@@ -212,7 +216,7 @@ describe('a Intelipost pelo gateway (puro)', () => {
 });
 
 describe('nfNaIntelipostAoVivo', () => {
-    it('pelo sales_order_number, na conta da marca, com a chave da Intelipost', async () => {
+    it('pelo sales_order_number, na marca, com a chave da Intelipost', async () => {
         responder(() => json({ status: 'OK', content: [envio('SH1832330AP001', '183916')] }));
 
         expect(await nfNaIntelipostAoVivo('apice', '1832330', prazo())).toEqual({ ok: true, dados: '183916' });
@@ -229,9 +233,42 @@ describe('nfNaIntelipostAoVivo', () => {
 
         expect(await nfNaIntelipostAoVivo('yenzah', '11249', prazo())).toEqual({ ok: true, dados: '1588301' });
         expect(fetchSpy.mock.calls.map(([u]) => String(u))).toEqual([
+            `${GATEWAY}/intelipost/yenzah/shipment_order/sales_order_number/SH11249YE`,
+            `${GATEWAY}/intelipost/yenzah/shipment_order/SH11249YE001`,
+        ]);
+    });
+
+    it('o gateway não conhece a marca (404 dele): tenta a conta antiga, e o envio completo vai pelo mesmo caminho', async () => {
+        responder((url) => (url.includes('/intelipost/yenzah/')
+            ? json({ error: 'unknown_store' }, 404)
+            : url.endsWith('/sales_order_number/SH11249YE')
+                ? json({ status: 'OK', content: { order_number: 'SH11249YE001' } })
+                : json({ status: 'OK', content: envio('SH11249YE001', '001588301') })));
+
+        expect(await nfNaIntelipostAoVivo('yenzah', '11249', prazo())).toEqual({ ok: true, dados: '1588301' });
+        expect(fetchSpy.mock.calls.map(([u]) => String(u))).toEqual([
+            `${GATEWAY}/intelipost/yenzah/shipment_order/sales_order_number/SH11249YE`,
             `${GATEWAY}/intelipost/beautyhub/shipment_order/sales_order_number/SH11249YE`,
             `${GATEWAY}/intelipost/beautyhub/shipment_order/SH11249YE001`,
         ]);
+    });
+
+    it('o gateway não conhece a marca nem a conta: não respondeu (nunca "sem NF"); sem conta diferente, não tenta outra', async () => {
+        responder(() => json({ error: 'not_found' }, 404));
+        expect(await nfNaIntelipostAoVivo('kokeshi', '1204230', prazo())).toEqual({ ok: false, motivo: 'o gateway não conhece a rota (HTTP 404 not_found)' });
+        expect(fetchSpy.mock.calls.map(([u]) => String(u).split('/shipment_order/')[0])).toEqual([
+            `${GATEWAY}/intelipost/kokeshi`, `${GATEWAY}/intelipost/lescent`,
+        ]);
+
+        responder(() => json({ error: 'not_found' }, 404));
+        expect(await nfNaIntelipostAoVivo('apice', '1832330', prazo())).toMatchObject({ ok: false });
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('o 400 da Intelipost na marca é "não achou": não tenta a conta', async () => {
+        responder(() => json({ status: 'ERROR', messages: [{ text: 'não encontrado' }] }, 400));
+        expect(await nfNaIntelipostAoVivo('bysamia', '52988', prazo())).toEqual({ ok: true, dados: null });
+        expect(fetchSpy.mock.calls.map(([u]) => String(u))).toEqual([`${GATEWAY}/intelipost/bysamia/shipment_order/sales_order_number/SH52988BS`]);
     });
 
     it('a Intelipost respondeu sem NF: o envio não existe (400), ou existe sem NF', async () => {

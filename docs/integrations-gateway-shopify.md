@@ -20,9 +20,13 @@
 | Chave da Shopify | `SHOPIFY_GATEWAY_KEY` (leitura): o pedido de toda marca e o metacampo da NF |
 | Chave da Intelipost | `INTELIPOST_GATEWAY_KEY` (leitura) |
 | Sem a URL ou a chave | o serviço fica desligado: não há endereço padrão no código (`acessoAoGateway`) |
-| Leitura da Shopify | **`POST {base da Shopify}/{marca}/graphql`**: Admin API **GraphQL** da loja da marca |
-| Leitura da Intelipost | **`GET {base da Intelipost}/{conta}/shipment_order/…`**: a API da Intelipost, ao vivo |
+| Leitura da Shopify | **`POST {base da Shopify}/{marca}`**: Admin API **GraphQL** da loja da marca, direto no endereço dela (sem o `/graphql` do gateway antigo: com ele, o GoAccess responde 400) |
+| Leitura da Intelipost | **`GET {base da Intelipost}/{marca}/shipment_order/…`**: a API da Intelipost, ao vivo, com o caminho igual ao da API. Se o gateway não conhecer a marca (404 com o `error` dele), o app tenta a conta do gateway antigo |
+| Contrato | o do GoAccess, passado pelo usuário em 23/11: "Shopify: `https://api.gogroup.cc/v1/shopify/{marca}`, com o GraphQL da Shopify direto"; "Intelipost: `https://api.gogroup.cc/v1/intelipost/{marca}/...`, com o caminho igual ao da API". Cabeçalho opcional `X-On-Behalf-Of` (quem pediu, só para a trilha). Integrações no admin: `admin.gogroup.cc/integrations` |
 | Janela da Shopify | **só os últimos 60 dias** de pedidos (sem `read_all_orders`); o resto vem do Data Mart |
+
+**A v21 (23/11, 19:03 UTC) postou em `…/{marca}/graphql`, o caminho do gateway antigo, e o GoAccess respondeu 400 em
+toda busca:** as rotas caíram no Data Mart, e a produção voltou ao código da v20 às 19:20 até a correção.
 
 **O gateway novo confere a chave antes da rota (visto em 23/11, sem chave):** `POST /v1/shopify/yenzah/graphql`,
 `GET /v1/intelipost/apice/…`, `GET /v1/whoami` e uma rota que não existe responderam todos
@@ -116,7 +120,7 @@ na BySamia, na Ápice e na Yenzah.
 Com a URL e a chave no ambiente (as duas URLs aqui com o nome do serviço no fim):
 
 ```bash
-curl -s -X POST "$SHOPIFY_GATEWAY_URL/yenzah/graphql" -H "Authorization: Bearer $SHOPIFY_GATEWAY_KEY" -H "Content-Type: application/json" --data '{"query":"query ($q: String!) { orders(first: 5, query: $q) { edges { node { name nf: metafield(namespace: \"custom\", key: \"nf_numero\") { value } } } } }","variables":{"q":"name:SH10373YE"}}'
+curl -s -X POST "$SHOPIFY_GATEWAY_URL/yenzah" -H "Authorization: Bearer $SHOPIFY_GATEWAY_KEY" -H "Content-Type: application/json" --data '{"query":"query ($q: String!) { orders(first: 5, query: $q) { edges { node { name nf: metafield(namespace: \"custom\", key: \"nf_numero\") { value } } } } }","variables":{"q":"name:SH10373YE"}}'
 ```
 
 ```bash

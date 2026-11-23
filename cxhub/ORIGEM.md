@@ -244,6 +244,20 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   - comentários que diziam "integrations-gateway" para o que vale hoje (`nfDaVenda.ts`, `cd-utils.ts`,
     `pedidoDaShopifyServer.ts`, `nfForaDoDataMartServer.ts`, `buscarPedidoNoGatewayOuNoDataMart.ts`, `alerts/types.ts`,
     `app/api/shopify/orders/route.ts`). Os que contam uma medição feita nele ficaram.
+- Os caminhos do GoAccess (2026-11-23, correção da v21). A v21 manteve os caminhos do gateway antigo, e o GoAccess
+  (`https://api.gogroup.cc/v1`) respondeu 400 a toda busca da Shopify em `…/{marca}/graphql`: as rotas caíram no Data
+  Mart, e a produção voltou ao código da v20. O contrato que o usuário passou: "Shopify:
+  `https://api.gogroup.cc/v1/shopify/{marca}`, com o GraphQL da Shopify direto" e "Intelipost:
+  `https://api.gogroup.cc/v1/intelipost/{marca}/...`, com o caminho igual ao da API". O que mudou:
+  - `shared/lib/shopify/buscarPedidoNoGateway.ts`: `POST {base}/{marca}`, sem o `/graphql`. A resposta que não é 2xx vai
+    ao log com a mensagem de erro do gateway (`mensagemDeErroDoGateway`, novo em `shopify/gateway.ts`: o `error`, o
+    `message` ou os `errors[].message`, até 160 caracteres);
+  - `shared/lib/intelipost/gateway.ts`: `segmentosDaMarcaNoGateway` (a marca e, se for outra, a conta antiga). O 404
+    com o `error` do gateway deixou de ser "não achou": é erro com `rotaDesconhecida`. Antes, um caminho que o gateway
+    não conhece daria "sem NF" e a recusa do registro (422 na Yenzah, cuja conta é outra);
+  - `shared/lib/intelipost/nfNaIntelipostServer.ts`: o caminho vai pela marca e, com a rota desconhecida, pela conta;
+    o envio completo usa o caminho que respondeu. Sem a chave do GoAccess não deu para saber qual dos dois ele conhece:
+    o log diz quando a conta foi usada.
 
 ## Testes
 
@@ -309,6 +323,11 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   - `shared/nfForaDoDataMart`: o `baseDoServicoNoGateway` e o `acessoAoGateway` (cada serviço com os secrets dele, o
     motivo com o nome do que falta), a Intelipost com a URL sem o `/intelipost` e sem a URL ou em http (sem chamar nada,
     nunca "sem NF"). O motivo do 403 mudou de texto.
+- Os caminhos do GoAccess (correção da v21): as URLs esperadas da Shopify perderam o `/graphql`, e a Yenzah na
+  Intelipost vai por `/yenzah`. Casos novos: o POST no endereço da marca e o erro do gateway no log
+  (`integration/api-shopify-orders`); o 404 com o `error` do gateway como erro, a conta tentada depois da marca (e o
+  envio completo pelo caminho que respondeu), nenhuma das duas conhecida (sem resposta, nunca "sem NF"), a marca sem
+  conta diferente (uma tentativa só) e o 400 da Intelipost sem nova tentativa (`shared/nfForaDoDataMart`).
 
 ## Atualizar para um commit novo do CX Hub
 

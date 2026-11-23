@@ -10,14 +10,19 @@ import { normalizarNf } from '../nfDaVenda';
  * 01/10/2026; o gateway a lê com uma chave só. Desde 2026-11-23 são a `INTELIPOST_GATEWAY_URL` e a
  * `INTELIPOST_GATEWAY_KEY` (o integrations-gateway, com a `INTEGRATIONS_GATEWAY_WRITE_KEY`, foi descontinuado).
  *
- * Contrato do gateway (o mesmo que a Central de Tickets e o app de extravios usam, só leitura; ver
- * `docs/integrations-gateway-shopify.md`):
- * - `GET {INTELIPOST_GATEWAY_URL}/{conta}/shipment_order/sales_order_number/{SH…}` com `Authorization: Bearer <chave>`:
+ * Contrato do gateway (o GoAccess, passado pelo usuário em 23/11: "Intelipost: https://api.gogroup.cc/v1/intelipost/
+ * {marca}/..., com o caminho igual ao da API"; ver `docs/integrations-gateway-shopify.md`):
+ * - `GET {INTELIPOST_GATEWAY_URL}/{marca}/shipment_order/sales_order_number/{SH…}` com `Authorization: Bearer <chave>`:
  *   o envio enxuto do pedido. `GET …/shipment_order/{order_number}`: o envio completo;
  * - a resposta é a da API: `{ status: 'OK', content }`, com o envio direto no `content`, num array ou em
  *   `content.shipment_orders[]`;
- * - envio que não existe: 400; rota que o gateway não conhece: 404. Sem chave ou com chave inválida: 401 no gateway
- *   antigo e 403 `invalid_key` no novo (visto em 23/11); sem `intelipost:read`: 403.
+ * - envio que não existe: 400 (o da própria Intelipost). Sem chave ou com chave inválida: 401 no gateway antigo e 403
+ *   `invalid_key` no novo (visto em 23/11); sem o escopo: 403.
+ *
+ * O integrations-gateway antigo pedia a **conta** no caminho (`lescent` para Lescent, Kokeshi, BySamia e Auá;
+ * `beautyhub` para Barbours, Rituária e Yenzah). O GoAccess diz **marca**, e não deu para conferir sem a chave se ele
+ * também conhece as contas. Por isso o caminho vai pela marca e, quando o gateway responde que não conhece a rota (404
+ * com o `error` dele), tenta a conta (`segmentosDaMarcaNoGateway`).
  */
 
 /** As marcas com conta na Intelipost: as 6 do Cosmos e as 3 sem Cosmos com planilha (a Gobeaute não tem envio próprio). */
@@ -39,6 +44,15 @@ export const CONTA_INTELIPOST_NO_GATEWAY: Record<MarcaComIntelipost, string> = {
     apice: 'apice',
     denavita: 'denavita',
 };
+
+/**
+ * O que vai depois da base no caminho, em ordem de tentativa: a marca (o contrato do GoAccess) e, se for outra, a conta
+ * do integrations-gateway antigo. Ápice, Denavita e Lescent têm um só (a marca é a conta).
+ */
+export function segmentosDaMarcaNoGateway(marca: MarcaComIntelipost): string[] {
+    const conta = CONTA_INTELIPOST_NO_GATEWAY[marca];
+    return conta && conta !== marca ? [marca, conta] : [marca];
+}
 
 /**
  * A sigla do pedido nas lojas das marcas do Cosmos, a mesma da Central de Tickets (`MARCAS_LOGISTICA`): `SH52988BS`,
@@ -86,19 +100,32 @@ export interface EnvioIntelipost {
     } | null> | null;
 }
 
-export type RespostaDaIntelipost = { envio: EnvioIntelipost } | { naoAchou: true } | { erro: string };
+export type RespostaDaIntelipost =
+    | { envio: EnvioIntelipost }
+    | { naoAchou: true }
+    | { erro: string; rotaDesconhecida?: true };
 
 /**
- * O que a resposta do gateway diz: o envio, "não achou" (o 400 da Intelipost para envio que não existe, o 404 de rota,
- * ou o `OK` sem envio) ou um erro. 200 sem JSON, ou com outro `status`, também é erro: dizer "não achou" ali deixaria a
- * conferência concluir que o pedido não tem NF sem que a Intelipost tivesse respondido.
+ * O que a resposta do gateway diz: o envio, "não achou" (o 400 da Intelipost para envio que não existe, o 404 sem o
+ * `error` do gateway, ou o `OK` sem envio) ou um erro. 200 sem JSON, ou com outro `status`, também é erro: dizer "não
+ * achou" ali deixaria a conferência concluir que o pedido não tem NF sem que a Intelipost tivesse respondido.
+ *
+ * O 404 com o `error` do próprio gateway (`not_found`, `unknown_store`…) é a rota que ele não conhece, e não o envio que
+ * não existe: é erro, com `rotaDesconhecida`, para quem chama tentar a conta. Até a v21 ele valia "não achou", e um
+ * caminho errado (a marca no lugar da conta, ou o contrário) daria "sem NF" e a recusa do registro.
  */
 export function lerRespostaDaIntelipost(status: number, corpo: unknown): RespostaDaIntelipost {
     if (status === 401) return { erro: 'chave recusada pelo gateway (HTTP 401)' };
     if (status === 403) return { erro: 'chave recusada ou sem permissão de leitura da Intelipost (HTTP 403)' };
     if (status === 429) return { erro: 'limite de consultas do gateway (HTTP 429)' };
     if (status >= 500) return { erro: `gateway ou Intelipost fora do ar (HTTP ${status})` };
-    if (status === 400 || status === 404) return { naoAchou: true };
+    if (status === 404) {
+        const erroDoGateway = (corpo as { error?: unknown } | null)?.error;
+        return typeof erroDoGateway === 'string' && erroDoGateway
+            ? { erro: `o gateway não conhece a rota (HTTP 404 ${erroDoGateway.slice(0, 60)})`, rotaDesconhecida: true }
+            : { naoAchou: true };
+    }
+    if (status === 400) return { naoAchou: true };
     if (status !== 200) return { erro: `HTTP ${status}` };
     const resposta = corpo as { status?: unknown; content?: unknown } | null;
     if (!resposta || typeof resposta !== 'object') return { erro: 'resposta 200 sem JSON' };

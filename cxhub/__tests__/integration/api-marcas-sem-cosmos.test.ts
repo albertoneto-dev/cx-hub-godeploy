@@ -143,7 +143,7 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo gatewa
         expect((await res.json()).orders.map((o: { name: string }) => o.name)).toEqual(['#1475900']);
         expect(fetchSpy).toHaveBeenCalledTimes(2);
         const [url, init] = fetchSpy.mock.calls[0];
-        expect(url).toBe(`${GATEWAY}/shopify/apice/graphql`);
+        expect(url).toBe(`${GATEWAY}/shopify/apice`);
         expect(init?.method).toBe('POST');
         expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer igw_chave_de_teste');
         expect(JSON.parse(String(init?.body)).variables).toEqual({ q: 'name:SH1475900AP' });
@@ -161,7 +161,7 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo gatewa
         expect((await res.json()).orders.map((o: { name: string }) => o.name)).toEqual(['SH1041GB']);
         expect(fetchSpy).toHaveBeenCalledTimes(1);
         const [url, init] = fetchSpy.mock.calls[0];
-        expect(url).toBe(`${GATEWAY}/shopify/gobeaute/graphql`);
+        expect(url).toBe(`${GATEWAY}/shopify/gobeaute`);
         expect(JSON.parse(String(init?.body)).variables).toEqual({ q: 'name:SH1041GB' });
     });
 
@@ -316,7 +316,7 @@ describe('GET /api/shopify/orders — marcas sem Cosmos e Rituária, pelo gatewa
         expect(orders.map((o: { name: string }) => o.name)).toEqual(['#123456']);
         expect(fetchSpy).toHaveBeenCalledTimes(1);
         const [url, init] = fetchSpy.mock.calls[0];
-        expect(url).toBe(`${GATEWAY}/shopify/rituaria/graphql`);
+        expect(url).toBe(`${GATEWAY}/shopify/rituaria`);
         expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer igw_chave_de_teste');
         expect(JSON.parse(String(init?.body)).variables).toEqual({ q: 'name:123456' });
         expect(JSON.stringify(fetchSpy.mock.calls)).not.toContain('shpat_que_nao_deve_ser_usado');

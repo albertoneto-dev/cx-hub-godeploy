@@ -184,7 +184,7 @@ describe('POST /api/reenvio/bot — marca sem Cosmos', () => {
         expect(mToken).not.toHaveBeenCalled();
         expect(mFetchOrder).not.toHaveBeenCalled();
         expect(fetchSpy).toHaveBeenCalledTimes(1);
-        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/apice/graphql`);
+        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/apice`);
 
         const enviado = mPost.mock.calls[0][0];
         expect(enviado).toMatchObject({ brand: 'apice', testMode: false });
@@ -208,7 +208,7 @@ describe('POST /api/reenvio/bot — marca sem Cosmos', () => {
         const res = await post(corpo('gobeaute', { order: { ecommerceOrderId: '1041' } }));
 
         expect(res.status).toBe(200);
-        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/gobeaute/graphql`);
+        expect(fetchSpy.mock.calls[0][0]).toBe(`${GATEWAY}/shopify/gobeaute`);
         expect(mPost.mock.calls[0][0]).toMatchObject({ brand: 'gobeaute' });
         expect(mPost.mock.calls[0][0].data.apiData).toBeUndefined();
         expect(mFetchOrder).not.toHaveBeenCalled();

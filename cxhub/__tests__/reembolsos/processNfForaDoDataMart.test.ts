@@ -112,7 +112,7 @@ afterEach(() => {
 
 describe('processRefund — a NF fora do Data Mart', () => {
     it('Yenzah sem NF no Data Mart e com o metacampo: grava com a NF da Shopify, sem 422', async () => {
-        gateway = (url) => (url.includes('/shopify/yenzah/graphql') ? metacampo('SH11249YE', '001588301') : intelipostSemEnvio());
+        gateway = (url) => (url.includes('/shopify/yenzah') ? metacampo('SH11249YE', '001588301') : intelipostSemEnvio());
 
         const { body, status } = await processRefund('yenzah', reembolso('yenzah', 'SH11249YE'), { agora: AGORA });
 
@@ -121,7 +121,7 @@ describe('processRefund — a NF fora do Data Mart', () => {
         expect(enfileirar.mock.calls[0][0][0]).toMatchObject({ numero_pedido: 'SH11249YE', nf: '1588301' });
         expect(planilhas).toHaveBeenCalledTimes(1);
         // O metacampo achou: a Intelipost ao vivo nem é consultada.
-        expect(chamadasAoGateway()).toEqual([`${GATEWAY}/shopify/yenzah/graphql`]);
+        expect(chamadasAoGateway()).toEqual([`${GATEWAY}/shopify/yenzah`]);
     });
 
     it('Yenzah sem o metacampo: a NF da Intelipost ao vivo, na conta beautyhub', async () => {
@@ -134,8 +134,8 @@ describe('processRefund — a NF fora do Data Mart', () => {
         expect(status).toBe(200);
         expect(enfileirar.mock.calls[0][0][0]).toMatchObject({ nf: '1588301' });
         expect(chamadasAoGateway()).toEqual([
-            `${GATEWAY}/shopify/yenzah/graphql`,
-            `${GATEWAY}/intelipost/beautyhub/shipment_order/sales_order_number/SH11249YE`,
+            `${GATEWAY}/shopify/yenzah`,
+            `${GATEWAY}/intelipost/yenzah/shipment_order/sales_order_number/SH11249YE`,
         ]);
     });
 
@@ -163,7 +163,7 @@ describe('processRefund — a NF fora do Data Mart', () => {
     });
 
     it('marca do Cosmos sem NF no Data Mart: a do metacampo, pelos dígitos (o reenvio SH…-R-1 vem junto e não vale)', async () => {
-        gateway = (url) => (url.includes('/shopify/bysamia/graphql')
+        gateway = (url) => (url.includes('/shopify/bysamia')
             ? json({ data: { orders: { edges: [
                 { node: { name: 'SH52988BS-R-1', nf: { value: '001905557' } } },
                 { node: { name: 'SH52988BS', nf: { value: '001834451' } } },

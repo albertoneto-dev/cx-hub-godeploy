@@ -96,7 +96,9 @@ O contrato é o da Vercel: os mesmos caminhos, métodos, corpos e respostas de s
   `_WRITE_KEY`) foi descontinuado. A Shopify usa a `SHOPIFY_GATEWAY_URL` e a `SHOPIFY_GATEWAY_KEY`; a Intelipost ao vivo,
   a `INTELIPOST_GATEWAY_URL` e a `INTELIPOST_GATEWAY_KEY` (`acessoAoGateway`, em `cxhub/shared/lib/shopify/gateway.ts`).
   A URL vale com ou sem o `/shopify` ou o `/intelipost` no fim, só em https, e **não tem padrão no código**: sem ela, o
-  serviço fica desligado, como sem a chave. Não volte a ler as `INTEGRATIONS_GATEWAY_*`.
+  serviço fica desligado, como sem a chave. Não volte a ler as `INTEGRATIONS_GATEWAY_*`. O gateway é o GoAccess
+  (`https://api.gogroup.cc/v1`): a Shopify é `POST {base}/{marca}`, **sem `/graphql`** (com ele, 400: foi o defeito da
+  v21), e a Intelipost é `GET {base}/{marca}/{caminho da API}`, com a conta antiga só se o gateway não conhecer a marca.
 - **Bot de reenvio (`/api/reenvio/bot`):**
   - pede a `gdk_` **e** o `x-bot-secret`. O login do GoDeploy deixa entrar qualquer pessoa do grupo, e esta rota cria
     pedido no Cosmos;

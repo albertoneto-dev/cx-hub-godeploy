@@ -3,9 +3,10 @@ import { ehMarcaCxHub, type MarcaCxHub } from '../constants';
 import { normalizarNf } from '../nfDaVenda';
 
 /**
- * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **gateway de integrações**: uma chave só
- * (`SHOPIFY_GATEWAY_KEY`) para as 10 lojas, e a Admin API em **GraphQL** (`POST {SHOPIFY_GATEWAY_URL}/{marca}/graphql`,
- * com o nome da marca na URL). O app não guarda token de loja nenhum (decisão de 2026-11-17: os tokens das lojas vão ser
+ * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **gateway de integrações** (o GoAccess, desde
+ * 2026-11-23): uma chave só (`SHOPIFY_GATEWAY_KEY`) para as 10 lojas, e a Admin API em **GraphQL** direto no endereço
+ * da marca (`POST {SHOPIFY_GATEWAY_URL}/{marca}`, sem o `/graphql` que o integrations-gateway antigo pedia: com ele, o
+ * GoAccess responde 400). O app não guarda token de loja nenhum (decisão de 2026-11-17: os tokens das lojas vão ser
  * trocados, e o gateway já lê todas). Contrato e testes do gateway em `docs/integrations-gateway-shopify.md`.
  *
  * Aqui fica só o que é puro: a URL, a consulta, a escolha do pedido certo entre os que o filtro devolve e a tradução do
@@ -48,6 +49,20 @@ export function acessoAoGateway(servico: ServicoDoGateway): AcessoAoGateway {
     const base = baseDoServicoNoGateway(process.env[nomes.url], servico);
     if (!base) return { ok: false, motivo: `sem a ${nomes.url} (https)` };
     return { ok: true, base, chave };
+}
+
+/**
+ * A mensagem de erro que o gateway mandou no corpo (o `error`, o `message` ou os `errors[].message` do GraphQL), para o
+ * log: até 160 caracteres, ou vazio. Só o texto de erro: o corpo de sucesso tem dado de cliente e nunca passa por aqui.
+ * Sem ela, o 400 da v21 (o caminho antigo com `/graphql`) só aparecia como "HTTP 400".
+ */
+export function mensagemDeErroDoGateway(corpo: unknown): string {
+    const c = corpo as { error?: unknown; message?: unknown; errors?: unknown } | null;
+    if (!c || typeof c !== 'object') return '';
+    const partes = [c.error, c.message, ...(Array.isArray(c.errors) ? c.errors.map((e) => (e as { message?: unknown })?.message) : [])]
+        .map((p) => (typeof p === 'string' ? p : p && typeof p === 'object' ? JSON.stringify(p) : ''))
+        .filter(Boolean);
+    return partes.join('; ').slice(0, 160);
 }
 
 /**
