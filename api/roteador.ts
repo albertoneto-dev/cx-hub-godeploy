@@ -1,4 +1,5 @@
-// As 24 rotas que o CX Hub tem na Vercel, nos mesmos caminhos e métodos, com o código portado em cxhub/app/api.
+// As 24 rotas que o CX Hub tem na Vercel, nos mesmos caminhos e métodos, com o código portado em cxhub/app/api, e a
+// /api/reenvio/existente, que só este app tem (2026-11-24).
 // Cada rota recebe o que recebia do Next: a requisição com nextUrl e { params } (os [id] do caminho, já decodificados).
 //
 // Autenticação: o app é "authenticated" no GoDeploy, e o Authorization pertence ao gateway (a chave gdk_ de quem chama
@@ -23,6 +24,7 @@ import * as datamartOrderContext from "../cxhub/app/api/datamart/order-context/r
 import * as datamartProducts from "../cxhub/app/api/datamart/products/route";
 import * as logisticaSubmit from "../cxhub/app/api/logistica/submit/route";
 import * as reenvioBot from "../cxhub/app/api/reenvio/bot/route";
+import * as reenvioExistente from "../cxhub/app/api/reenvio/existente/route";
 import * as refundCancel from "../cxhub/app/api/refund/cancel/route";
 import * as refundComplete from "../cxhub/app/api/refund/complete/route";
 import * as refundSubmit from "../cxhub/app/api/refund/submit/route";
@@ -57,6 +59,7 @@ const ROTAS: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
   ["/api/datamart/products", datamartProducts],
   ["/api/logistica/submit", logisticaSubmit],
   ["/api/reenvio/bot", reenvioBot],
+  ["/api/reenvio/existente", reenvioExistente],
   ["/api/refund/cancel", refundCancel],
   ["/api/refund/complete", refundComplete],
   ["/api/refund/submit", refundSubmit],

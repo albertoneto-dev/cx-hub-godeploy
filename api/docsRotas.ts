@@ -2,7 +2,8 @@
 // requisição e respostas por status, com exemplos. Levantada do código das rotas (cxhub/app/api, servidor/) em
 // 2026-11-11, com o CX Hub no commit 8a1b1a9, revista em 2026-11-13 para o 11cebff (ADR-018: o order-context e a
 // conferência no Data Mart), em 2026-11-16 (a NF da Ápice só é recusada com prova, e o nfMotivo) e em 2026-11-19 (a NF
-// fora do Data Mart: o metacampo da Shopify e a Intelipost ao vivo, e o nfOrigem); "sources" diz de onde veio cada uma,
+// fora do Data Mart: o metacampo da Shopify e a Intelipost ao vivo, e o nfOrigem), e em 2026-11-24 (a rota nova
+// GET /api/reenvio/existente, só deste app); "sources" diz de onde veio cada uma,
 // para conferir quando a rota mudar.
 // Os exemplos são fictícios: nenhum dado de cliente, token ou segredo. O testes/docs.test.ts cobra que toda rota do
 // roteador e da fila esteja aqui, e que nada aqui seja rota que não existe.
@@ -52,7 +53,7 @@ export const GRUPOS: ReadonlyArray<{ tag: string; descricao: string }> = [
   { tag: "Reembolso", descricao: "O registro do reembolso e a gestão depois dele: cancelar, editar, concluir e sincronizar." },
   { tag: "Cancelamento", descricao: "O registro do cancelamento junto do reenvio ou do reembolso." },
   { tag: "Logística", descricao: "A abertura do ticket de logística." },
-  { tag: "Consultas", descricao: "A lista de solicitações e a situação do registro de cada caso." },
+  { tag: "Consultas", descricao: "A lista de solicitações, a situação do registro de cada caso e os reenvios que um pedido já tem." },
   { tag: "Fila", descricao: "A fila de registro (`/api/v1`), que manda os casos e as atualizações em lote ao Airflow a cada 10 min (as edições do backoffice vão no mesmo lote). O contrato não mudou na migração." },
   { tag: "Backoffice", descricao: "O backoffice de reenvio e reembolso, que era o app `backoffice-hub`: a lista da gold + raw (+ os casos ainda na fila) por cursor, o caso e as edições com as regras de lá. A edição entra na fila do app e sobe no lote dela, a cada 10 min. Rotas novas, só no GoDeploy. Toda chamada leva o `x-usuario-email` de quem está na tela." },
   { tag: "Cache da rota dados", descricao: "A rodada do cron que renova as listas da rota dados guardadas no `env.DB`. Rota nova, só no GoDeploy." },
@@ -8305,6 +8306,270 @@ export const ENDPOINTS: Endpoint[] = [
       "cxhub/shared/lib/metabase/client.ts",
       "api/roteador.ts",
       "cxhub/__tests__/integration/api-registro.test.ts",
+      "testes/api.test.ts"
+    ]
+  },
+  {
+    "method": "GET",
+    "path": "/api/reenvio/existente",
+    "tag": "Consultas",
+    "summary": "Diz se o pedido já tem reenvio e se um novo seria barrado, em qualquer das 10 marcas.",
+    "description": "Responde antes do envio o que o `POST /api/sheets/append` e o `POST /api/reenvio/bot` decidiriam: `bloqueiaNovo` é o mesmo bloqueio de 24 h deles (o reenvio da mesma marca e do mesmo pedido, não cancelado, na fila ou na raw), que levaria a `DUPLICATE_RESEND`. Junto vem a lista dos reenvios do pedido: o que o CX Hub registrou (raw e fila, todo o histórico) e o histórico de antes do CX Hub (as linhas da gold que vieram do Supabase). Nas marcas sem Cosmos (apice, yenzah, denavita, gobeaute) é a única consulta que existe, porque não há ERP para perguntar. Rota nova, só no GoDeploy. Só leitura: não grava nada.",
+    "routeHeader": null,
+    "params": [
+      {
+        "name": "marca",
+        "in": "query",
+        "type": "string",
+        "required": true,
+        "description": "A marca do pedido; maiúsculas e espaços nas pontas são ignorados.",
+        "enum": [
+          "lescent",
+          "kokeshi",
+          "bysamia",
+          "aua",
+          "barbours",
+          "rituaria",
+          "apice",
+          "yenzah",
+          "denavita",
+          "gobeaute"
+        ]
+      },
+      {
+        "name": "pedido",
+        "in": "query",
+        "type": "string",
+        "required": true,
+        "description": "Número do pedido em qualquer formato (SH1607929AP, #1607929, 1607929): letras, dígitos, # e -, até 40 caracteres, com ao menos um dígito. Compara só os dígitos."
+      }
+    ],
+    "requestBody": null,
+    "responses": [
+      {
+        "status": 200,
+        "description": "Consulta feita. Sem nenhum reenvio, vem com bloqueiaNovo false, reenvios vazio e message \"Nenhum reenvio registrado para o pedido.\". Se só a gold não responder, a resposta é 200 assim mesmo, com historicoLido false e só o registro do CX Hub na lista.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Sempre SUCCESS.",
+            "enum": [
+              "SUCCESS"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "O resumo em uma frase: quem barra e quando (hora de São Paulo), quantos reenvios há sem barrar, ou que não há nenhum; e, se for o caso, que o histórico não respondeu."
+          },
+          {
+            "name": "marca",
+            "type": "string",
+            "required": true,
+            "description": "A marca consultada, em minúsculas."
+          },
+          {
+            "name": "pedido",
+            "type": "string",
+            "required": true,
+            "description": "Os dígitos do pedido, que é o que se compara."
+          },
+          {
+            "name": "bloqueiaNovo",
+            "type": "boolean",
+            "required": true,
+            "description": "true quando um reenvio novo deste pedido seria recusado agora com DUPLICATE_RESEND: há um reenvio da mesma marca e do mesmo pedido nas últimas 24 h, não cancelado, na fila ou na raw."
+          },
+          {
+            "name": "bloqueadoPor",
+            "type": "object | null",
+            "required": true,
+            "description": "O reenvio que barra, ou null quando bloqueiaNovo é false."
+          },
+          {
+            "name": "bloqueadoPor.idSolicitacao",
+            "type": "string",
+            "required": true,
+            "description": "O id_solicitacao do caso no CX Hub."
+          },
+          {
+            "name": "bloqueadoPor.responsavel",
+            "type": "string | null",
+            "required": true,
+            "description": "Quem registrou o reenvio."
+          },
+          {
+            "name": "bloqueadoPor.solicitadoEm",
+            "type": "string",
+            "required": true,
+            "description": "ISO 8601 em UTC: quando a fila recebeu o caso ou, para o caso já na raw, quando o lote o levou."
+          },
+          {
+            "name": "reenvios",
+            "type": "array",
+            "required": true,
+            "description": "Os reenvios do pedido, o mais recente primeiro (o id desempata): o registro do CX Hub e o histórico juntos. O caso que a DAG recusou não entra, porque nunca virou reenvio. Até 100 do CX Hub e 50 do histórico."
+          },
+          {
+            "name": "reenvios[].fonte",
+            "type": "string",
+            "required": true,
+            "description": "cxhub: registrado pelo CX Hub (raw ou fila); historico: a gold, de antes do CX Hub (em 24/11/2026, as linhas do Supabase de 11/2025 a 28/10/2026, só nas 6 marcas do Cosmos).",
+            "enum": [
+              "cxhub",
+              "historico"
+            ]
+          },
+          {
+            "name": "reenvios[].id",
+            "type": "string",
+            "required": true,
+            "description": "O id_solicitacao do caso no CX Hub, ou a chave_unica da linha no histórico."
+          },
+          {
+            "name": "reenvios[].numeroPedido",
+            "type": "string",
+            "required": true,
+            "description": "O número do pedido como foi registrado (no histórico, o texto da planilha)."
+          },
+          {
+            "name": "reenvios[].dataSolicitacao",
+            "type": "string",
+            "required": true,
+            "description": "aaaa-mm-ddThh:mm:ss em hora de São Paulo, sem fuso."
+          },
+          {
+            "name": "reenvios[].motivo",
+            "type": "string | null",
+            "required": true,
+            "description": "O motivo registrado."
+          },
+          {
+            "name": "reenvios[].statusExecucao",
+            "type": "string | null",
+            "required": true,
+            "description": "No CX Hub, Realizado, Cancelado ou Pendente, já com a atualização mais recente da fila por cima; no histórico, o texto que a planilha tinha (No Prazo, Em atraso, Realizado…). null sem execução."
+          },
+          {
+            "name": "reenvios[].responsavel",
+            "type": "string | null",
+            "required": true,
+            "description": "Quem registrou a solicitação."
+          },
+          {
+            "name": "reenvios[].situacaoNaFila",
+            "type": "string | null",
+            "required": true,
+            "description": "Só no CX Hub: pendente (na fila) ou enviado (num lote em andamento). null no caso já gravado e no histórico.",
+            "enum": [
+              "pendente",
+              "enviado"
+            ]
+          },
+          {
+            "name": "historicoLido",
+            "type": "boolean",
+            "required": true,
+            "description": "false quando a gold não respondeu: a lista tem só o registro do CX Hub. O bloqueiaNovo não depende dela."
+          }
+        ],
+        "example": {
+          "code": "SUCCESS",
+          "message": "Um reenvio novo seria barrado: já existe um reenvio para o pedido feito por Ana em 24/11/2026 10:02:00.",
+          "marca": "apice",
+          "pedido": "1607929",
+          "bloqueiaNovo": true,
+          "bloqueadoPor": {
+            "idSolicitacao": "3f9a2c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c",
+            "responsavel": "Ana",
+            "solicitadoEm": "2026-11-24T13:02:00.000Z"
+          },
+          "reenvios": [
+            {
+              "fonte": "cxhub",
+              "id": "3f9a2c1e-7b4d-4e8a-9c21-5d6e7f8a9b0c",
+              "numeroPedido": "SH1607929AP",
+              "dataSolicitacao": "2026-11-24T10:02:00",
+              "motivo": "Extravio",
+              "statusExecucao": null,
+              "responsavel": "Ana",
+              "situacaoNaFila": "pendente"
+            },
+            {
+              "fonte": "cxhub",
+              "id": "6f1c0e2a-1111-4222-8333-444455556666",
+              "numeroPedido": "SH1607929AP",
+              "dataSolicitacao": "2026-11-12T15:40:11",
+              "motivo": "Avaria",
+              "statusExecucao": "Cancelado",
+              "responsavel": "Bia",
+              "situacaoNaFila": null
+            }
+          ],
+          "historicoLido": true
+        }
+      },
+      {
+        "status": 400,
+        "description": "Parâmetro inválido, antes de qualquer leitura. Outras mensagens: \"Marca inválida: <marca>.\", \"Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito.\".",
+        "example": {
+          "code": "INVALID_REQUEST",
+          "message": "Informe a marca."
+        }
+      },
+      {
+        "status": 502,
+        "description": "A fila do app ou o Metabase falharam ao ler o registro do CX Hub. Outra mensagem: \"Não foi possível ler o registro de reenvios.\".",
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "Não foi possível ler a fila do registro."
+        }
+      },
+      {
+        "status": 503,
+        "description": "Metabase sem configuração no ambiente (METABASE_*) ou sem a tabela da raw. Outra mensagem: \"A base do Metabase ainda não tem a tabela de reenvio e reembolso neste ambiente.\".",
+        "example": {
+          "code": "UNAVAILABLE",
+          "message": "A consulta lê a base do Metabase, que não está configurada neste ambiente (METABASE_*)."
+        }
+      },
+      {
+        "status": 504,
+        "description": "O Metabase não respondeu ao ler o registro do CX Hub (tempo esgotado ou inalcançável).",
+        "example": {
+          "code": "API_TIMEOUT",
+          "message": "O Metabase não respondeu."
+        }
+      }
+    ],
+    "notes": [
+      "Sem header da rota: basta a gdk_ do app cx-hub no Authorization (ou a sessão do navegador). Não pede o token do Cosmos.",
+      "O bloqueiaNovo usa a mesma função do POST de reenvio, então os dois nunca discordam. Cancelar o reenvio libera o pedido na hora, mesmo com o cancelamento ainda na fila.",
+      "Nas marcas do Cosmos, o reenvio já criado no Cosmos (-R-n) se confere no GET /api/cosmos/resends. Esta rota diz o que foi registrado; ela não pergunta ao Cosmos.",
+      "Não vê reenvio feito fora do CX Hub (uma linha digitada direto na planilha, um pedido criado à mão na loja): em 24/11/2026, o histórico da gold ia só até 28/10/2026.",
+      "Em 24/11/2026, o histórico só existia nas 6 marcas do Cosmos. Nas outras, a gold tem só os casos do CX Hub, que esta rota já lê da raw e da fila, mais frescos.",
+      "No pedido, o # precisa ir codificado na URL (%23), senão vira fragmento e não chega ao servidor.",
+      "Ordem das conferências: parâmetros (400), configuração do Metabase (503), leitura do registro (502/503/504). A gold que falha não muda o status.",
+      "Prazos internos: Metabase 5 s por consulta, fila 8 s por leitura (com uma nova tentativa). As três leituras correm juntas.",
+      "Outro método no mesmo caminho: 405 {code: \"METHOD_NOT_ALLOWED\", message: \"Use GET nesta rota.\"} com o header Allow.",
+      "Exceção não tratada vira 500 {code: \"UNKNOWN_ERROR\", message: \"Erro interno. Veja o log do app.\"} no roteador; pelo código, esta rota não deixa exceção escapar.",
+      "Resposta com content-type application/json."
+    ],
+    "sources": [
+      "cxhub/app/api/reenvio/existente/route.ts",
+      "cxhub/modules/reenvios/actions/reenviosDoPedido.ts",
+      "cxhub/shared/lib/fila/estado.ts",
+      "cxhub/shared/lib/airflow/raw.ts",
+      "cxhub/shared/lib/airflow/listarCasos.ts",
+      "cxhub/shared/lib/airflow/gold.ts",
+      "cxhub/shared/lib/fila/client.ts",
+      "cxhub/shared/lib/metabase/client.ts",
+      "api/roteador.ts",
+      "cxhub/__tests__/reenvios/reenviosDoPedido.test.ts",
+      "cxhub/__tests__/integration/api-reenvio-existente.test.ts",
       "testes/api.test.ts"
     ]
   },

@@ -42,7 +42,7 @@ function redeFalsa(rawTem: string[] = []): Chamada[] {
 }
 
 describe("roteador das rotas do CX Hub", () => {
-  it("atende as 23 rotas da Vercel e o order-context da ADR-018, nos mesmos caminhos e métodos do CX Hub", () => {
+  it("atende as 23 rotas da Vercel, o order-context da ADR-018 e o reenvio existente, nos caminhos e métodos do CX Hub", () => {
     expect(ROTAS_DA_API).toEqual([
       { caminho: "/api/auth/login", metodos: ["POST"] },
       { caminho: "/api/cancellation/submit", metodos: ["POST"] },
@@ -58,6 +58,7 @@ describe("roteador das rotas do CX Hub", () => {
       { caminho: "/api/datamart/products", metodos: ["GET"] },
       { caminho: "/api/logistica/submit", metodos: ["POST"] },
       { caminho: "/api/reenvio/bot", metodos: ["POST"] },
+      { caminho: "/api/reenvio/existente", metodos: ["GET"] },
       { caminho: "/api/refund/cancel", metodos: ["POST"] },
       { caminho: "/api/refund/complete", metodos: ["POST"] },
       { caminho: "/api/refund/submit", metodos: ["POST"] },

@@ -6,8 +6,9 @@ mesmo Worker (além do backoffice, da cache da rota dados e da saúde, mais abai
 - `/api/v1/*`: a fila do Metabase, que guarda casos e atualizações e dispara a DAG `gobeaute_reenvio_reembolso_etl`
   em lote a cada 10 min (era 20 até a v9). O contrato está em `docs/fila-cxhub.md`, no repositório do CX Hub. As
   edições do backoffice (abaixo) são atualizações desta fila.
-- O resto: as 23 rotas que o CX Hub tem na Vercel, **nos mesmos caminhos, métodos, corpos e respostas**, e o
-  `GET /api/datamart/order-context` da ADR-018, que a Vercel não tem. O código é o do CX Hub (`cxhub/`, com origem
+- O resto: as 23 rotas que o CX Hub tem na Vercel, **nos mesmos caminhos, métodos, corpos e respostas**, o
+  `GET /api/datamart/order-context` da ADR-018, que a Vercel não tem, e o `GET /api/reenvio/existente`, que só este app
+  tem. O código é o do CX Hub (`cxhub/`, com origem
   em `cxhub/ORIGEM.md`); as regras de negócio estão no `CLAUDE.md` de lá.
 
 Para quem integra: `GET /docs` é uma página HTML (`api/docs.ts`) com o que muda para quem chamava a Vercel, os
@@ -32,6 +33,7 @@ Como o `Authorization` é do gateway, o que cada rota confere vai em outro heade
 | `/api/v1/*` (a fila) | `x-cxhub-fila-token` |
 | `/api/auth/login`, `/api/cancellation/submit`, `/api/refund/submit`, `/api/sheets/append`, `/api/logistica/submit`, `/api/resend/data`, `/api/shopify/orders` | nenhum, como na Vercel. Aqui ficam atrás do gateway, e na Vercel estavam abertas. |
 | `/api/saude` | nenhum: basta a `gdk_` (é como o Monitor da Black lê) |
+| `/api/reenvio/existente` | nenhum: basta a `gdk_`. Só lê, e não devolve dado de cliente (decisão de 2026-11-24) |
 
 Use o `x-cosmos-token` também no navegador. O app ainda aceita o token no `Authorization` quando ele chega até a rota
 (e o repassa como veio), mas ninguém conferiu se o gateway deixa passar, junto com a sessão, um `Authorization` que
@@ -64,6 +66,7 @@ não é `gdk_`.
 | POST | `/api/refund/sync` | Leva à fila o Realizado ou o Cancelado que o backoffice marcou na planilha |
 | GET | `/api/solicitacoes?tipo=[&marca=][&pedido=][&pagina=]` | Uma página (20) das solicitações dos últimos 30 dias, raw e fila juntas |
 | GET | `/api/registro?ids=` | Onde estão até 20 casos: `gravado`, `aguardando` ou `recusado` |
+| GET | `/api/reenvio/existente?marca=&pedido=` | **Só deste app.** Se o pedido já tem reenvio, nas 10 marcas: `bloqueiaNovo` (o mesmo bloqueio de 24 h do `DUPLICATE_RESEND`) e a lista do registro do CX Hub (raw + fila) com o histórico de antes dele (a gold, fora do `cxhub\|`). Veja abaixo |
 | POST | `/api/logistica/submit` | Abre o ticket de logística no worker `cx-ticketcreator` |
 
 Os corpos e as respostas são os da Vercel. Um 200 com `code` de erro e `reason` (`SHEETS_ERROR`, `UNKNOWN_ERROR`)
@@ -237,6 +240,31 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   pelo menos isso.
 - Log: cada requisição às rotas deixa uma linha `MÉTODO caminho → status em N ms` (sem a query string) no
   `getAppLogs` do GoDeploy, além do que as rotas já logavam.
+
+## O reenvio que o pedido já tem (`GET /api/reenvio/existente`)
+
+Rota nova (2026-11-24), para quem quer saber se o pedido já tem reenvio antes de pedir outro. O
+`GET /api/cosmos/resends` só responde nas 6 marcas do Cosmos, e o `GET /api/solicitacoes` pede o token do Cosmos.
+Esta rota vale para as 10 marcas, e basta a `gdk_`. Na Ápice, na Yenzah, na Denavita e na Gobeaute, ela é a única
+consulta que existe: essas marcas não têm ERP para consultar, e o reenvio é feito pela operação a partir do registro.
+
+Três leituras em paralelo (`cxhub/modules/reenvios/actions/reenviosDoPedido.ts`):
+
+| Leitura | De onde | O que dá |
+|---|---|---|
+| O bloqueio | `solicitacaoRecenteNoRegistro`, a mesma função do dedup do `POST /api/sheets/append` e do bot | `bloqueiaNovo` e `bloqueadoPor`: o reenvio das últimas 24 h, da mesma marca e do mesmo pedido (pelos dígitos), não cancelado, na fila ou na raw. É o `DUPLICATE_RESEND` que um reenvio novo levaria agora |
+| O registro do CX Hub | `listarSolicitacoesNoRegistro` com o pedido: raw + fila, todo o histórico | `reenvios[]` com `fonte: "cxhub"`, sem o caso que a DAG recusou |
+| O histórico | `gold.fct_reenvio_reembolso_gobeaute`, só a `chave_unica` fora do `cxhub\|` | `reenvios[]` com `fonte: "historico"`: as linhas do Supabase, de antes do CX Hub |
+
+- **Por que a gold só pelo histórico:** as linhas `cxhub|…` dela são a raw copiada de hora em hora, então o registro já
+  as tem, e mais novas. Em 24/11/2026 o histórico só existia nas 6 marcas do Cosmos (Supabase, de 11/2025 a
+  28/10/2026); na Ápice, na Yenzah, na Denavita e na Gobeaute a gold é só do CX Hub, e essa consulta volta vazia. Ela é
+  feita assim mesmo: leva 25 ms, e um histórico que a DAG trouxer depois aparece sem mudar o código.
+- **O que pode faltar:** sem a raw ou a fila, a rota responde erro (502, 503 ou 504), porque o `bloqueiaNovo` depende
+  delas. Sem a gold, responde 200 com `historicoLido: false` e só o registro.
+- **O que ela não vê:** o reenvio feito fora do CX Hub (a linha digitada direto na planilha, o pedido criado à mão na
+  loja). Nas marcas do Cosmos, o reenvio criado lá (`-R-n`) se confere no `GET /api/cosmos/resends`, e o POST do
+  reenvio com automação também pergunta ao Cosmos (v19). Esta rota não pergunta.
 
 ## Backoffice (`/api/backoffice/*`)
 

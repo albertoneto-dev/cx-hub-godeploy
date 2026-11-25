@@ -258,6 +258,15 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   - `shared/lib/intelipost/nfNaIntelipostServer.ts`: o caminho vai pela marca e, com a rota desconhecida, pela conta;
     o envio completo usa o caminho que respondeu. Sem a chave do GoAccess não deu para saber qual dos dois ele conhece:
     o log diz quando a conta foi usada.
+- A rota nova `GET /api/reenvio/existente?marca=&pedido=` (2026-11-24, pedido do Alberto: "para as marcas fora do
+  cosmos como a gente verifica? [...] criar um get dessa rota para que outras pessoas possam verificar"). O
+  `GET /api/cosmos/resends` só responde nas marcas do Cosmos, e o `GET /api/solicitacoes` pede o token do Cosmos. Esta
+  rota vale para as 10 marcas, e basta a `gdk_` (decisão do usuário: só lê e não devolve dado de cliente). Ela lê três
+  coisas: o bloqueio de 24 h, pela mesma função do dedup do POST (`solicitacaoRecenteNoRegistro`), para o GET e o POST
+  nunca discordarem; o registro do CX Hub (raw e fila); e, por decisão do usuário, também a gold, só nas linhas fora do
+  `cxhub|`, que são o histórico do Supabase. Arquivos novos: `modules/reenvios/actions/reenviosDoPedido.ts` e
+  `app/api/reenvio/existente/route.ts`. Nenhum arquivo vindo do CX Hub mudou. A rota não existe no repositório antigo,
+  então não entra na lista `ROTAS` do `ferramentas/portar-do-cxhub.mjs`.
 
 ## Testes
 
@@ -328,6 +337,13 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   (`integration/api-shopify-orders`); o 404 com o `error` do gateway como erro, a conta tentada depois da marca (e o
   envio completo pelo caminho que respondeu), nenhuma das duas conhecida (sem resposta, nunca "sem NF"), a marca sem
   conta diferente (uma tentativa só) e o 400 da Intelipost sem nova tentativa (`shared/nfForaDoDataMart`).
+- O reenvio que o pedido já tem, em qualquer marca (2026-11-24):
+  - novo `reenvios/reenviosDoPedido.test.ts` (10 casos): o registro e o histórico juntos na ordem, o bloqueio do dedup,
+    o recusado de fora, as páginas do registro (até 5), a gold que falha sem derrubar a resposta, o bloqueio e o
+    registro que falham subindo, a linha do histórico sem chave ou data, o SQL (a Denavita como `DV`) e as mensagens;
+  - novo `integration/api-reenvio-existente.test.ts` (7 casos): a rota com a fila e o Metabase falsos, a marca sem
+    Cosmos com o bloqueio, o histórico da Kokeshi, o caso ainda na fila, a gold fora, os 400, o 503 sem o Metabase, o
+    504 da raw e o 502 da fila.
 
 ## Atualizar para um commit novo do CX Hub
 

@@ -106,6 +106,11 @@ O contrato é o da Vercel: os mesmos caminhos, métodos, corpos e respostas de s
   - os valores do `reason` são contrato com o Typebot, que decide a resposta à cliente por eles. Não renomeie;
   - organiza o trabalho para caber em 150 s;
   - `BOT_RESEND_EXECUTE=off` desliga a execução no Cosmos sem deploy, e a linha continua sendo registrada.
+- **O pedido já tem reenvio? (`GET /api/reenvio/existente`, decisão de 2026-11-24):** vale para as 10 marcas, e na
+  Ápice, na Yenzah, na Denavita e na Gobeaute é a única consulta, porque elas não têm ERP. O `bloqueiaNovo` sai da
+  mesma função do dedup do POST (`solicitacaoRecenteNoRegistro`): se mudar a regra do dedup, a rota acompanha sozinha.
+  A lista junta o registro (raw + fila) e a gold fora do `cxhub|` (o histórico do Supabase); a gold que falha não
+  derruba a resposta (`historicoLido: false`).
 - **Avisos (ADR-005): avisam sistema quebrado, não dado errado da cliente.** Vão ao Slack (`SLACK_ALERT_WEBHOOK_URL`), e
   a mesma causa sai no máximo uma vez a cada 15 min. Um aviso nunca muda o desfecho da chamada. Sem o webhook, vão só
   ao log. Em 2026-11-11 o webhook ainda não estava cadastrado.
@@ -214,6 +219,7 @@ Como o `Authorization` passou a ser do gateway, a credencial de cada rota foi pa
 | Bot | `x-bot-secret` |
 | Fila | `x-cxhub-fila-token` |
 | Saúde | nenhum: basta a `gdk_` |
+| `/api/reenvio/existente` | nenhum: basta a `gdk_` (só lê, e não devolve dado de cliente) |
 
 A `gdk_` é tirada antes da rota e nunca chega ao Cosmos.
 

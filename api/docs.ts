@@ -299,6 +299,8 @@ const GUIA_HTML = `
         <td><code>x-cxhub-fila-token</code>, ou o cron do GoDeploy</td></tr>
       <tr><td><code>/api/saude</code> (a saúde)</td><td>Não existia</td>
         <td>Nenhum header da rota. Basta a <code>gdk_</code> do app <code>cx-hub</code>.</td></tr>
+      <tr><td><code>/api/reenvio/existente</code> (o pedido já tem reenvio?)</td><td>Não existia</td>
+        <td>Nenhum header da rota. Basta a <code>gdk_</code> do app <code>cx-hub</code>: não pede o token do Cosmos.</td></tr>
     </tbody>
   </table></div>
   <p class="aviso">O token do Cosmos é o <code>credentials.token</code> que o <code>POST /api/auth/login</code> devolve. O app o
