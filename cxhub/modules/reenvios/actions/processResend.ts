@@ -88,7 +88,9 @@ const ENVIE_DE_NOVO = 'nenhum reenvio foi criado. Envie de novo pela Central.';
  *
  * Devolve os mesmos códigos do n8n, para a tela, o bot e o Portal não perceberem a troca. Quem chama é o
  * `postResendWebhook`, que continua aplicando a guarda do INV-02 por cima. Como no n8n, a recusa do ERP volta
- * sem registro (OQ-08): quem garante o registro nesse caso é a rota do bot, repostando sem automação.
+ * sem registro (OQ-08): quem garante o registro nesse caso é a rota do bot, repostando sem automação. Na tela, com
+ * `registrarFalha` (`REGISTRAR_FALHA_DA_TELA`, 2026-11-27), toda saída sem sucesso depois da configuração é registrada
+ * sem execução (`registrarSemExecucao`), e a fila que recusa não tira a linha da planilha.
  *
  * O `POST /resend` **não é retentado** (o node tinha `retryOnFail`: uma 1ª tentativa que estourou depois de o
  * Cosmos criar o pedido virava um 2º reenvio).

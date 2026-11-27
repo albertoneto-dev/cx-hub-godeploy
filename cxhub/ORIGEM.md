@@ -300,6 +300,42 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `shared/pedidosGocreators.test.ts` (com o predicado SQL rodando no PGlite) e os casos GC em `pedidoDaShopifyNoDataMart`,
   `processNfForaDoDataMart` e `api-reenvio-existente`.
 
+- A solicitação da tela que não deu certo também é registrada (2026-11-27, pedido do usuário depois da Black: com o Cosmos
+  lento, o `/api/sheets/append` barrou reenvios sem gravar nada, e o SH1753209KS e o SH1748696KS só foram achados no log).
+  Tudo atrás da trava `REGISTRAR_FALHA_DA_TELA=on`, desligada por padrão, lida a cada chamada; sem ela, nada muda.
+  Arquivo novo: `shared/lib/fila/semExecucao.ts` (a trava, a marca de sem execução, a validação da nova tentativa e a
+  atualização que leva o caso por cima da anterior). Decisões do usuário:
+  - a DAG só aceita Realizado, Cancelado e Pendente no `status_execucao`: o "não realizado" vai **Cancelado** com
+    `responsavel_execucao = "CX Hub"` (o dedup já libera o cancelado, os indicadores o deixam fora e o backoffice trava a
+    linha), e o "a conferir" (o Cosmos sem resposta depois do `POST /resend`) vai **Pendente**, para a gold casar o `-R-n`
+    se o Cosmos o criou. O texto do status ("Reenvio não realizado (erro de comunicação com o Cosmos)", …) vai na
+    planilha, na coluna de status, e a causa nos comentários (`[CXHub] <status>: <o que fazer>`);
+  - nada é gravado **antes** do Cosmos: o `automacao` é identidade do caso e a DAG o ignora na atualização, então um caso
+    gravado "em andamento" não viraria "com automação" depois;
+  - a nova tentativa manda o `idSolicitacao` da que falhou e reescreve **o mesmo caso e a mesma linha** (uma linha por
+    pedido): uma atualização do caso, com Pendente e "Automação" de responsável quando o Cosmos fez o reenvio (o
+    `automacao` do caso fica `false`), e a linha achada pelo carimbo da tentativa anterior, reescrita no lugar. O id só
+    vale para um caso do mesmo tipo, marca e pedido com a marca de sem execução; outro id é ignorado e vale o dedup;
+  - a resposta mantém o `code`, o texto e o status HTTP (a Central reconhece "Nenhum reenvio foi criado e nada foi
+    registrado" para oferecer "Enviar de novo com os mesmos dados") e ganha `idSolicitacao`, `reason:
+    REGISTRADO_SEM_EXECUCAO` (no `AlertReason`, sem aviso) e `statusRegistrado`;
+  - a fila que recusa não tira mais a linha da planilha: ela é o único registro, e a resposta diz para não repetir;
+  - só a tela: o bot já reposta sem automação, e o reembolso do Bot fica de fora.
+
+  Mudaram: `modules/reenvios/actions/processResend.ts` (cada saída sem sucesso passa por `registrarSemExecucao`; o
+  `executarNoCosmos` devolve também o que a linha diz), `postResendWebhook.ts` e `types/sheets.ts`;
+  `modules/reembolsos/actions/processRefund.ts` (os 422 de NF, GC e Pix, o 503 do dedup e a fila recusada; o status vai
+  na coluna de status das 6 do Cosmos e em "Status Reembolso" na Yenzah e na Denavita, e na Ápice só nas observações) e
+  `types/submission.ts`; `shared/lib/sheets/gravarLinha.ts` (`sobrescrever`, que reescreve a linha achada, e
+  `valoresPorCabecalho`, a coluna achada pelo nome no cabeçalho, onde o texto vazio limpa); `shared/lib/cancellation/
+  processCancellation.ts` e `types.ts` (com a trava, o cancelamento do mesmo pedido em 24 h é barrado com
+  `DUPLICATE_CANCELLATION`: o SH698919LC ficou com dois na gold); `shared/lib/alerts/types.ts` e `policy.ts`; e as rotas
+  `app/api/sheets/append`, `app/api/refund/submit` e `app/api/cancellation/submit` (leem a trava e o `idSolicitacao`).
+
+  Testes novos: `shared/semExecucao.test.ts`, os blocos "sem execução" em `processResend`, `processSemCosmos`,
+  `processCancellation` e `gravarLinhaSemCosmos`, e os casos da trava nas rotas. Testes mudados: o que a rota repassa ao
+  `processResend`, ao `processRefund` e ao `processCancellation`.
+
 ## Testes
 
 - Mudados para o contrato novo: `shared/gchatAlert.test.ts` e `shared/gravarLinhaAviso.test.ts` (Slack, e dois casos

@@ -3,7 +3,8 @@
 // 2026-11-11, com o CX Hub no commit 8a1b1a9, revista em 2026-11-13 para o 11cebff (ADR-018: o order-context e a
 // conferência no Data Mart), em 2026-11-16 (a NF da Ápice só é recusada com prova, e o nfMotivo) e em 2026-11-19 (a NF
 // fora do Data Mart: o metacampo da Shopify e a Intelipost ao vivo, e o nfOrigem), e em 2026-11-24 (a rota nova
-// GET /api/reenvio/existente, só deste app); "sources" diz de onde veio cada uma,
+// GET /api/reenvio/existente, só deste app) e em 2026-11-27 (a solicitação da tela sem execução, atrás da trava
+// REGISTRAR_FALHA_DA_TELA); "sources" diz de onde veio cada uma,
 // para conferir quando a rota mudar.
 // Os exemplos são fictícios: nenhum dado de cliente, token ou segredo. O testes/docs.test.ts cobra que toda rota do
 // roteador e da fila esteja aqui, e que nada aqui seja rota que não existe.
@@ -2495,7 +2496,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/sheets/append",
     "tag": "Reenvio",
     "summary": "Registra o reenvio montado pela tela do CX Hub e, com automação, executa no Cosmos.",
-    "description": "Recebe a solicitação já montada pela tela (data); se data.automacao vier preenchida numa marca com Cosmos e fora do modo de teste, chama POST /resend no Cosmos com o token do agente, depois entrega o caso à fila do Metabase e grava a linha na planilha da marca (a gobeaute só vai à fila). Antes de tudo barra duplicata do mesmo pedido e marca nas últimas 24 h (fila e raw). Com automação, antes do POST /resend, pergunta ao Cosmos se o pedido já tem reenvio criado nas últimas 24 h e não cancelado: com um, registra a solicitação com ele, sem criar outro (SUCCESS); sem conseguir saber (o Cosmos sem resposta em duas tentativas e o reenvio fora do Data Mart), não cria nem registra nada (API_ERROR), e repetir é seguro. Na apice, na yenzah e na denavita, junto do dedup, o pedido é conferido no Data Mart (ADR-018): pedido sem NF de venda é recusado com 422, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). testMode: true roda o dedup e a conferência mas não chama o Cosmos nem grava nada; a rota foi dimensionada para caber em 120 s.",
+    "description": "Recebe a solicitação já montada pela tela (data); se data.automacao vier preenchida numa marca com Cosmos e fora do modo de teste, chama POST /resend no Cosmos com o token do agente, depois entrega o caso à fila do Metabase e grava a linha na planilha da marca (a gobeaute só vai à fila). Antes de tudo barra duplicata do mesmo pedido e marca nas últimas 24 h (fila e raw). Com automação, antes do POST /resend, pergunta ao Cosmos se o pedido já tem reenvio criado nas últimas 24 h e não cancelado: com um, registra a solicitação com ele, sem criar outro (SUCCESS); sem conseguir saber (o Cosmos sem resposta em duas tentativas e o reenvio fora do Data Mart), não cria nem registra nada (API_ERROR), e repetir é seguro. Na apice, na yenzah e na denavita, junto do dedup, o pedido é conferido no Data Mart (ADR-018): pedido sem NF de venda é recusado com 422, e a NF, o CD e o valor da NF de reenvio do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). testMode: true roda o dedup e a conferência mas não chama o Cosmos nem grava nada; a rota foi dimensionada para caber em 120 s. Com a trava REGISTRAR_FALHA_DA_TELA=on (desligada por padrão; 2026-11-27), a solicitação que não deu certo também é registrada, sem execução, e a nova tentativa manda o idSolicitacao dela (veja a resposta REGISTRADO_SEM_EXECUCAO).",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -2536,6 +2537,12 @@ export const ENDPOINTS: Endpoint[] = [
           "type": "boolean",
           "required": false,
           "description": "Ensaio: true não chama o Cosmos nem grava nada e responde SUCCESS_TEST_MODE; se vier, tem de ser booleano (\"true\" em texto dá 400)."
+        },
+        {
+          "name": "idSolicitacao",
+          "type": "string",
+          "required": false,
+          "description": "Só com a trava REGISTRAR_FALHA_DA_TELA=on: a nova tentativa de uma solicitação registrada sem execução manda o idSolicitacao que a resposta dela trouxe (reason REGISTRADO_SEM_EXECUCAO). O mesmo caso e a mesma linha são reescritos, e o dedup não barra esse caso. Um id que não é de uma tentativa sem execução deste pedido é ignorado (vale o dedup de sempre); com a trava desligada, nem é lido. Se vier, tem de ser texto (outro tipo dá 400)."
         },
         {
           "name": "data.timestamp",
@@ -3133,7 +3140,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "SHEETS_ERROR com reason RECORD_UNAVAILABLE: a fila do Metabase recusou o caso, então nada foi registrado (nem na planilha); com sentToAPI false pode repetir, com sentToAPI true o reenvio já está no Cosmos e repetir só o registraria (nenhum outro é criado).",
+        "description": "SHEETS_ERROR com reason RECORD_UNAVAILABLE: a fila do Metabase recusou o caso, então nada foi registrado (nem na planilha; com a trava REGISTRAR_FALHA_DA_TELA, a linha vai e a resposta é ROW_UNCERTAIN); com sentToAPI false pode repetir, com sentToAPI true o reenvio já está no Cosmos e repetir só o registraria (nenhum outro é criado).",
         "fields": [
           {
             "name": "code",
@@ -3175,7 +3182,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "SHEETS_ERROR com reason ROW_UNCERTAIN: a linha entrou na planilha, mas a entrada na fila do Metabase não foi confirmada (na gobeaute, que não tem planilha, só a fila ficou incerta); não repita.",
+        "description": "SHEETS_ERROR com reason ROW_UNCERTAIN: a linha entrou na planilha, mas a entrada na fila do Metabase não foi confirmada ou, com a trava REGISTRAR_FALHA_DA_TELA, a fila a recusou (na gobeaute, que não tem planilha, só a fila ficou incerta); não repita.",
         "fields": [
           {
             "name": "code",
@@ -3272,8 +3279,66 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
+        "status": 200,
+        "description": "Só com a trava REGISTRAR_FALHA_DA_TELA=on: a solicitação não deu certo (o dedup do Cosmos sem resposta, o Cosmos recusou ou não respondeu depois do POST, o pedido sem NF nas marcas sem Cosmos, o dedup fora do ar) e foi registrada sem execução. O code, o message e o status HTTP são os de antes (200; 422 no pedido sem NF; 503 no dedup fora do ar); vêm a mais o reason, o idSolicitacao e o statusRegistrado. A nova tentativa manda o idSolicitacao no corpo e reescreve o mesmo caso e a mesma linha.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "O de antes: o que a tela já conhece.",
+            "enum": [
+              "API_ERROR",
+              "OUT_OF_STOCK",
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "O texto de antes (inclusive o \"Nenhum reenvio foi criado e nada foi registrado\", que a Central usa para oferecer o envio de novo)."
+          },
+          {
+            "name": "sentToAPI",
+            "type": "boolean",
+            "required": true,
+            "description": "Sempre false."
+          },
+          {
+            "name": "reason",
+            "type": "string",
+            "required": true,
+            "description": "A solicitação foi registrada sem execução.",
+            "enum": [
+              "REGISTRADO_SEM_EXECUCAO"
+            ]
+          },
+          {
+            "name": "idSolicitacao",
+            "type": "string",
+            "required": true,
+            "description": "O caso registrado: é o que a nova tentativa manda de volta no corpo."
+          },
+          {
+            "name": "statusRegistrado",
+            "type": "string",
+            "required": true,
+            "description": "O status que a linha recebeu, para a tela mostrar: \"Reenvio não realizado (erro de comunicação com o Cosmos)\", \"Reenvio a conferir no Cosmos (sem resposta depois do envio)\", \"Reenvio não realizado (Cosmos recusou: <sem saldo ou HTTP n>)\", \"Reenvio não realizado (dados da automação incompletos)\", \"Reenvio não realizado (pedido sem NF)\" ou \"Reenvio não realizado (erro de comunicação com o registro)\"."
+          }
+        ],
+        "example": {
+          "code": "API_ERROR",
+          "message": "O Cosmos não respondeu — o reenvio PODE ter sido criado. Confira no Cosmos antes de repetir.",
+          "sentToAPI": false,
+          "idSolicitacao": "3f1c9a2e-7b4d-4e8a-9c1f-2a6b8d0e5f71",
+          "reason": "REGISTRADO_SEM_EXECUCAO",
+          "statusRegistrado": "Reenvio a conferir no Cosmos (sem resposta depois do envio)"
+        }
+      },
+      {
         "status": 400,
-        "description": "Corpo sem brand ou data, marca fora da lista ou testMode não booleano; nada é feito; corrija e reenvie.",
+        "description": "Corpo sem brand ou data, marca fora da lista, testMode não booleano ou idSolicitacao que não é texto; nada é feito; corrija e reenvie.",
         "fields": [
           {
             "name": "code",
@@ -3465,7 +3530,8 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Decida pelo code (e pelo reason) do corpo, não pelo status HTTP: DUPLICATE_RESEND, OUT_OF_STOCK, API_ERROR e SHEETS_ERROR chegam como 200.",
       "A rota não confere credencial própria: o token do Cosmos vai no corpo (token), e o header x-cosmos-token não é lido aqui.",
-      "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha, a busca da NF que não veio e a do reenvio que o pedido já tem, nas do Cosmos) → POST /resend no Cosmos, só sem reenvio anterior → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
+      "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha, a busca da NF que não veio e a do reenvio que o pedido já tem, nas do Cosmos) → POST /resend no Cosmos, só sem reenvio anterior → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha), a não ser com a trava REGISTRAR_FALHA_DA_TELA.",
+      "A solicitação sem execução (trava REGISTRAR_FALHA_DA_TELA=on, desligada por padrão; 2026-11-27, depois de o Cosmos lento barrar reenvios na Black sem deixar rastro): o caso vai à fila sem automação e com status_execucao Cancelado e responsavel_execucao \"CX Hub\" (a DAG só aceita Realizado, Cancelado e Pendente), o que tira o caso dos indicadores e libera o dedup. O \"a conferir\" (o Cosmos não respondeu depois do POST) vai Pendente: se o reenvio foi criado, a gold casa o -R-n do Cosmos e o mostra Realizado. A linha vai à planilha sem os campos da automação, com o status na coluna de status (\"Status do Reenvio\") e a nota [CXHub] <status>: <o que fazer> nos comentários. A nova tentativa com o idSolicitacao atualiza o mesmo caso (Pendente, com \"Automação\" de responsável quando o Cosmos fez o reenvio) e reescreve a mesma linha; ela passa de novo pela consulta do reenvio que o pedido já tem, então o \"a conferir\" que o Cosmos criou é só registrado. A fila que recusa não tira a linha da planilha (ROW_UNCERTAIN). Sem a trava, nada disso muda.",
       "O reenvio que o pedido já tem: com automação, a rota lista os reenvios do pedido no Cosmos (GET /organizations/{org}/orders?external_id=<dígitos, ou o GC inteiro>, de qualquer origem desde 27/11/2026, com o token do agente, até 5 s por tentativa e duas tentativas quando o Cosmos não responde ou dá 5xx) e conta o criado nas últimas 24 h e não cancelado. Sem resposta do Cosmos, procura a remessa do reenvio na Intelipost do Data Mart, que só a recebe cerca de 1 h depois; sem ela lá, a resposta é API_ERROR, porque o reenvio pode ser de minutos atrás. O motivo: em 19/11/2026 o Cosmos criou reenvios de 10 a 50 s depois de a rota desistir do POST, e a repetição do agente criava outro.",
       "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai na frente dos comentários. Sem a NF no Data Mart, ela é procurada no metacampo da Shopify (yenzah) e na Intelipost ao vivo, no mesmo teto. Só o pedido que o Data Mart prova não faturado, e que essas fontes confirmam sem NF, é recusado (422). O pedido da Gocreators (GC104306YE) sem NF não é recusado: é registrado com a nota [NF NÃO CONFERIDA: PEDIDO DA GOCREATORS SEM NF]. As 6 marcas do Cosmos e a gobeaute não passam por ela.",
       "Pedido da Gocreators (decisão de 2026-11-27): o GC vai inteiro (GC104306BB) e é tratado como o pedido inteiro em toda parte: no Cosmos (o external_id dele), no reenvio que o Cosmos cria (GC104306BB-R-n), na NF (Intelipost pelo sales_order_number) e no dedup, que compara os dígitos e o lado. O GC e o #n/SH de mesmos dígitos são pedidos diferentes: um nunca barra nem acha o outro.",
@@ -4689,7 +4755,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/refund/submit",
     "tag": "Reembolso",
     "summary": "Registra uma solicitação de reembolso",
-    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. A chave Pix (pixKey) é gravada na planilha de toda marca com planilha, como veio (nunca recusada por formato); só vai normalizada quando vem o pixKeyType e a chave bate com ele. Na apice, na yenzah e na denavita (ADR-018), junto do dedup, o pedido é conferido no Data Mart: pedido sem NF de venda é recusado com 422, e a NF e o CD do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). Não existe modo de teste: toda chamada válida registra de verdade.",
+    "description": "Confere os campos obrigatórios, barra o reembolso do mesmo pedido feito nas últimas 24 h (fila + raw), entrega o caso REEMBOLSO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha da marca. A Gobeaute não tem planilha: o registro dela termina na fila. A chave Pix (pixKey) é gravada na planilha de toda marca com planilha, como veio (nunca recusada por formato); só vai normalizada quando vem o pixKeyType e a chave bate com ele. Na apice, na yenzah e na denavita (ADR-018), junto do dedup, o pedido é conferido no Data Mart: pedido sem NF de venda é recusado com 422, e a NF e o CD do Data Mart entram no lugar dos que vieram (o que o /api/datamart/order-context mostra). Não existe modo de teste: toda chamada válida registra de verdade. Com a trava REGISTRAR_FALHA_DA_TELA=on (desligada por padrão; 2026-11-27), o reembolso da tela que não deu certo também é registrada, sem execução, e a nova tentativa manda o idSolicitacao dela (veja a resposta REGISTRADO_SEM_EXECUCAO).",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -4718,6 +4784,12 @@ export const ENDPOINTS: Endpoint[] = [
           "type": "object",
           "required": true,
           "description": "Os dados do reembolso."
+        },
+        {
+          "name": "idSolicitacao",
+          "type": "string",
+          "required": false,
+          "description": "Só com a trava REGISTRAR_FALHA_DA_TELA=on: a nova tentativa de um reembolso registrado sem execução manda o idSolicitacao que a resposta dele trouxe (reason REGISTRADO_SEM_EXECUCAO). O mesmo caso e a mesma linha são reescritos, e o dedup não barra esse caso. Um id que não é de uma tentativa sem execução deste pedido é ignorado; com a trava desligada, nem é lido. Se vier, tem de ser texto (outro tipo dá 400)."
         },
         {
           "name": "data.brand",
@@ -4958,7 +5030,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "SHEETS_ERROR sem reason: a fila recusou o caso, nada foi gravado (nem fila nem planilha) e pode repetir; se o motivo for \"fora do contrato da DAG\", corrija o corpo antes.",
+        "description": "SHEETS_ERROR sem reason: a fila recusou o caso, nada foi gravado (nem fila nem planilha) e pode repetir (com a trava REGISTRAR_FALHA_DA_TELA, a linha vai e a resposta é o API_TIMEOUT abaixo); se o motivo for \"fora do contrato da DAG\", corrija o corpo antes.",
         "fields": [
           {
             "name": "code",
@@ -5025,7 +5097,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 504,
-        "description": "API_TIMEOUT (marcas com planilha): a linha foi gravada na planilha, mas a entrada na fila não pôde ser confirmada; NÃO repita, avise o suporte.",
+        "description": "API_TIMEOUT (marcas com planilha): a linha foi gravada na planilha, mas a entrada na fila não pôde ser confirmada ou, com a trava REGISTRAR_FALHA_DA_TELA, a fila a recusou; NÃO repita, avise o suporte.",
         "fields": [
           {
             "name": "code",
@@ -5088,8 +5160,57 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
+        "status": 422,
+        "description": "Só com a trava REGISTRAR_FALHA_DA_TELA=on: o reembolso da tela não deu certo (o pedido sem NF, o pedido da Gocreators sem NF, a chave Pix exigida e ausente, o dedup fora do ar) e foi registrado sem execução. O code, o message e o status HTTP são os de antes (422, ou 503 no dedup fora do ar); vêm a mais o reason, o idSolicitacao e o statusRegistrado. A nova tentativa manda o idSolicitacao no corpo e reescreve o mesmo caso e a mesma linha. O reembolso do Bot nunca é registrado assim.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "O de antes.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "O texto de antes."
+          },
+          {
+            "name": "reason",
+            "type": "string",
+            "required": true,
+            "description": "O reembolso foi registrado sem execução.",
+            "enum": [
+              "REGISTRADO_SEM_EXECUCAO"
+            ]
+          },
+          {
+            "name": "idSolicitacao",
+            "type": "string",
+            "required": true,
+            "description": "O caso registrado: é o que a nova tentativa manda de volta no corpo."
+          },
+          {
+            "name": "statusRegistrado",
+            "type": "string",
+            "required": true,
+            "description": "O status que a linha recebeu: \"Reembolso não realizado (pedido sem NF)\", \"Reembolso não realizado (chave Pix inválida)\" ou \"Reembolso não realizado (erro de comunicação com o registro)\"."
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "O pedido SH1000001AP ainda não tem NF de venda: não dá para solicitar reembolso ainda.",
+          "idSolicitacao": "5b2e8c1d-3a4f-4b6e-8d9c-0e1f2a3b4c5d",
+          "reason": "REGISTRADO_SEM_EXECUCAO",
+          "statusRegistrado": "Reembolso não realizado (pedido sem NF)"
+        }
+      },
+      {
         "status": 400,
-        "description": "UNKNOWN_ERROR: falta brand ou data (\"Missing brand or data\") ou a marca não é aceita (\"Invalid brand: <valor>\"); nada foi registrado, corrija antes de repetir.",
+        "description": "UNKNOWN_ERROR: falta brand ou data (\"Missing brand or data\") a marca não é aceita (\"Invalid brand: <valor>\") ou o idSolicitacao não é texto; nada foi registrado, corrija antes de repetir.",
         "fields": [
           {
             "name": "code",
@@ -5291,7 +5412,8 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Não há testMode nesta rota: um \"testMode\": true no corpo é ignorado e a chamada registra de verdade.",
       "Decida pelo code (e pelo reason), não só pelo HTTP: DUPLICATE_REFUND e os dois SHEETS_ERROR vêm com 200.",
-      "Só brand e data são lidos; outros campos no topo (ex.: assincrono) e campos extras em data são ignorados.",
+      "Só brand, data e idSolicitacao são lidos; outros campos no topo (ex.: assincrono) e campos extras em data são ignorados.",
+      "O reembolso sem execução (trava REGISTRAR_FALHA_DA_TELA=on, desligada por padrão; 2026-11-27): os 422 (pedido sem NF, pedido da Gocreators sem NF, chave Pix exigida e ausente), o 503 do dedup fora do ar e a fila que recusa deixam de terminar sem registro. O caso vai à fila com status_execucao Cancelado e responsavel_execucao \"CX Hub\", fora dos indicadores e do dedup; a linha vai à planilha com a nota [CXHub] <status>: <o que fazer> nas observações e o status na coluna de onde o financeiro decide o que pagar (a de status das 6 do Cosmos, \"Status Reembolso\" na yenzah e na denavita; na apice, só nas observações). A nova tentativa com o idSolicitacao atualiza o mesmo caso (Pendente) e reescreve a mesma linha, com o status limpo. A chave Pix recusada não vai para a linha. O reembolso do Bot fica de fora. Antes de ligar: alinhar com o financeiro o texto do status, e os indicadores (Monitor da Black, backoffice) precisam ignorar o Cancelado do \"CX Hub\".",
       "Os campos obrigatórios só não podem faltar nem ser null: string vazia passa na validação.",
       "Dedup: mesmo tipo (REEMBOLSO), mesma marca e mesmos dígitos do pedido, criado nas últimas 24 h, na fila ou na raw; um reembolso já cancelado não conta. O lado também conta: o pedido da Gocreators (GC104306BB) só barra o GC, e o #104306 só barra o SH/#n.",
       "Pedido da Gocreators (decisão de 2026-11-27): o ecommerceOrderId vai inteiro (GC104306BB) e é gravado como veio; a NF é procurada pelo GC (a Intelipost pelo sales_order_number, o metacampo pelo nome), nunca pelos dígitos, que achariam a NF do #n antigo. Sem NF, 422.",
@@ -7047,7 +7169,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/cancellation/submit",
     "tag": "Cancelamento",
     "summary": "Registra uma solicitação de cancelamento",
-    "description": "Entrega o caso CANCELAMENTO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha de cancelamento da marca. Sem dedup: cada chamada aceita cria um caso e uma linha novos.",
+    "description": "Entrega o caso CANCELAMENTO à fila do Metabase (o lote o leva à DAG em até 10 min) e, só depois, grava a linha na planilha de cancelamento da marca. Sem dedup: cada chamada aceita cria um caso e uma linha novos. Com a trava REGISTRAR_FALHA_DA_TELA=on (desligada por padrão; 2026-11-27), o cancelamento do mesmo pedido nas últimas 24 h é barrado (DUPLICATE_CANCELLATION), como o reembolso.",
     "routeHeader": null,
     "params": [],
     "requestBody": {
@@ -7157,7 +7279,7 @@ export const ENDPOINTS: Endpoint[] = [
     "responses": [
       {
         "status": 200,
-        "description": "SUCCESS: o caso entrou na fila e a linha na planilha. Não repita (não há dedup).",
+        "description": "SUCCESS: o caso entrou na fila e a linha na planilha. Não repita (sem a trava REGISTRAR_FALHA_DA_TELA não há dedup).",
         "fields": [
           {
             "name": "code",
@@ -7227,6 +7349,56 @@ export const ENDPOINTS: Endpoint[] = [
           "message": "O cancelamento entrou na fila do Metabase, mas a planilha não foi atualizada. NÃO repita a solicitação.",
           "reason": "SHEET_WRITE_FAILED",
           "idSolicitacao": "3b8e2d1c-5a4f-4e6b-9c7d-2f1a0b9c8d7e"
+        }
+      },
+      {
+        "status": 200,
+        "description": "Só com a trava REGISTRAR_FALHA_DA_TELA=on: DUPLICATE_CANCELLATION, já há cancelamento do mesmo pedido (os mesmos dígitos e o mesmo lado, GC ou não) e marca nas últimas 24 h, na fila ou na raw; nada foi registrado. Quem refaz o formulário do reenvio depois de uma falha cai aqui: o cancelamento da 1ª tentativa vale.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Resultado.",
+            "enum": [
+              "DUPLICATE_CANCELLATION"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "Diz o pedido, quem pediu e quando (dd/mm/aaaa hh:mm:ss, hora de São Paulo)."
+          }
+        ],
+        "example": {
+          "code": "DUPLICATE_CANCELLATION",
+          "message": "Já existe um cancelamento para o pedido 1000001 feito por Ana em 27/11/2026 09:00:00"
+        }
+      },
+      {
+        "status": 503,
+        "description": "Só com a trava REGISTRAR_FALHA_DA_TELA=on: o dedup não pôde ser consultado (fila ou Metabase fora); nada foi registrado, e repetir é seguro.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Resultado.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "\"Não foi possível consultar as solicitações recentes — nada foi registrado. Tente novamente.\""
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "Não foi possível consultar as solicitações recentes — nada foi registrado. Tente novamente."
         }
       },
       {
@@ -7338,7 +7510,7 @@ export const ENDPOINTS: Endpoint[] = [
       }
     ],
     "notes": [
-      "Sem dedup: depois de SUCCESS, API_TIMEOUT ou SHEET_WRITE_FAILED, repetir cria outro caso e outra linha.",
+      "Sem a trava REGISTRAR_FALHA_DA_TELA não há dedup: depois de SUCCESS, API_TIMEOUT ou SHEET_WRITE_FAILED, repetir cria outro caso e outra linha. Com ela, o dedup de 24 h (o mesmo do reembolso: tipo CANCELAMENTO, marca e pedido, na fila e na raw) responde DUPLICATE_CANCELLATION.",
       "Decida pelo code e pelo reason: o UNKNOWN_ERROR com reason SHEET_WRITE_FAILED vem com 200 e significa registrado.",
       "A rota só confere brand e data; os campos de data não são validados um a um, e o único que barra é o número do pedido (a fila recusa sem ele). Campo ausente vira célula vazia na planilha.",
       "Status e Local da Tratativa são ignorados; a planilha da Lescent recebe nessas colunas os valores fixos \"Solicitar na  transportadora\" (com espaço duplo) e \"Transportador\".",

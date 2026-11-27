@@ -267,6 +267,30 @@ quer dizer "registrado, não repita", e o chamador depende disso.
     `sqlDoMesmoPedido`. O GC e o SH de mesmos dígitos nunca se barram;
   - **`/api/reenvio/existente`:** o `pedido` da resposta é o GC inteiro no GC (os dígitos no SH, como antes);
   - **backoffice:** os itens do GC vêm pelo `order_name` (`backoffice/servidor/pedido.ts`).
+- **A solicitação da tela que não deu certo também é registrada (2026-11-27, decisão deste app, atrás da trava
+  `REGISTRAR_FALHA_DA_TELA=on`, desligada por padrão).** Na Black, o Cosmos lento fez o `/api/sheets/append` barrar
+  reenvios sem gravar nada. Com a trava:
+  - **o que é registrado:** no reenvio, o dedup do Cosmos sem resposta, a recusa do Cosmos, o Cosmos sem resposta depois
+    do `POST /resend`, o pedido sem NF (Ápice, Yenzah, Denavita) e o dedup fora do ar; no reembolso, os 422 (sem NF, GC
+    sem NF, chave Pix exigida e ausente) e o dedup fora do ar. O caso vai à fila sem automação, com `status_execucao`
+    Cancelado e `responsavel_execucao = "CX Hub"` (a DAG só aceita Realizado, Cancelado e Pendente). O "a conferir" (o
+    Cosmos sem resposta depois do envio) vai Pendente, e a gold casa o `-R-n` se o reenvio existir. A linha vai à
+    planilha com o status na coluna de status e a nota `[CXHub] <status>: <o que fazer>` nos comentários (reenvio, sem os
+    campos da automação) ou nas observações (reembolso). Na Ápice, a planilha de reembolso não tem coluna de status
+    conhecida: o status fica só nas observações;
+  - **a resposta:** o mesmo `code`, texto e status HTTP de antes, mais `idSolicitacao`, `reason: REGISTRADO_SEM_EXECUCAO`
+    e `statusRegistrado` (o texto da coluna de status);
+  - **a nova tentativa:** a tela manda o `idSolicitacao` no corpo, e o CX Hub atualiza o mesmo caso (Pendente; "Automação"
+    de responsável quando o Cosmos fez o reenvio) e reescreve a mesma linha. O id só vale para um caso sem execução do
+    mesmo tipo, marca e pedido; outro é ignorado, e vale o dedup;
+  - **a fila que recusa:** a linha vai assim mesmo, e a resposta é a da fila incerta (não repita);
+  - **o cancelamento:** o do mesmo pedido em 24 h é barrado com `DUPLICATE_CANCELLATION`;
+  - **antes de ligar:** a Central precisa mandar o `idSolicitacao` na nova tentativa e mostrar o `statusRegistrado`; o
+    texto do status do reembolso precisa ser alinhado com o financeiro (a planilha é de onde ele paga), e os indicadores
+    (Monitor da Black, backoffice) precisam ignorar o Cancelado do "CX Hub".
+
+  Código: `cxhub/shared/lib/fila/semExecucao.ts`, `processResend.ts`, `processRefund.ts`, `processCancellation.ts` e
+  `cxhub/shared/lib/sheets/gravarLinha.ts`.
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.
