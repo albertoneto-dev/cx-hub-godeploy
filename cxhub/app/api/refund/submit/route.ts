@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from '../../../../../api/next-server';
 import type { RefundSubmissionData, RefundSubmitResponse } from '../../../../modules/reembolsos/types/index';
 import { ehMarcaCxHub, type MarcaCxHub } from '../../../../shared/lib/constants';
 import { processRefund } from '../../../../modules/reembolsos/actions/processRefund';
+import { registrarFalhaDaTela } from '../../../../shared/lib/fila/semExecucao';
 
 /**
  * O dedup, a fila do Metabase (até 16 s, ADR-012) e a linha na planilha (até 15 s, ADR-010), com folga. Literal
@@ -12,12 +13,18 @@ export const maxDuration = 120;
 interface RefundRequestBody {
     brand: MarcaCxHub;
     data: RefundSubmissionData;
+    /**
+     * A nova tentativa de um reembolso registrado sem execução (`reason: REGISTRADO_SEM_EXECUCAO`): o `idSolicitacao` que
+     * a resposta dele trouxe. Reescreve o mesmo caso e a mesma linha. Só com `REGISTRAR_FALHA_DA_TELA=on`; um id que não é
+     * de uma tentativa sem execução deste pedido é ignorado (vale o dedup de sempre).
+     */
+    idSolicitacao?: string;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<RefundSubmitResponse>> {
     try {
         const body: RefundRequestBody = await request.json();
-        const { brand, data } = body;
+        const { brand, data, idSolicitacao } = body;
 
         if (!brand || !data) {
             return NextResponse.json(
@@ -35,7 +42,19 @@ export async function POST(request: NextRequest): Promise<NextResponse<RefundSub
         }
 
         // ADR-010 e ADR-012 — o CXHub entrega o caso à fila do Metabase e, logo depois, grava a linha na planilha.
-        const { body: resultado, status } = await processRefund(brand, data);
+        if (idSolicitacao !== undefined && typeof idSolicitacao !== 'string') {
+            return NextResponse.json(
+                { code: 'UNKNOWN_ERROR', message: 'Invalid idSolicitacao: expected string' },
+                { status: 400 },
+            );
+        }
+
+        // A trava é lida a cada chamada (liga e desliga sem deploy). Desligada, o id da tentativa anterior nem é lido.
+        const registrarFalha = registrarFalhaDaTela();
+        const { body: resultado, status } = await processRefund(brand, data, {
+            registrarFalha,
+            tentativaAnterior: registrarFalha ? idSolicitacao : undefined,
+        });
         return NextResponse.json(resultado, { status });
     } catch (error) {
         console.error('[Refund Submit API] Error:', error);

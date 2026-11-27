@@ -56,12 +56,15 @@ export interface RefundSubmitResponse {
      * registrada e não deve ser repetida. Ausente nos demais casos (inclusive o `SHEETS_ERROR` de fila que recusou, em
      * que nada foi gravado).
      */
-    reason?: 'SHEET_WRITE_FAILED';
+    reason?: 'SHEET_WRITE_FAILED' | 'REGISTRADO_SEM_EXECUCAO';
     /**
      * O caso que foi à fila do Metabase (ADR-012): a lista acompanha por ele quando a raw o recebe. Vem sempre que a
-     * planilha foi tentada (`SUCCESS`, `SHEET_WRITE_FAILED` e o `API_TIMEOUT` da fila incerta).
+     * planilha foi tentada (`SUCCESS`, `SHEET_WRITE_FAILED` e o `API_TIMEOUT` da fila incerta) e, com
+     * `REGISTRAR_FALHA_DA_TELA`, no `REGISTRADO_SEM_EXECUCAO`: é ele que a tela manda de volta na nova tentativa.
      */
     idSolicitacao?: string;
+    /** Só com `reason: REGISTRADO_SEM_EXECUCAO`: o status que o reembolso recebeu na planilha, para a tela mostrar. */
+    statusRegistrado?: string;
 }
 
 /**

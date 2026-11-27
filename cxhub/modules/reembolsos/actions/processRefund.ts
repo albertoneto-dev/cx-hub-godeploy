@@ -3,16 +3,29 @@ import {
     pedeChavePixNoReembolso,
     registraNaPlanilha,
     temOrganizacaoNoCosmos,
+    type MarcaComPlanilha,
     type MarcaCxHub,
 } from '../../../shared/lib/constants';
-import type { CasoCxhub } from '../../../shared/lib/airflow/types';
+import type { AtualizacaoCxhub, CasoCxhub } from '../../../shared/lib/airflow/types';
 import { configuracaoQueFalta } from '../../../shared/lib/backendDireto';
 import { buildCancellationRow, prepararCancelamento } from '../../../shared/lib/cancellation/buildCancellationRow';
 import { casoDoCancelamento } from '../../../shared/lib/cancellation/casoDoCancelamento';
 import type { CancellationPayload } from '../../../shared/lib/cancellation/types';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../shared/lib/datamart/conferenciaServer';
 import { nfAusente, nfDoPedidoDoCosmos } from '../../../shared/lib/datamart/nfDaIntelipostServer';
-import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '../../../shared/lib/fila/index';
+import {
+    atualizacaoDoCaso,
+    enfileirarAtualizacao,
+    enfileirarCasos,
+    execucaoDoSemExecucao,
+    notaDoSemExecucao,
+    prazoDaFila,
+    solicitacaoRecenteNoRegistro,
+    tentativaSemExecucao,
+    type ResultadoFila,
+    type SemExecucao,
+    type TentativaAnterior,
+} from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { planilhaQueFalta } from '../../../shared/lib/sheets/index';
 import { gravarNasPlanilhas, type LinhaDaSolicitacao } from '../../../shared/lib/sheets/gravarLinha';
@@ -20,6 +33,7 @@ import type { RefundSubmissionData, RefundSubmitResponse } from '../types/index'
 import { buildRefundRow, COLUNA_DA_CHAVE_PIX, prepararReembolso } from './buildRefundRow';
 import { casoDoReembolso } from './casoDoReembolso';
 import { aplicarConferenciaAoReembolso, chavePixDoReembolso, recusaDoReembolsoGcSemNf } from './conferenciaDoReembolso';
+import { COLUNAS_DO_REEMBOLSO } from './refundSheetColumns';
 import { camposFaltandoNoReembolso } from './validateRefundBody';
 
 const LOG = '[Refund Direct]';
@@ -28,9 +42,19 @@ export interface ProcessRefundOptions {
     /** Instante-limite da entrega à fila do Metabase; ausente ⇒ `prazoDaFila()`, contado de quando ela começa */
     prazoFila?: number;
     agora?: Date;
+    /**
+     * Só a tela, com `REGISTRAR_FALHA_DA_TELA=on` (2026-11-27): o reembolso que não deu certo também é registrado, sem
+     * execução, com o status na linha (`registrarSemExecucao`), e a fila que recusa não tira a linha da planilha. O
+     * reembolso do Bot fica de fora, mesmo com ele.
+     */
+    registrarFalha?: boolean;
+    /** O `idSolicitacao` da tentativa sem execução que esta refaz: o mesmo caso e a mesma linha. Só com `registrarFalha`. */
+    tentativaAnterior?: string;
 }
 
 type Resultado = { body: RefundSubmitResponse; status: number };
+
+const ENVIE_DE_NOVO = 'nenhum reembolso foi registrado para pagar. Envie de novo pela Central.';
 
 /**
  * O que o workflow `[PROD] - Webhook Refund CXHub` fazia, dentro do CXHub, com o registro na fila do Metabase e
@@ -59,6 +83,13 @@ export async function processRefund(
     opcoes: ProcessRefundOptions = {}
 ): Promise<Resultado> {
     const agora = opcoes.agora ?? new Date();
+    const registrarFalha = opcoes.registrarFalha === true && data.handledBy !== 'Bot';
+    let anterior: TentativaAnterior | null = null;
+    // Toda saída sem sucesso depois do corpo validado passa por aqui: sem a trava (ou sem a configuração), responde como sempre.
+    const semExecucao = (resposta: Resultado, sem: SemExecucao, dadosDaLinha: RefundSubmissionData): Promise<Resultado> =>
+        registrarFalha && !configuracaoDoRegistroQueFalta(brand)
+            ? registrarSemExecucao({ brand, dados: dadosDaLinha, sem, resposta, anterior, agora, prazoFila: opcoes.prazoFila })
+            : Promise.resolve(resposta);
 
     const faltando = camposFaltandoNoReembolso(data as unknown as Record<string, unknown>);
     if (faltando.length > 0) {
@@ -74,7 +105,14 @@ export async function processRefund(
     let dados = data;
     if (registraNaPlanilha(brand)) {
         const pix = chavePixDoReembolso(data, pedeChavePixNoReembolso(brand) && chavePixObrigatoria());
-        if (!pix.ok) return { body: { code: 'UNKNOWN_ERROR', message: `${pix.erro} Nada foi registrado.` }, status: 422 };
+        if (!pix.ok) {
+            // A chave que não vale não vai para a linha (a agente a digita de novo).
+            return semExecucao({ body: { code: 'UNKNOWN_ERROR', message: `${pix.erro} Nada foi registrado.` }, status: 422 }, {
+                desfecho: 'nao_realizado',
+                status: 'Reembolso não realizado (chave Pix inválida)',
+                proximoPasso: `${pix.erro} Corrija a chave e ${ENVIE_DE_NOVO.charAt(0).toLowerCase()}${ENVIE_DE_NOVO.slice(1)}`,
+            }, { ...data, pixKey: '' });
+        }
         dados = { ...data, pixKey: pix.chave };
     }
 
@@ -82,9 +120,7 @@ export async function processRefund(
     // A planilha da marca também tem de existir no ambiente (as marcas sem Cosmos ainda não têm cópia de staging). A
     // marca sem planilha (ADR-014) só precisa da fila.
     const comPlanilha = registraNaPlanilha(brand);
-    const faltaConfiguracao = comPlanilha
-        ? (configuracaoQueFalta() ?? planilhaQueFalta('reembolso', brand))
-        : configuracaoQueFalta({ comPlanilha: false });
+    const faltaConfiguracao = configuracaoDoRegistroQueFalta(brand);
     if (faltaConfiguracao) {
         console.error(`${LOG} ${faltaConfiguracao} (${brand}) — recusando antes do dedup`);
         return {
@@ -109,8 +145,12 @@ export async function processRefund(
         ? nfDoPedidoDoCosmos(brand, String(data.ecommerceOrderId), prazoDaConferencia())
         : null;
     try {
-        const existente = await solicitacaoRecenteNoRegistro('REEMBOLSO', brand, String(data.ecommerceOrderId));
-        if (existente) {
+        const [existente, tentativa] = await Promise.all([
+            solicitacaoRecenteNoRegistro('REEMBOLSO', brand, String(data.ecommerceOrderId)),
+            registrarFalha ? tentativaSemExecucao(opcoes.tentativaAnterior, 'REEMBOLSO', brand, String(data.ecommerceOrderId)) : null,
+        ]);
+        anterior = tentativa;
+        if (existente && existente.idSolicitacao !== anterior?.idSolicitacao) {
             console.log(`${LOG} Reembolso duplicado barrado (${brand}, pedido ${existente.pedido})`);
             return {
                 body: {
@@ -122,13 +162,13 @@ export async function processRefund(
         }
     } catch (erro) {
         console.error(`${LOG} Falha ao consultar as solicitações recentes (${brand}):`, erro);
-        return {
+        return semExecucao({
             body: {
                 code: 'UNKNOWN_ERROR',
                 message: 'Não foi possível consultar as solicitações recentes — nada foi registrado. Tente novamente.',
             },
             status: 503,
-        };
+        }, { desfecho: 'nao_realizado', status: 'Reembolso não realizado (erro de comunicação com o registro)', proximoPasso: ENVIE_DE_NOVO }, dados);
     }
 
     // ─── O que a conferência muda: NF e CD (ADR-018) ─────────────────────────────────────────────
@@ -136,7 +176,11 @@ export async function processRefund(
         const conferido = aplicarConferenciaAoReembolso(brand, dados, await conferencia);
         if (conferido.tipo === 'recusado') {
             console.log(`${LOG} Recusado (${brand}): o pedido ${data.ecommerceOrderId} não tem NF de venda no Data Mart`);
-            return { body: { code: 'UNKNOWN_ERROR', message: conferido.mensagem }, status: 422 };
+            return semExecucao({ body: { code: 'UNKNOWN_ERROR', message: conferido.mensagem }, status: 422 }, {
+                desfecho: 'nao_realizado',
+                status: 'Reembolso não realizado (pedido sem NF)',
+                proximoPasso: `${conferido.mensagem} Nenhum reembolso foi registrado para pagar.`,
+            }, dados);
         }
         if (conferido.nfDivergente) {
             console.warn(`${LOG} A NF que veio (${conferido.nfDivergente.digitada}) difere da do Data Mart `
@@ -160,12 +204,19 @@ export async function processRefund(
     const recusaDoGc = recusaDoReembolsoGcSemNf(String(data.ecommerceOrderId), brand, !nfAusente(dados.invoiceNumber));
     if (recusaDoGc) {
         console.log(`${LOG} Recusado (${brand}): o pedido ${data.ecommerceOrderId} é da Gocreators e está sem NF de venda`);
-        return { body: { code: 'UNKNOWN_ERROR', message: recusaDoGc }, status: 422 };
+        return semExecucao({ body: { code: 'UNKNOWN_ERROR', message: recusaDoGc }, status: 422 }, {
+            desfecho: 'nao_realizado',
+            status: 'Reembolso não realizado (pedido sem NF)',
+            proximoPasso: `${recusaDoGc} Nenhum reembolso foi registrado para pagar.`,
+        }, dados);
     }
 
     // ─── Fila do Metabase ─────────────────────────────────────────────────────────────────────────
-    const idReembolso = crypto.randomUUID();
-    const casos: CasoCxhub[] = [casoDoReembolso({ brand, data: dados, idSolicitacao: idReembolso, criadoEm: agora })];
+    // A nova tentativa de um reembolso sem execução reescreve o caso dele: o mesmo id e o mesmo `criado_em` (o carimbo da
+    // linha), de volta a Pendente.
+    const idReembolso = anterior?.idSolicitacao ?? crypto.randomUUID();
+    const criadoEm = anterior?.criadoEm ?? agora;
+    const casos: CasoCxhub[] = [casoDoReembolso({ brand, data: dados, idSolicitacao: idReembolso, criadoEm })];
     // O reembolso do Bot vem com cancelamento (era o "If" → "HTTP Request - Cancelamento"): um caso CANCELAMENTO
     // próprio, entregue à fila junto com o reembolso. Nas marcas sem Cosmos também (ADR-015), mas só na fila: elas
     // não têm planilha de cancelamento (o cancelamento delas é no Portal de Reembolso).
@@ -181,9 +232,13 @@ export async function processRefund(
         }));
     }
 
-    const fila = await enfileirarCasos(casos, opcoes.prazoFila ?? prazoDaFila());
-    // Fila recusou: com certeza nada foi guardado, e a planilha também fica de fora (o agente pode repetir).
-    if (fila.status === 'recusado') {
+    const prazoFila = opcoes.prazoFila ?? prazoDaFila();
+    const fila = anterior
+        ? await enfileirarAtualizacao(anterior.idSolicitacao, atualizacaoDoCaso(casos[0], { status_execucao: 'Pendente', responsavel_execucao: '' }), prazoFila)
+        : await enfileirarCasos(casos, prazoFila);
+    // Fila recusou: com certeza nada foi guardado, e a planilha também fica de fora (o agente pode repetir). Com a trava,
+    // a linha vai assim mesmo e é o único registro (a resposta diz para não repetir, como na fila incerta).
+    if (fila.status === 'recusado' && (!registrarFalha || !comPlanilha)) {
         console.error(`${LOG} Fila recusou (${brand}): ${fila.motivo}`);
         return { body: { code: 'SHEETS_ERROR', message: `Erro ao registrar o reembolso (${fila.motivo}).` }, status: 200 };
     }
@@ -214,20 +269,15 @@ export async function processRefund(
 
     // ─── Registro na planilha (depois da fila) ────────────────────────────────────────────────────
     // O carimbo da linha é o `criado_em` dos casos, o mesmo instante que foi para a fila (ADR-010).
-    const carimbo = formatarCarimboSP(agora);
     const pedido = String(dados.ecommerceOrderId);
     const linhas: LinhaDaSolicitacao[] = [
         {
-            fluxo: 'reembolso',
-            marca: brand,
-            linha: buildRefundRow(brand, prepararReembolso(dados, carimbo)),
-            idSolicitacao: idReembolso,
-            pedido,
-            criadoEm: agora,
-            // A chave Pix não vai ao log da linha que falhou (LGPD). Na Kokeshi ela está na célula de Observações.
-            colunasSensiveis: [COLUNA_DA_CHAVE_PIX[brand]],
+            ...linhaDoReembolso(brand, dados, idReembolso, criadoEm),
+            // A nova tentativa reescreve a linha da anterior e limpa o status de sem execução.
+            ...(anterior ? { sobrescrever: true, valoresPorCabecalho: statusNaPlanilha(brand, '') } : {}),
         },
     ];
+    const carimbo = formatarCarimboSP(agora);
     // A linha do cancelamento só existe nas marcas do Cosmos: as sem Cosmos não têm planilha de cancelamento (ADR-015).
     if (cancelamentoDoBot && temOrganizacaoNoCosmos(brand)) {
         linhas.push({
@@ -246,8 +296,15 @@ export async function processRefund(
     });
 
     if (!planilha.ok) {
+        if (fila.status === 'recusado' && !planilha.linhasGravadas) {
+            return { body: { code: 'SHEETS_ERROR', message: `Erro ao registrar o reembolso (${fila.motivo}).` }, status: 200 };
+        }
         console.error(`${LOG} Fila ${fila.status}, planilha não (${brand}): ${planilha.motivo}`);
-        const naFila = fila.status === 'enfileirado' ? 'entrou na fila do Metabase' : `pode ter entrado na fila do Metabase (${fila.motivo})`;
+        const naFila = fila.status === 'enfileirado'
+            ? 'entrou na fila do Metabase'
+            : fila.status === 'recusado'
+                ? `não entrou na fila do Metabase (${fila.motivo})`
+                : `pode ter entrado na fila do Metabase (${fila.motivo})`;
         // A linha entrou e só as fórmulas da operação faltaram (ADR-013): o suporte completa, e repetir duplicaria a linha.
         const naPlanilha = planilha.linhasGravadas
             ? 'a linha entrou na planilha sem as fórmulas de prazo e SLA (o suporte foi avisado para completar)'
@@ -266,12 +323,15 @@ export async function processRefund(
 
     // Fila incerta: a linha está na planilha, então repetir a duplicaria; quem confere a fila é o suporte (o caso
     // inteiro está no log).
-    if (fila.status === 'incerto') {
-        console.error(`${LOG} Planilha gravada, fila incerta (${brand}): ${fila.motivo}`);
+    if (fila.status !== 'enfileirado') {
+        console.error(`${LOG} Planilha gravada, fila ${fila.status} (${brand}): ${fila.motivo}`);
+        const naFila = fila.status === 'recusado'
+            ? `a fila do Metabase o recusou (${fila.motivo})`
+            : `não deu para confirmar a entrada na fila do Metabase (${fila.motivo})`;
         return {
             body: {
                 code: 'API_TIMEOUT',
-                message: `O reembolso foi registrado na planilha, mas não deu para confirmar a entrada na fila do Metabase (${fila.motivo}). NÃO repita a solicitação: avise o suporte.`,
+                message: `O reembolso foi registrado na planilha, mas ${naFila}. NÃO repita a solicitação: avise o suporte.`,
                 idSolicitacao: idReembolso,
             },
             status: 504,
@@ -287,6 +347,102 @@ export async function processRefund(
         },
         status: 200,
     };
+}
+
+/** O que falta para registrar (fila e planilha andam juntas; a marca sem planilha, ADR-014, só precisa da fila), ou `null`. */
+function configuracaoDoRegistroQueFalta(brand: MarcaCxHub): string | null {
+    return registraNaPlanilha(brand)
+        ? (configuracaoQueFalta() ?? planilhaQueFalta('reembolso', brand))
+        : configuracaoQueFalta({ comPlanilha: false });
+}
+
+/** A linha do reembolso. O carimbo é o `criado_em` do caso, o mesmo instante que foi para a fila (ADR-010). */
+function linhaDoReembolso(brand: MarcaComPlanilha, dados: RefundSubmissionData, idSolicitacao: string, criadoEm: Date): LinhaDaSolicitacao {
+    return {
+        fluxo: 'reembolso',
+        marca: brand,
+        linha: buildRefundRow(brand, prepararReembolso(dados, formatarCarimboSP(criadoEm))),
+        idSolicitacao,
+        pedido: String(dados.ecommerceOrderId),
+        criadoEm,
+        // A chave Pix não vai ao log da linha que falhou (LGPD). Na Kokeshi ela está na célula de Observações.
+        colunasSensiveis: [COLUNA_DA_CHAVE_PIX[brand]],
+    };
+}
+
+/**
+ * O status do reembolso sem execução vai na coluna de status da planilha, a de onde o financeiro decide o que pagar
+ * (a mesma que a gestão do reembolso escreve nas 6 do Cosmos). Na Ápice não se sabe qual é ("Reembolso" ou "Reembolso
+ * Feito"): lá ele fica só nas observações. Texto vazio limpa (a nova tentativa que deu certo).
+ */
+function statusNaPlanilha(brand: MarcaCxHub, status: string): Record<string, string> | undefined {
+    const coluna = temOrganizacaoNoCosmos(brand)
+        ? COLUNAS_DO_REEMBOLSO[brand].status
+        : brand === 'yenzah' || brand === 'denavita' ? 'Status Reembolso' : null;
+    return coluna ? { [coluna]: status } : undefined;
+}
+
+/**
+ * O reembolso da tela que não deu certo, registrado mesmo assim (`REGISTRAR_FALHA_DA_TELA`, 2026-11-27): o caso vai à
+ * fila com a marca de sem execução (Cancelado, responsável "CX Hub"), e a linha vai à planilha com o status na coluna de
+ * status e a nota nas observações. A tentativa anterior, quando a tela a mandou, é reescrita (o mesmo caso e a mesma
+ * linha).
+ *
+ * A resposta é a de antes (o `code`, o texto e o status HTTP), mais o `idSolicitacao` para a nova tentativa, o
+ * `reason: REGISTRADO_SEM_EXECUCAO` e o `statusRegistrado`. Se a fila recusou, não há caso para a nova tentativa
+ * refazer: a linha fica como rastro, e a resposta é a de antes.
+ */
+async function registrarSemExecucao(p: {
+    brand: MarcaCxHub;
+    dados: RefundSubmissionData;
+    sem: SemExecucao;
+    resposta: Resultado;
+    anterior: TentativaAnterior | null;
+    agora: Date;
+    prazoFila?: number;
+}): Promise<Resultado> {
+    const { brand, sem, resposta, anterior } = p;
+    const id = anterior?.idSolicitacao ?? crypto.randomUUID();
+    const criadoEm = anterior?.criadoEm ?? p.agora;
+    const dados: RefundSubmissionData = { ...p.dados, notes: [p.dados.notes, notaDoSemExecucao(sem)].filter(Boolean).join(' | ') };
+    const caso = casoDoReembolso({ brand, data: dados, idSolicitacao: id, criadoEm });
+    const execucao = execucaoDoSemExecucao(sem.desfecho);
+    const prazo = p.prazoFila ?? prazoDaFila();
+    const fila = await entregarAFila(caso, execucao, anterior, prazo);
+    console.warn(`${LOG} ${id}: registrado sem execução (${sem.status}), fila ${fila.status}${anterior ? ', por cima da tentativa anterior' : ''}`);
+
+    if (registraNaPlanilha(brand)) {
+        await gravarNasPlanilhas(
+            [{ ...linhaDoReembolso(brand, dados, id, criadoEm), sobrescrever: anterior !== null, valoresPorCabecalho: statusNaPlanilha(brand, sem.status) }],
+            { numeroPedido: String(dados.ecommerceOrderId), idAtendimento: dados.supportTicketId, statusDaFila: fila.status },
+        );
+    }
+
+    if (fila.status === 'recusado') return resposta;
+    return {
+        body: { ...resposta.body, idSolicitacao: id, reason: 'REGISTRADO_SEM_EXECUCAO', statusRegistrado: sem.status },
+        status: resposta.status,
+    };
+}
+
+/**
+ * Entrega à fila o caso sem execução: por cima da tentativa anterior (uma atualização) ou novo, com a marca logo depois
+ * (o lote leva a criação antes da atualização). Nunca lança.
+ */
+async function entregarAFila(
+    caso: CasoCxhub,
+    execucao: AtualizacaoCxhub,
+    anterior: TentativaAnterior | null,
+    prazo: number,
+): Promise<ResultadoFila> {
+    if (anterior) return enfileirarAtualizacao(anterior.idSolicitacao, atualizacaoDoCaso(caso, execucao), prazo);
+    const fila = await enfileirarCasos([caso], prazo);
+    if (fila.status === 'enfileirado') {
+        const marcado = await enfileirarAtualizacao(caso.id_solicitacao, execucao, prazo);
+        // O caso entrou sem a marca e parece um reembolso comum: a linha leva o status, e o log da fila, a atualização.
+        if (marcado.status !== 'enfileirado') console.error(`${LOG} ${caso.id_solicitacao}: o caso entrou na fila sem a marca de sem execução`);
+    }
+    return fila;
 }
 
 /**

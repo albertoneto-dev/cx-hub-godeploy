@@ -6,7 +6,9 @@ vi.mock('@shared/lib/fila', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/fila')>()),
     solicitacaoRecenteNoRegistro: vi.fn(),
     enfileirarCasos: vi.fn(),
+    enfileirarAtualizacao: vi.fn(),
     prazoDaFila: vi.fn(),
+    tentativaSemExecucao: vi.fn(),
 }));
 vi.mock('@shared/lib/sheets/gravarLinha', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/sheets/gravarLinha')>()),
@@ -22,7 +24,7 @@ vi.mock('@shared/lib/datamart/conferenciaServer', async (importOriginal) => ({
 import { problemaNoCaso } from '@shared/lib/airflow';
 import { conferirPedidoNoDataMart } from '@shared/lib/datamart/conferenciaServer';
 import type { ContextoDoPedido } from '@shared/lib/datamart/pedidoTipos';
-import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '@shared/lib/fila';
+import { enfileirarAtualizacao, enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro, tentativaSemExecucao } from '@shared/lib/fila';
 import { gravarNasPlanilhas } from '@shared/lib/sheets/gravarLinha';
 import { processRefund } from '@modules/reembolsos/actions/processRefund';
 import { buildRefundRow, COLUNA_DA_CHAVE_PIX, prepararReembolso } from '@modules/reembolsos/actions/buildRefundRow';
@@ -35,6 +37,8 @@ const buscar = vi.mocked(solicitacaoRecenteNoRegistro);
 const enfileirar = vi.mocked(enfileirarCasos);
 const planilhas = vi.mocked(gravarNasPlanilhas);
 const conferir = vi.mocked(conferirPedidoNoDataMart);
+const atualizar = vi.mocked(enfileirarAtualizacao);
+const tentativa = vi.mocked(tentativaSemExecucao);
 
 /** O pedido SH1731559AP como o Data Mart o tem (NF 10157987, CD ES, Kit Cachos e Kit Brilho), com o que se trocar. */
 function contexto(parcial: Partial<ContextoDoPedido> = {}): ContextoDoPedido {
@@ -132,6 +136,8 @@ beforeEach(() => {
     vi.mocked(prazoDaFila).mockReset().mockReturnValue(1_900_000_000_000);
     planilhas.mockReset().mockResolvedValue({ ok: true });
     conferir.mockReset().mockResolvedValue({ tipo: 'nao_se_aplica' });
+    atualizar.mockReset().mockResolvedValue({ status: 'enfileirado' });
+    tentativa.mockReset().mockResolvedValue(null);
     stubRegistroEnv();
     // As planilhas das marcas sem Cosmos só existem em produção, por enquanto.
     vi.stubEnv('SHEETS_ENV', 'prod');
@@ -446,5 +452,92 @@ describe('processRefund — a conferência do pedido no Data Mart e a chave Pix 
         const { body, status } = await processRefund('apice', semChave, { agora: AGORA });
         expect(status).toBe(422);
         expect(body.message).toBe('Informe a chave Pix da cliente: o reembolso desta marca é pago por Pix. Nada foi registrado.');
+    });
+});
+
+describe('processRefund — o reembolso da tela sem execução (REGISTRAR_FALHA_DA_TELA, 2026-11-27)', () => {
+    const TELA = { agora: AGORA, registrarFalha: true };
+    const NAO_REALIZADO = { status_execucao: 'Cancelado', responsavel_execucao: 'CX Hub' };
+    const SEM_NF = { tipo: 'lido', contexto: contexto({ nf: { estado: 'ausente', numero: null } }) } as const;
+    const ANTERIOR = { idSolicitacao: 'caso-1', criadoEm: new Date(AGORA.getTime() - 10 * 60_000) };
+    const temANota = (linha: unknown[], texto: string) => linha.some((celula) => String(celula ?? '').includes(texto));
+
+    it('422 do pedido sem NF (Ápice) ⇒ o caso Cancelado e a linha com a nota, e a resposta de antes com o id', async () => {
+        conferir.mockResolvedValue(SEM_NF);
+
+        const { body, status } = await processRefund('apice', REEMBOLSO, TELA);
+
+        expect(status).toBe(422);
+        expect(body).toMatchObject({ code: 'UNKNOWN_ERROR', reason: 'REGISTRADO_SEM_EXECUCAO', statusRegistrado: 'Reembolso não realizado (pedido sem NF)' });
+        expect(body.message).toContain('não dá para solicitar reembolso ainda');
+        expect(enfileirar).toHaveBeenCalledTimes(1);
+        const [caso] = enfileirar.mock.calls[0][0];
+        expect(problemaNoCaso(caso)).toBeNull();
+        expect(body.idSolicitacao).toBe(caso.id_solicitacao);
+        expect(atualizar).toHaveBeenCalledWith(caso.id_solicitacao, NAO_REALIZADO, 1_900_000_000_000);
+        const [[linha]] = planilhas.mock.calls[0];
+        expect(temANota(linha.linha, '[CXHub] Reembolso não realizado (pedido sem NF): ')).toBe(true);
+        // Na Ápice não se sabe qual coluna é o status: ele fica só nas observações.
+        expect(linha.valoresPorCabecalho).toBeUndefined();
+        expect(linha.sobrescrever).toBe(false);
+    });
+
+    it('na Yenzah o status vai também na coluna "Status Reembolso", a de onde o financeiro paga', async () => {
+        conferir.mockResolvedValue({ tipo: 'lido', contexto: contexto({ marca: 'yenzah', nf: { estado: 'ausente', numero: null } }) });
+
+        await processRefund('yenzah', { ...REEMBOLSO, brand: 'yenzah', ecommerceOrderId: 'SH1629891YE' }, TELA);
+
+        expect(planilhas.mock.calls[0][0][0].valoresPorCabecalho).toEqual({ 'Status Reembolso': 'Reembolso não realizado (pedido sem NF)' });
+    });
+
+    it('422 da chave Pix ⇒ registrado sem a chave que não vale', async () => {
+        vi.stubEnv('CHAVE_PIX_OBRIGATORIA', 'on');
+
+        const { body, status } = await processRefund('apice', { ...REEMBOLSO, pixKey: '' }, TELA);
+
+        expect(status).toBe(422);
+        expect(body).toMatchObject({ reason: 'REGISTRADO_SEM_EXECUCAO', statusRegistrado: 'Reembolso não realizado (chave Pix inválida)' });
+        expect(buscar).not.toHaveBeenCalled();
+        expect(planilhas.mock.calls[0][0][0].linha[COLUNA_DA_CHAVE_PIX.apice]).toBeNull();
+    });
+
+    it('fila recusou ⇒ a linha vai assim mesmo, e a resposta diz para NÃO repetir', async () => {
+        enfileirar.mockResolvedValue({ status: 'recusado', motivo: 'a fila respondeu HTTP 400' });
+
+        const { body, status } = await processRefund('apice', REEMBOLSO, TELA);
+
+        expect(planilhas).toHaveBeenCalledTimes(1);
+        expect(planilhas.mock.calls[0][1]).toMatchObject({ statusDaFila: 'recusado' });
+        expect(status).toBe(504);
+        expect(body.code).toBe('API_TIMEOUT');
+        expect(body.message).toBe('O reembolso foi registrado na planilha, mas a fila do Metabase o recusou (a fila respondeu HTTP 400). '
+            + 'NÃO repita a solicitação: avise o suporte.');
+    });
+
+    it('nova tentativa que dá certo ⇒ o mesmo caso (Pendente) e a mesma linha, com o status limpo', async () => {
+        tentativa.mockResolvedValue(ANTERIOR);
+
+        const { body } = await processRefund('yenzah', { ...REEMBOLSO, brand: 'yenzah', ecommerceOrderId: 'SH1629891YE' }, { ...TELA, tentativaAnterior: 'caso-1' });
+
+        expect(tentativa).toHaveBeenCalledWith('caso-1', 'REEMBOLSO', 'yenzah', 'SH1629891YE');
+        expect(body).toMatchObject({ code: 'SUCCESS', idSolicitacao: 'caso-1' });
+        expect(enfileirar).not.toHaveBeenCalled();
+        expect(atualizar).toHaveBeenCalledWith('caso-1', expect.objectContaining({ status_execucao: 'Pendente', responsavel_execucao: '', valor: 94.82 }), 1_900_000_000_000);
+        expect(planilhas.mock.calls[0][0][0]).toMatchObject({
+            idSolicitacao: 'caso-1',
+            criadoEm: ANTERIOR.criadoEm,
+            sobrescrever: true,
+            valoresPorCabecalho: { 'Status Reembolso': '' },
+        });
+    });
+
+    it('o reembolso do Bot nunca é registrado sem execução, mesmo com a trava', async () => {
+        conferir.mockResolvedValue(SEM_NF);
+
+        const { body } = await processRefund('apice', { ...REEMBOLSO, handledBy: 'Bot' }, TELA);
+
+        expect(body).not.toHaveProperty('reason');
+        expect(enfileirar).not.toHaveBeenCalled();
+        expect(planilhas).not.toHaveBeenCalled();
     });
 });

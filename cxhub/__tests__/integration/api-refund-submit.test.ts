@@ -54,9 +54,26 @@ describe('POST /api/refund/submit', () => {
         expect(res.status).toBe(200);
         expect(await res.json()).toEqual(resposta);
         expect(processRefundMock).toHaveBeenCalledTimes(1);
-        // Sem opções: o prazo da fila é o padrão.
-        expect(processRefundMock).toHaveBeenCalledWith('lescent', SAMPLE_REFUND_DATA);
+        // O prazo da fila é o padrão, e a trava REGISTRAR_FALHA_DA_TELA está desligada.
+        expect(processRefundMock).toHaveBeenCalledWith('lescent', SAMPLE_REFUND_DATA, { registrarFalha: false, tentativaAnterior: undefined });
         expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('com REGISTRAR_FALHA_DA_TELA=on, registra a falha e repassa o idSolicitacao da tentativa anterior', async () => {
+        vi.stubEnv('REGISTRAR_FALHA_DA_TELA', 'on');
+        processRefundMock.mockResolvedValue({ body: { code: 'SUCCESS', message: 'ok' }, status: 200 });
+
+        await postar({ brand: 'lescent', data: SAMPLE_REFUND_DATA, idSolicitacao: 'caso-1' });
+
+        expect(processRefundMock).toHaveBeenCalledWith('lescent', SAMPLE_REFUND_DATA, { registrarFalha: true, tentativaAnterior: 'caso-1' });
+        vi.unstubAllEnvs();
+    });
+
+    it('idSolicitacao que não é texto ⇒ 400', async () => {
+        const res = await postar({ brand: 'lescent', data: SAMPLE_REFUND_DATA, idSolicitacao: 7 });
+
+        expect(res.status).toBe(400);
+        expect(processRefundMock).not.toHaveBeenCalled();
     });
 
     it('o maxDuration cabe o dedup, a fila e a planilha com folga', () => {
@@ -69,7 +86,7 @@ describe('POST /api/refund/submit', () => {
         const res = await postar({ brand: 'lescent', data: SAMPLE_REFUND_DATA, assincrono: 'true' });
 
         expect(res.status).toBe(200);
-        expect(processRefundMock).toHaveBeenCalledWith('lescent', SAMPLE_REFUND_DATA);
+        expect(processRefundMock).toHaveBeenCalledWith('lescent', SAMPLE_REFUND_DATA, { registrarFalha: false, tentativaAnterior: undefined });
     });
 
     it('falha do processRefund volta com o status e o corpo dele', async () => {
