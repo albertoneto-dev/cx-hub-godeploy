@@ -51,6 +51,9 @@ export interface PostResendWebhookInput {
      */
     idSolicitacao?: string;
     prazoFila?: number;
+    /** Só a tela (`/api/sheets/append`): ver `ProcessResendInput`. */
+    registrarFalha?: boolean;
+    tentativaAnterior?: string;
 }
 
 export interface PostResendWebhookResult {
@@ -78,6 +81,8 @@ export async function postResendWebhook(
         brand, data, token, testMode, timeoutMs,
         idSolicitacao: input.idSolicitacao,
         prazoFila: input.prazoFila,
+        registrarFalha: input.registrarFalha,
+        tentativaAnterior: input.tentativaAnterior,
     });
     return violacaoDoModoTeste(testMode, resultado.body.code, resultado.body.sentToAPI, brand, resultado.body)
         ?? resultado;

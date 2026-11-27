@@ -2,7 +2,8 @@ import type { MarcaCxHub } from '../constants';
 import { sendAlert, type AlertContext } from '../alerts/index';
 import { LayoutDaPlanilhaError, acharLinhaDoCaso, type CasoNaPlanilha } from './casoNaPlanilha';
 import { FORMULAS_DA_LINHA, formulasDaLinha } from './formulas';
-import { abaA1, anexarLinha, atualizarCelulas, esperaAntesDeRepetir, SheetsError } from './server';
+import { letraDaColuna } from './a1';
+import { abaA1, anexarLinha, atualizarCelulas, esperaAntesDeRepetir, lerAba, SheetsError } from './server';
 import { resolverPlanilha } from './targets';
 import type { FluxoPlanilha, PlanilhaDestino, SheetCell } from './types';
 
@@ -129,12 +130,15 @@ export async function gravarLinhaNaPlanilha(
     prazo: number,
     deps: GravarDeps = PADRAO,
     valoresDaOperacao: Readonly<Record<string, SheetCell>> = {},
+    opcoes: Pick<LinhaDaSolicitacao, 'sobrescrever' | 'valoresPorCabecalho'> = {},
 ): Promise<ResultadoDaPlanilha> {
     try {
         const destino = resolverPlanilha(fluxo, marca);
-        const gravacao = await garantirLinha(fluxo, marca, destino, linha, caso, prazo, deps);
+        const gravacao = await garantirLinha(fluxo, marca, destino, linha, caso, prazo, deps, opcoes.sobrescrever === true);
         if (gravacao.status === 'falhou') return { status: 'falhou', motivo: gravacao.motivo };
-        return await escreverNaOperacao(fluxo, marca, destino, caso, gravacao.numeroDaLinha, prazo, valoresDaOperacao) ?? { status: gravacao.status };
+        return await escreverNaOperacao(
+            fluxo, marca, destino, caso, gravacao.numeroDaLinha, prazo, valoresDaOperacao, opcoes.valoresPorCabecalho ?? {},
+        ) ?? { status: gravacao.status };
     } catch (erro) {
         return { status: 'falhou', motivo: descrever(erro) };
     }
@@ -154,11 +158,24 @@ async function garantirLinha(
     caso: CasoDaLinha,
     prazo: number,
     deps: GravarDeps,
+    sobrescrever: boolean,
 ): Promise<Gravacao> {
     for (let tentativa = 1; ; tentativa++) {
         let etapa: 'conferencia' | 'append' = 'conferencia';
         try {
             const achada = await acharLinhaDoCaso(fluxo, marca, caso, prazo);
+            if (achada !== null && sobrescrever) {
+                // A nova tentativa de uma solicitação sem execução reescreve a linha dela. Só as células que o CX Hub
+                // escreve: `null` é coluna da operação. Repetir é inofensivo (as mesmas células com o mesmo conteúdo).
+                etapa = 'append';
+                await atualizarCelulas(
+                    destino.spreadsheetId,
+                    linha.flatMap((valor, i) => (valor === null ? [] : [{ intervalo: `${abaA1(destino.aba)}!${letraDaColuna(i)}${achada}`, valor }])),
+                    prazo,
+                    { entrada: 'USER_ENTERED' },
+                );
+                return { status: 'gravado', numeroDaLinha: achada };
+            }
             if (achada !== null) {
                 // Na 1ª tentativa a linha já estava lá (alguém gravou antes); depois, é a nossa tentativa anterior que chegou.
                 return { status: tentativa === 1 ? 'ja_existia' : 'gravado', numeroDaLinha: achada };
@@ -203,11 +220,28 @@ async function escreverNaOperacao(
     numeroConhecido: number | null,
     prazo: number,
     valoresDaOperacao: Readonly<Record<string, SheetCell>>,
+    valoresPorCabecalho: Readonly<Record<string, SheetCell>>,
 ): Promise<ResultadoDaPlanilha | null> {
     const molde = FORMULAS_DA_LINHA[fluxo]?.[marca];
     const valores: Array<{ coluna: string; valor: SheetCell }> = [];
-    for (const [coluna, valor] of Object.entries(valoresDaOperacao)) {
-        if (valor === null || valor === '') continue;
+    const porLetra = Object.entries(valoresDaOperacao).filter(([, valor]) => valor !== null && valor !== '');
+    // Pelo nome do cabeçalho, o texto vazio vai: é o que limpa o status de uma tentativa anterior.
+    const porCabecalho = Object.entries(valoresPorCabecalho).filter(([, valor]) => valor !== null);
+    if (porCabecalho.length > 0) {
+        try {
+            const [cabecalho = []] = await lerAba(destino.spreadsheetId, destino.aba, prazo, { intervalo: '1:1' });
+            for (const [nome, valor] of porCabecalho) {
+                const indice = cabecalho.findIndex((celula) => normalizarCabecalho(celula) === normalizarCabecalho(nome));
+                if (indice === -1) console.warn(`${LOG} ${fluxo}/${marca} ${caso.idSolicitacao}: a planilha não tem a coluna "${nome}"`);
+                else porLetra.push([letraDaColuna(indice), valor]);
+            }
+        } catch (erro) {
+            const motivo = `a linha entrou, mas o cabeçalho não pôde ser lido para escrever ${porCabecalho.map(([nome]) => `"${nome}"`).join(', ')}: ${descrever(erro)}`;
+            console.warn(`${LOG} ${fluxo}/${marca} ${caso.idSolicitacao}: ${motivo}`);
+            return { status: 'sem_formulas', motivo };
+        }
+    }
+    for (const [coluna, valor] of porLetra) {
         if (molde?.[coluna] !== undefined) {
             // Só a coluna no aviso: o valor pode ser de dinheiro da cliente, e o log é compartilhado.
             console.warn(`${LOG} ${fluxo}/${marca} ${caso.idSolicitacao}: a coluna ${coluna} tem fórmula na planilha, então o valor calculado não foi gravado nela`);
@@ -260,7 +294,18 @@ export interface LinhaDaSolicitacao extends CasoDaLinha {
      * da Ápice e da Yenzah. Vão como número, junto com as fórmulas, e só em coluna sem fórmula no molde.
      */
     valoresDaOperacao?: Readonly<Record<string, SheetCell>>;
+    /**
+     * Valores por nome de cabeçalho (comparado sem caixa e sem espaços repetidos), para coluna cuja posição varia por
+     * planilha: o status da solicitação sem execução. O cabeçalho é lido só quando há algum. Texto vazio vai (limpa a
+     * célula); `null` não.
+     */
+    valoresPorCabecalho?: Readonly<Record<string, SheetCell>>;
+    /** A nova tentativa de uma solicitação sem execução: achada a linha do caso, ela é reescrita em vez de mantida. */
+    sobrescrever?: boolean;
 }
+
+const normalizarCabecalho = (celula: SheetCell | undefined): string =>
+    (celula === null || celula === undefined ? '' : String(celula)).replace(/\s+/g, ' ').trim().toLowerCase();
 
 /** A linha para o log: as colunas sensíveis viram `[omitido]`. */
 function linhaParaOLog(item: LinhaDaSolicitacao): SheetCell[] {
@@ -274,9 +319,10 @@ export interface ContextoDoRegistro {
     idAtendimento?: string;
     /**
      * O que a fila do Metabase respondeu antes da planilha (ADR-012). Muda o que o aviso afirma: com `enfileirado` a
-     * solicitação "entrou na fila do Metabase"; com `incerto` não se sabe (a fila pode ter guardado ou não).
+     * solicitação "entrou na fila do Metabase"; com `incerto` não se sabe (a fila pode ter guardado ou não); com
+     * `recusado` (só com `REGISTRAR_FALHA_DA_TELA`), a linha é o único registro.
      */
-    statusDaFila: 'enfileirado' | 'incerto';
+    statusDaFila: 'enfileirado' | 'incerto' | 'recusado';
 }
 
 /**
@@ -302,7 +348,7 @@ export async function gravarNasPlanilhas(
     deps: GravarDeps = PADRAO
 ): Promise<ResultadoDasPlanilhas> {
     const resultados = await Promise.all(
-        linhas.map((item) => gravarLinhaNaPlanilha(item.fluxo, item.marca, item.linha, item, prazo, deps, item.valoresDaOperacao))
+        linhas.map((item) => gravarLinhaNaPlanilha(item.fluxo, item.marca, item.linha, item, prazo, deps, item.valoresDaOperacao, item))
     );
 
     const falhas = linhas
@@ -333,7 +379,9 @@ export async function gravarNasPlanilhas(
         reason: 'SHEET_WRITE_FAILED',
         motivo: contexto.statusDaFila === 'enfileirado'
             ? `A solicitação entrou na fila do Metabase, mas ${quais}: ${pares}`
-            : `Não deu para confirmar a entrada na fila do Metabase, e ${quais}: ${pares}`,
+            : contexto.statusDaFila === 'recusado'
+                ? `A fila do Metabase recusou a solicitação, e ${quais}: ${pares}`
+                : `Não deu para confirmar a entrada na fila do Metabase, e ${quais}: ${pares}`,
         requestId: falhas.map(({ item }) => item.idSolicitacao).join(', '),
         brand: falhas[0].item.marca,
         numeroPedido: contexto.numeroPedido,

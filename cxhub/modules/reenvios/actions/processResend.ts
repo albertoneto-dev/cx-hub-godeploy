@@ -9,12 +9,26 @@ import {
 import { configuracaoQueFalta, prazoDaRequisicao } from '../../../shared/lib/backendDireto';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../shared/lib/datamart/conferenciaServer';
 import { nfAusente, nfDoPedidoDoCosmos } from '../../../shared/lib/datamart/nfDaIntelipostServer';
-import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro, type ResultadoFila } from '../../../shared/lib/fila/index';
+import {
+    atualizacaoDoCaso,
+    enfileirarAtualizacao,
+    enfileirarCasos,
+    execucaoDoSemExecucao,
+    notaDoSemExecucao,
+    prazoDaFila,
+    solicitacaoRecenteNoRegistro,
+    tentativaSemExecucao,
+    type ResultadoFila,
+    type SemExecucao,
+    type TentativaAnterior,
+} from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { planilhaQueFalta } from '../../../shared/lib/sheets/index';
 import { colunaDoCabecalho } from '../../../shared/lib/sheets/cabecalhos';
 import { gravarNasPlanilhas } from '../../../shared/lib/sheets/gravarLinha';
+import type { AtualizacaoCxhub, CasoCxhub } from '../../../shared/lib/airflow/types';
 import type { ResendSubmissionData, SheetsAppendResponse } from '../types/index';
+import { stripAutomation } from './buildBotResendData';
 import { buildResendRow } from './buildResendRow';
 import { casoDoReenvio } from './casoDoReenvio';
 import { aplicarConferenciaAoReenvio, type ConferenciaDoReenvio } from './conferenciaDoReenvio';
@@ -37,7 +51,19 @@ export interface ProcessResendInput {
     /** O id do caso: o `requestId` do bot, que casa com o card do Chat e o log; ausente ⇒ gerado */
     idSolicitacao?: string;
     agora?: Date;
+    /**
+     * Só a tela, com `REGISTRAR_FALHA_DA_TELA=on` (2026-11-27): a solicitação que não deu certo também é registrada, sem
+     * execução, com o status na linha (`registrarSemExecucao`), e a fila que recusa não tira a linha da planilha. O bot
+     * não manda: ele já reposta sem automação.
+     */
+    registrarFalha?: boolean;
+    /** O `idSolicitacao` da tentativa sem execução que esta refaz: o mesmo caso e a mesma linha. Só com `registrarFalha`. */
+    tentativaAnterior?: string;
 }
+
+type Resultado = { body: SheetsAppendResponse; status: number };
+
+const ENVIE_DE_NOVO = 'nenhum reenvio foi criado. Envie de novo pela Central.';
 
 /**
  * O que o workflow `[PROD] - Webhook CXHub` (`/cxhub/resend`) fazia, dentro do CXHub, com o registro na fila do
@@ -78,6 +104,13 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     // Marca sem organização no Cosmos nunca executa (ADR-013): a tela nem manda automação para pedido da Shopify, e um
     // corpo que mandasse não pode virar `POST /organizations/undefined/...`.
     const executar = Boolean(data.automacao) && !testMode && temOrganizacaoNoCosmos(brand);
+    const registrarFalha = input.registrarFalha === true && !testMode;
+    let anterior: TentativaAnterior | null = null;
+    // Toda saída sem sucesso depois da configuração passa por aqui: sem a trava, responde como sempre.
+    const semExecucao = (resposta: Resultado, sem: SemExecucao, dadosDaLinha: ResendSubmissionData): Promise<Resultado> =>
+        registrarFalha
+            ? registrarSemExecucao({ brand, dados: dadosDaLinha, sem, resposta, anterior, idSolicitacao, agora, prazoFila: input.prazoFila })
+            : Promise.resolve(resposta);
 
     console.log(`${LOG} ${idSolicitacao}: ${brand}, testMode=${testMode}, automação=${data.automacao ? 'sim' : 'não'}`);
 
@@ -121,8 +154,13 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         ? reenvioRecenteNoCosmos(brand, data.numeroPedido, token, prazo, agora)
         : null;
     try {
-        const existente = await solicitacaoRecenteNoRegistro('REENVIO', brand, data.numeroPedido);
-        if (existente) {
+        const [existente, tentativa] = await Promise.all([
+            solicitacaoRecenteNoRegistro('REENVIO', brand, data.numeroPedido),
+            registrarFalha ? tentativaSemExecucao(input.tentativaAnterior, 'REENVIO', brand, data.numeroPedido) : null,
+        ]);
+        anterior = tentativa;
+        // A tentativa anterior "a conferir" está aberta e o dedup a acha: é ela que esta solicitação refaz.
+        if (existente && existente.idSolicitacao !== anterior?.idSolicitacao) {
             console.log(`${LOG} ${idSolicitacao}: reenvio duplicado barrado (pedido ${existente.pedido})`);
             return {
                 body: {
@@ -135,7 +173,7 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         }
     } catch (erro) {
         console.error(`${LOG} ${idSolicitacao}: falha ao consultar as solicitações recentes:`, erro);
-        return {
+        return semExecucao({
             body: {
                 code: 'UNKNOWN_ERROR',
                 message: 'Não foi possível consultar as solicitações recentes — nada foi registrado nem reenviado. Tente novamente.',
@@ -143,7 +181,11 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
                 reason: 'RECORD_UNAVAILABLE',
             },
             status: 503,
-        };
+        }, {
+            desfecho: 'nao_realizado',
+            status: 'Reenvio não realizado (erro de comunicação com o registro)',
+            proximoPasso: ENVIE_DE_NOVO,
+        }, data);
     }
 
     // ─── 1b. O que a conferência muda: NF, CD e o valor da NF de reenvio (ADR-018) ───────────────
@@ -153,10 +195,14 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
         const conferido = aplicarConferenciaAoReenvio(brand, data, await conferencia);
         if (conferido.tipo === 'recusado') {
             console.log(`${LOG} ${idSolicitacao}: recusado — o pedido ${data.numeroPedido} não tem NF de venda no Data Mart`);
-            return {
+            return semExecucao({
                 body: { code: 'UNKNOWN_ERROR', message: conferido.mensagem, sentToAPI: false, reason: 'ORDER_NOT_INVOICED' },
                 status: 422,
-            };
+            }, {
+                desfecho: 'nao_realizado',
+                status: 'Reenvio não realizado (pedido sem NF)',
+                proximoPasso: `${conferido.mensagem} Nenhum reenvio foi criado.`,
+            }, data);
         }
         logarConferencia(idSolicitacao, data.numeroPedido, conferido);
         dados = conferido.data;
@@ -174,29 +220,34 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     // O reenvio que já estava no Cosmos: a solicitação é registrada como automação (o reenvio existe e sai), sem um 2º.
     let jaNoCosmos: ReenvioNoCosmos | null = null;
     if (executar && temOrganizacaoNoCosmos(brand)) {
-        const anterior = reenvioAnterior ? await reenvioAnterior : ({ tipo: 'nenhum' } as const);
-        if (anterior.tipo === 'indefinido') {
+        const noCosmosAntes = reenvioAnterior ? await reenvioAnterior : ({ tipo: 'nenhum' } as const);
+        if (noCosmosAntes.tipo === 'indefinido') {
             // Sem saber se o pedido já tem reenvio, criar outro arriscaria a 2ª caixa de 19/11. Nada sai, então repetir é seguro.
-            console.error(`${LOG} ${idSolicitacao}: sem conferir se o pedido ${data.numeroPedido} já tem reenvio (${anterior.motivo}) — nada criado nem registrado`);
-            return {
+            console.error(`${LOG} ${idSolicitacao}: sem conferir se o pedido ${data.numeroPedido} já tem reenvio (${noCosmosAntes.motivo}) — nada criado`);
+            // O texto continua o mesmo com a trava: é por ele que a Central oferece "Enviar de novo com os mesmos dados".
+            return semExecucao({
                 body: {
                     code: 'API_ERROR',
-                    message: `Não deu para conferir no Cosmos se o pedido já tem reenvio (${anterior.motivo}). `
+                    message: `Não deu para conferir no Cosmos se o pedido já tem reenvio (${noCosmosAntes.motivo}). `
                         + 'Nenhum reenvio foi criado e nada foi registrado: tente de novo em alguns instantes.',
                     sentToAPI: false,
                 },
                 status: 200,
-            };
+            }, {
+                desfecho: 'nao_realizado',
+                status: 'Reenvio não realizado (erro de comunicação com o Cosmos)',
+                proximoPasso: `não deu para conferir no Cosmos se o pedido já tinha reenvio (${noCosmosAntes.motivo}), e ${ENVIE_DE_NOVO}`,
+            }, dados);
         }
-        if (anterior.tipo === 'existe') {
-            const reenvio: ReenvioNoCosmos = { externalId: anterior.externalId, criadoEm: anterior.criadoEm, fonte: anterior.fonte };
+        if (noCosmosAntes.tipo === 'existe') {
+            const reenvio: ReenvioNoCosmos = { externalId: noCosmosAntes.externalId, criadoEm: noCosmosAntes.criadoEm, fonte: noCosmosAntes.fonte };
             jaNoCosmos = reenvio;
             console.log(`${LOG} ${idSolicitacao}: o pedido ${data.numeroPedido} já tem o reenvio ${reenvio.externalId} `
                 + `(criado ${reenvio.criadoEm}, visto no ${reenvio.fonte === 'cosmos' ? 'Cosmos' : 'Data Mart'}) — registrando sem criar outro`);
             dados = { ...dados, comentarios: [notaDoReenvioExistente(reenvio.externalId), dados.comentarios].filter(Boolean).join(' | ') };
         } else {
             const falha = await executarNoCosmos(brand, dados, token, prazo, idSolicitacao);
-            if (falha) return { body: { ...falha, sentToAPI: false }, status: 200 };
+            if (falha) return semExecucao({ body: { ...falha.resposta, sentToAPI: false }, status: 200 }, falha.sem, dados);
         }
     }
     const noCosmos = jaNoCosmos
@@ -216,27 +267,25 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     }
 
     // ─── 3. Fila do Metabase ──────────────────────────────────────────────────────────────────────
-    const caso = casoDoReenvio({ brand, data: dados, automacao: executar, idSolicitacao, criadoEm: agora });
-    const fila = await enfileirarCasos([caso], input.prazoFila ?? prazoDaFila());
+    // A nova tentativa de uma solicitação sem execução reescreve o caso dela: o mesmo id e o mesmo `criado_em` (o carimbo
+    // da linha). O caso sai da marca de sem execução: Pendente, com "Automação" de responsável quando o Cosmos tem o
+    // reenvio, como o dbt faz com o caso que nasce com automação (o `automacao` do caso não muda numa atualização).
+    const id = anterior?.idSolicitacao ?? idSolicitacao;
+    const criadoEm = anterior?.criadoEm ?? agora;
+    const caso = casoDoReenvio({ brand, data: dados, automacao: executar, idSolicitacao: id, criadoEm });
+    const fila = await entregarAFila(
+        caso,
+        anterior ? { status_execucao: 'Pendente', responsavel_execucao: executar ? 'Automação' : '' } : null,
+        anterior,
+        input.prazoFila ?? prazoDaFila(),
+    );
 
-    // Fila recusou: com certeza nada foi guardado, e a planilha também fica de fora (o agente pode repetir).
-    if (fila.status === 'recusado') {
-        console.error(`${LOG} ${idSolicitacao}: fila recusou (sentToAPI=${executar}) — ${fila.motivo}`);
-        return {
-            body: {
-                code: 'SHEETS_ERROR',
-                message: executar
-                    ? `${noCosmos}, porém houve um erro ao registrar a solicitação (${fila.motivo}).`
-                    : `Houve um erro ao registrar o reenvio (${fila.motivo}). Tente novamente.`,
-                sentToAPI: executar,
-                reason: 'RECORD_UNAVAILABLE',
-            },
-            status: 200,
-        };
-    }
+    // Fila recusou: com certeza nada foi guardado, e a planilha também fica de fora (o agente pode repetir). Com a trava,
+    // a linha vai assim mesmo e é o único registro (a resposta diz para não repetir, como na fila incerta).
+    if (fila.status === 'recusado' && (!registrarFalha || !comPlanilha)) return respostaDaFilaRecusada(executar, noCosmos, fila.motivo);
 
     // Marca sem planilha (ADR-014): o registro termina na fila.
-    if (!comPlanilha) return respostaSemPlanilha(fila, idSolicitacao);
+    if (!comPlanilha) return respostaSemPlanilha(fila as Exclude<ResultadoFila, { status: 'recusado' }>, id);
 
     // ─── 4. Linha na planilha ─────────────────────────────────────────────────────────────────────
     // Na Ápice e na Yenzah o valor da NF de reenvio é coluna da operação: vai na linha nova junto com as fórmulas (ADR-018).
@@ -246,11 +295,13 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
             fluxo: 'reenvio',
             marca: brand,
             // O carimbo da linha é o `criado_em` do caso, o mesmo instante que foi para a fila (ADR-010).
-            linha: buildResendRow(brand, dados, formatarCarimboSP(agora)),
-            idSolicitacao,
+            linha: buildResendRow(brand, dados, formatarCarimboSP(criadoEm)),
+            idSolicitacao: id,
             pedido: dados.numeroPedido,
-            criadoEm: agora,
+            criadoEm,
             ...(colunaDoValor ? { valoresDaOperacao: { [colunaDoValor]: valorNaOperacao } } : {}),
+            // A nova tentativa reescreve a linha da anterior e limpa o status de sem execução (nas 6 do Cosmos ele é célula da linha).
+            ...(anterior ? { sobrescrever: true, valoresPorCabecalho: statusNaOperacao(brand, '') } : {}),
         }],
         { numeroPedido: dados.numeroPedido, idAtendimento: dados.idAtendimento, statusDaFila: fila.status },
     );
@@ -258,10 +309,13 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
     const feito = executar ? `${noCosmos} e a` : 'A';
 
     if (!planilha.ok) {
-        console.error(`${LOG} ${idSolicitacao}: fila ${fila.status}, planilha não (sentToAPI=${executar}) — ${planilha.motivo}`);
+        if (fila.status === 'recusado' && !planilha.linhasGravadas) return respostaDaFilaRecusada(executar, noCosmos, fila.motivo);
+        console.error(`${LOG} ${id}: fila ${fila.status}, planilha não (sentToAPI=${executar}) — ${planilha.motivo}`);
         const naFila = fila.status === 'enfileirado'
             ? 'entrou na fila do Metabase'
-            : `pode ter entrado na fila do Metabase (${fila.motivo})`;
+            : fila.status === 'recusado'
+                ? `não entrou na fila do Metabase (${fila.motivo})`
+                : `pode ter entrado na fila do Metabase (${fila.motivo})`;
         // A linha entrou e só as fórmulas da operação faltaram (ADR-013): o suporte completa, e repetir duplicaria a linha.
         const naPlanilha = planilha.linhasGravadas
             ? 'a linha entrou na planilha sem as fórmulas de prazo e SLA (o suporte foi avisado para completar)'
@@ -272,24 +326,26 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
                 message: `${feito} solicitação ${naFila}, mas ${naPlanilha}. NÃO repita a solicitação.`,
                 sentToAPI: executar,
                 reason: 'SHEET_WRITE_FAILED',
-                idSolicitacao,
+                idSolicitacao: id,
             },
             status: 200,
         };
     }
 
-    // Fila incerta: a linha está na planilha, então repetir a duplicaria; quem confere a fila é o suporte (o caso
-    // inteiro está no log).
-    if (fila.status === 'incerto') {
-        console.error(`${LOG} ${idSolicitacao}: planilha gravada, fila incerta (sentToAPI=${executar}) — ${fila.motivo}`);
+    // Fila incerta (ou recusada, com a trava): a linha está na planilha, então repetir a duplicaria; quem confere a fila é
+    // o suporte (o caso inteiro está no log).
+    if (fila.status !== 'enfileirado') {
+        console.error(`${LOG} ${id}: planilha gravada, fila ${fila.status} (sentToAPI=${executar}) — ${fila.motivo}`);
+        const naFila = fila.status === 'recusado'
+            ? `a fila do Metabase a recusou (${fila.motivo})`
+            : `não deu para confirmar a entrada na fila do Metabase (${fila.motivo})`;
         return {
             body: {
                 code: 'SHEETS_ERROR',
-                message: `${feito} solicitação foi registrada na planilha, mas não deu para confirmar a entrada na fila do `
-                    + `Metabase (${fila.motivo}). NÃO repita a solicitação: avise o suporte.`,
+                message: `${feito} solicitação foi registrada na planilha, mas ${naFila}. NÃO repita a solicitação: avise o suporte.`,
                 sentToAPI: executar,
                 reason: 'ROW_UNCERTAIN',
-                idSolicitacao,
+                idSolicitacao: id,
             },
             status: 200,
         };
@@ -300,9 +356,108 @@ export async function processResend(input: ProcessResendInput): Promise<{ body: 
             code: executar ? 'SUCCESS' : 'SUCCESS_SHEETS_ONLY',
             message: (jaNoCosmos ? `${noCosmos}. ` : '') + 'Reenvio registrado com sucesso. O Metabase recebe no próximo lote (até 20 min).',
             sentToAPI: executar,
-            idSolicitacao,
+            idSolicitacao: id,
         },
         status: 200,
+    };
+}
+
+/**
+ * Entrega à fila o caso da solicitação. Com a tentativa anterior, é uma atualização do caso dela (`atualizacaoDoCaso`).
+ * Sem ela, a criação e, logo depois, a `execucao`, quando houver: o lote leva a criação antes da atualização. Nunca lança.
+ */
+async function entregarAFila(
+    caso: CasoCxhub,
+    execucao: AtualizacaoCxhub | null,
+    anterior: TentativaAnterior | null,
+    prazo: number,
+): Promise<ResultadoFila> {
+    if (anterior) return enfileirarAtualizacao(anterior.idSolicitacao, atualizacaoDoCaso(caso, execucao), prazo);
+    const fila = await enfileirarCasos([caso], prazo);
+    if (fila.status === 'enfileirado' && execucao) {
+        const marcado = await enfileirarAtualizacao(caso.id_solicitacao, execucao, prazo);
+        // O caso entrou sem a marca e parece um caso comum sem automação: a linha leva o status, e o log da fila, a atualização.
+        if (marcado.status !== 'enfileirado') console.error(`${LOG} ${caso.id_solicitacao}: o caso entrou na fila sem a marca de sem execução`);
+    }
+    return fila;
+}
+
+/** A fila recusou e nada foi gravado: o agente pode repetir. */
+function respostaDaFilaRecusada(executar: boolean, noCosmos: string, motivo: string): Resultado {
+    console.error(`${LOG} fila recusou (sentToAPI=${executar}) — ${motivo}`);
+    return {
+        body: {
+            code: 'SHEETS_ERROR',
+            message: executar
+                ? `${noCosmos}, porém houve um erro ao registrar a solicitação (${motivo}).`
+                : `Houve um erro ao registrar o reenvio (${motivo}). Tente novamente.`,
+            sentToAPI: executar,
+            reason: 'RECORD_UNAVAILABLE',
+        },
+        status: 200,
+    };
+}
+
+/**
+ * O status da solicitação sem execução nas marcas sem Cosmos: lá ele é coluna da operação ("Status do Reenvio"), e não
+ * célula da linha do formulário como nas 6 do Cosmos. Texto vazio limpa (a nova tentativa que deu certo).
+ */
+function statusNaOperacao(brand: MarcaCxHub, status: string): Record<string, string> | undefined {
+    return ehMarcaSemCosmosComPlanilha(brand) ? { 'Status do Reenvio': status } : undefined;
+}
+
+/**
+ * A solicitação da tela que não deu certo, registrada mesmo assim (`REGISTRAR_FALHA_DA_TELA`, 2026-11-27): o caso vai à
+ * fila sem automação e com a marca de sem execução (`execucaoDoSemExecucao`: Cancelado ou, no "a conferir", Pendente), e
+ * a linha vai à planilha sem os campos da automação, com o status na coluna de status e a nota nos comentários. A
+ * tentativa anterior, quando a tela a mandou, é reescrita (o mesmo caso e a mesma linha).
+ *
+ * A resposta é a de antes (o `code`, o texto e o status HTTP, que a Central conhece), mais o `idSolicitacao` para a
+ * nova tentativa, o `reason: REGISTRADO_SEM_EXECUCAO` e o `statusRegistrado`. Se a fila recusou, não há caso para a nova
+ * tentativa refazer: a linha fica como rastro, e a resposta é a de antes, sem os campos novos.
+ */
+async function registrarSemExecucao(p: {
+    brand: MarcaCxHub;
+    dados: ResendSubmissionData;
+    sem: SemExecucao;
+    resposta: Resultado;
+    anterior: TentativaAnterior | null;
+    idSolicitacao: string;
+    agora: Date;
+    prazoFila?: number;
+}): Promise<Resultado> {
+    const { brand, sem, resposta, anterior } = p;
+    const id = anterior?.idSolicitacao ?? p.idSolicitacao;
+    const criadoEm = anterior?.criadoEm ?? p.agora;
+    const dados: ResendSubmissionData = {
+        ...stripAutomation(p.dados),
+        status: sem.status,
+        comentarios: [p.dados.comentarios, notaDoSemExecucao(sem)].filter(Boolean).join(' | '),
+    };
+    const caso = casoDoReenvio({ brand, data: dados, automacao: false, idSolicitacao: id, criadoEm });
+    const fila = await entregarAFila(caso, execucaoDoSemExecucao(sem.desfecho), anterior, p.prazoFila ?? prazoDaFila());
+    console.warn(`${LOG} ${id}: registrado sem execução (${sem.status}), fila ${fila.status}${anterior ? ', por cima da tentativa anterior' : ''}`);
+
+    if (registraNaPlanilha(brand)) {
+        await gravarNasPlanilhas(
+            [{
+                fluxo: 'reenvio',
+                marca: brand,
+                linha: buildResendRow(brand, dados, formatarCarimboSP(criadoEm)),
+                idSolicitacao: id,
+                pedido: dados.numeroPedido,
+                criadoEm,
+                sobrescrever: anterior !== null,
+                valoresPorCabecalho: statusNaOperacao(brand, sem.status),
+            }],
+            { numeroPedido: dados.numeroPedido, idAtendimento: dados.idAtendimento, statusDaFila: fila.status },
+        );
+    }
+
+    if (fila.status === 'recusado') return resposta;
+    return {
+        body: { ...resposta.body, idSolicitacao: id, reason: 'REGISTRADO_SEM_EXECUCAO', statusRegistrado: sem.status },
+        status: resposta.status,
     };
 }
 
@@ -375,14 +530,17 @@ function cosmosSimulado(): boolean {
     return true;
 }
 
-/** `null` = o Cosmos criou o reenvio. Qualquer outra coisa = não criou, ou não dá para saber. */
+/**
+ * `null` = o Cosmos criou o reenvio. Qualquer outra coisa = não criou, ou não dá para saber: a `resposta` de sempre e o
+ * `sem`, o que a linha diz quando a solicitação é registrada sem execução.
+ */
 async function executarNoCosmos(
     brand: SupportedBrand,
     data: ResendSubmissionData,
     token: string | undefined,
     prazo: number,
     idSolicitacao: string,
-): Promise<FalhaCosmos | null> {
+): Promise<{ resposta: FalhaCosmos; sem: SemExecucao } | null> {
     const corpo = buildCosmosResendBody(data);
     const baseUrl = process.env.COSMOS_API_URL;
     if (!corpo || !data.cosmosId || !token || !baseUrl) {
@@ -390,12 +548,18 @@ async function executarNoCosmos(
         console.error(`${LOG} ${idSolicitacao}: automação pedida sem o necessário`, {
             apiData: Boolean(corpo), cosmosId: Boolean(data.cosmosId), token: Boolean(token), COSMOS_API_URL: Boolean(baseUrl),
         });
-        return { code: 'API_ERROR', message: 'Os dados da automação estão incompletos — o reenvio não foi enviado ao Cosmos.' };
+        return {
+            resposta: { code: 'API_ERROR', message: 'Os dados da automação estão incompletos — o reenvio não foi enviado ao Cosmos.' },
+            sem: { desfecho: 'nao_realizado', status: 'Reenvio não realizado (dados da automação incompletos)', proximoPasso: ENVIE_DE_NOVO },
+        };
     }
 
     const janela = prazo - Date.now();
     if (janela <= 0) {
-        return { code: 'API_ERROR', message: 'O tempo acabou antes de chamar o Cosmos — o reenvio não foi enviado.' };
+        return {
+            resposta: { code: 'API_ERROR', message: 'O tempo acabou antes de chamar o Cosmos — o reenvio não foi enviado.' },
+            sem: { desfecho: 'nao_realizado', status: 'Reenvio não realizado (erro de comunicação com o Cosmos)', proximoPasso: ENVIE_DE_NOVO },
+        };
     }
 
     const url = `${baseUrl}/organizations/${BRAND_TO_ORG_ID[brand]}/orders/${encodeURIComponent(data.cosmosId)}/resend`;
@@ -434,13 +598,25 @@ async function executarNoCosmos(
 
         const falha = interpretarErroCosmos(res.status, await res.json().catch(() => null));
         console.warn(`${LOG} ${idSolicitacao}: Cosmos recusou (HTTP ${res.status}) — ${falha.message}`);
-        return falha;
+        // O motivo curto vai no status; o texto do Cosmos, nos comentários.
+        const motivo = falha.code === 'OUT_OF_STOCK' ? 'sem saldo' : `HTTP ${res.status}`;
+        return {
+            resposta: falha,
+            sem: { desfecho: 'nao_realizado', status: `Reenvio não realizado (Cosmos recusou: ${motivo})`, proximoPasso: `${falha.message} Nenhum reenvio foi criado.` },
+        };
     } catch (erro) {
         // Sem resposta: a requisição pode ter chegado. Não retenta (duplicaria a remessa) e avisa no texto.
         console.error(`${LOG} ${idSolicitacao}: Cosmos sem resposta:`, erro);
         return {
-            code: 'API_ERROR',
-            message: 'O Cosmos não respondeu — o reenvio PODE ter sido criado. Confira no Cosmos antes de repetir.',
+            resposta: {
+                code: 'API_ERROR',
+                message: 'O Cosmos não respondeu — o reenvio PODE ter sido criado. Confira no Cosmos antes de repetir.',
+            },
+            sem: {
+                desfecho: 'a_conferir',
+                status: 'Reenvio a conferir no Cosmos (sem resposta depois do envio)',
+                proximoPasso: 'o reenvio PODE ter sido criado. Confira no Cosmos; enviar de novo pela Central confere antes de criar outro.',
+            },
         };
     } finally {
         clearTimeout(timer);

@@ -11,6 +11,7 @@ import { formatarCarimboSP } from '@shared/lib/format';
 import { gravarLinhaNaPlanilha, gravarNasPlanilhas, type CasoDaLinha, type GravarDeps } from '@shared/lib/sheets/gravarLinha';
 import { __resetCasoNaPlanilha } from '@shared/lib/sheets/casoNaPlanilha';
 import { CABECALHO_ESPERADO } from '@shared/lib/sheets/cabecalhos';
+import { letraDaColuna } from '@shared/lib/sheets/a1';
 import { __resetGoogleTokenCache } from '@shared/lib/sheets/googleAuth';
 import type { SheetCell } from '@shared/lib/sheets';
 import { buildResendRow } from '@modules/reenvios/actions/buildResendRow';
@@ -334,5 +335,74 @@ describe('gravarNasPlanilhas — marcas sem Cosmos', () => {
         expect(logs).toContain('Ruptura de Estoque');
         expect(logs).not.toContain('cliente.secreta@exemplo.com');
         expect(JSON.stringify(alerta.mock.calls)).not.toContain('cliente.secreta@exemplo.com');
+    });
+});
+
+describe('a solicitação sem execução (REGISTRAR_FALHA_DA_TELA, 2026-11-27)', () => {
+    const ABA = "'Respostas ao formulário'";
+    const NOVA_LINHA = { updates: { updatedRange: `${ABA}!A2:Z2` } };
+    const COLUNA_DO_STATUS = letraDaColuna(CABECALHO.indexOf('Status do Reenvio'));
+
+    it('o status vai pela coluna achada no cabeçalho, junto das fórmulas', async () => {
+        const aba = instalarGoogleFalso(CABECALHO);
+        aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+        const resultado = await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, {}, {
+            valoresPorCabecalho: { 'Status do Reenvio': 'Reenvio não realizado (pedido sem NF)' },
+        });
+
+        expect(resultado).toEqual({ status: 'gravado' });
+        expect(aba.contagem.cabecalho).toBeGreaterThan(0);
+        expect(aba.atualizacoes[0].celulas).toContainEqual({ range: `${ABA}!${COLUNA_DO_STATUS}2`, valor: 'Reenvio não realizado (pedido sem NF)' });
+    });
+
+    it('texto vazio pelo cabeçalho limpa a célula (a nova tentativa que deu certo)', async () => {
+        const aba = instalarGoogleFalso(CABECALHO);
+        aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+        await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, {}, { valoresPorCabecalho: { 'Status do Reenvio': '' } });
+
+        expect(aba.atualizacoes[0].celulas).toContainEqual({ range: `${ABA}!${COLUNA_DO_STATUS}2`, valor: '' });
+    });
+
+    it('coluna que a planilha não tem não é escrita, e a linha continua gravada', async () => {
+        const aba = instalarGoogleFalso(CABECALHO);
+        aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+        const resultado = await gravarLinhaNaPlanilha('reenvio', 'apice', LINHA, CASO, prazo(), semEspera, {}, { valoresPorCabecalho: { 'Não existe': 'x' } });
+
+        expect(resultado).toEqual({ status: 'gravado' });
+        expect(JSON.stringify(aba.atualizacoes)).not.toContain('"x"');
+    });
+
+    it('sobrescrever: a linha do caso que já está lá é reescrita no lugar (sem append), só nas células que o CX Hub escreve', async () => {
+        const linha = buildResendRow('kokeshi', RESEND_DATA, CARIMBO);
+        const aba = instalarGoogleFalso(cabecalhoDoLayout('reenvio', 'kokeshi', linha.length), [linha]);
+        const nova = buildResendRow('kokeshi', { ...RESEND_DATA, comentarios: 'COMENT | [CXHub] Reenvio não realizado' }, CARIMBO);
+
+        const resultado = await gravarLinhaNaPlanilha(
+            'reenvio', 'kokeshi', nova, { ...CASO, pedido: RESEND_DATA.numeroPedido }, prazo(), semEspera, {}, { sobrescrever: true },
+        );
+
+        expect(resultado).toEqual({ status: 'gravado' });
+        expect(aba.appends).toHaveLength(0);
+        expect(aba.linhas).toHaveLength(1);
+        expect(aba.atualizacoes).toHaveLength(1);
+        expect(aba.atualizacoes[0].valueInputOption).toBe('USER_ENTERED');
+        expect(aba.atualizacoes[0].celulas).toHaveLength(nova.filter((celula) => celula !== null).length);
+        expect(aba.linhas[0]).toContain('COMENT | [CXHub] Reenvio não realizado');
+    });
+
+    it('sobrescrever sem a linha na planilha: anexa, como a primeira gravação', async () => {
+        const linha = buildResendRow('kokeshi', RESEND_DATA, CARIMBO);
+        const aba = instalarGoogleFalso(cabecalhoDoLayout('reenvio', 'kokeshi', linha.length));
+        aba.appends.push({ status: 200, json: NOVA_LINHA });
+
+        const resultado = await gravarLinhaNaPlanilha(
+            'reenvio', 'kokeshi', linha, { ...CASO, pedido: RESEND_DATA.numeroPedido }, prazo(), semEspera, {}, { sobrescrever: true },
+        );
+
+        expect(resultado).toEqual({ status: 'gravado' });
+        expect(aba.linhas).toHaveLength(1);
     });
 });

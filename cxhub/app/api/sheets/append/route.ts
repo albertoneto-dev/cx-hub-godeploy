@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from '../../../../../api/next-server';
 import { MarcaCxHub, ResendSubmissionData, SheetsAppendResponse } from '../../../../modules/reenvios/types/index';
 import { VALID_RESEND_BRANDS, postResendWebhook } from '../../../../modules/reenvios/actions/postResendWebhook';
+import { registrarFalhaDaTela } from '../../../../shared/lib/fila/semExecucao';
 
 /**
  * O dedup, o Cosmos, a fila do Metabase (até 16 s, ADR-012) e a linha na planilha (até 15 s, ADR-010), com folga.
@@ -18,12 +19,18 @@ interface AppendRequestBody {
      * este campo — só chamadas diretas à rota (curl da QA). Ver docs/qa-modo-teste.md.
      */
     testMode?: boolean;
+    /**
+     * A nova tentativa de uma solicitação registrada sem execução (`reason: REGISTRADO_SEM_EXECUCAO`): o `idSolicitacao`
+     * que a resposta dela trouxe. Reescreve o mesmo caso e a mesma linha. Só com `REGISTRAR_FALHA_DA_TELA=on`; um id
+     * que não é de uma tentativa sem execução deste pedido é ignorado (vale o dedup de sempre).
+     */
+    idSolicitacao?: string;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<SheetsAppendResponse>> {
     try {
         const body: AppendRequestBody = await request.json();
-        const { brand, data, token, testMode } = body;
+        const { brand, data, token, testMode, idSolicitacao } = body;
 
         if (!brand || !data) {
             return NextResponse.json(
@@ -48,7 +55,20 @@ export async function POST(request: NextRequest): Promise<NextResponse<SheetsApp
             );
         }
 
-        const { body: result, status } = await postResendWebhook({ brand, data, token, testMode });
+        if (idSolicitacao !== undefined && typeof idSolicitacao !== 'string') {
+            return NextResponse.json(
+                { code: 'UNKNOWN_ERROR', message: 'Invalid idSolicitacao: expected string', sentToAPI: false },
+                { status: 400 }
+            );
+        }
+
+        // A trava é lida a cada chamada (liga e desliga sem deploy). Desligada, o id da tentativa anterior nem é lido.
+        const registrarFalha = registrarFalhaDaTela();
+        const { body: result, status } = await postResendWebhook({
+            brand, data, token, testMode,
+            registrarFalha,
+            tentativaAnterior: registrarFalha ? idSolicitacao : undefined,
+        });
         return NextResponse.json(result, { status });
     } catch (error) {
         console.error('[Sheets Append API] Error:', error);

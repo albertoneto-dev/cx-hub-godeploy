@@ -175,9 +175,15 @@ export interface SheetsAppendResponse {
     reason?: AlertReason;
     /**
      * O caso que foi à fila do Metabase (ADR-012): a lista acompanha por ele quando a raw o recebe ("Gravado no
-     * Metabase"). Vem sempre que a planilha foi tentada (sucesso, `SHEET_WRITE_FAILED` e `ROW_UNCERTAIN`).
+     * Metabase"). Vem sempre que a planilha foi tentada (sucesso, `SHEET_WRITE_FAILED` e `ROW_UNCERTAIN`) e, com
+     * `REGISTRAR_FALHA_DA_TELA`, no `REGISTRADO_SEM_EXECUCAO`: é ele que a tela manda de volta na nova tentativa.
      */
     idSolicitacao?: string;
+    /**
+     * Só com `reason: REGISTRADO_SEM_EXECUCAO`: o status que a solicitação recebeu na planilha, para a tela mostrar (ex.:
+     * "Reenvio a conferir no Cosmos (sem resposta depois do envio)").
+     */
+    statusRegistrado?: string;
 }
 
 /**

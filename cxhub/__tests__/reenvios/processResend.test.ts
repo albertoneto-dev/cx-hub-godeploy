@@ -6,7 +6,10 @@ vi.mock('@shared/lib/fila', async (importOriginal) => ({
     ...(await importOriginal<typeof import('@shared/lib/fila')>()),
     solicitacaoRecenteNoRegistro: vi.fn(),
     enfileirarCasos: vi.fn(),
+    enfileirarAtualizacao: vi.fn(),
     prazoDaFila: vi.fn(),
+    // A validação da tentativa anterior tem testes próprios (`semExecucao.test.ts`).
+    tentativaSemExecucao: vi.fn(),
 }));
 // A linha na planilha (ADR-010) tem testes próprios (`gravarLinha.test.ts`): aqui só importa QUANDO é chamada e o
 // que a resposta diz quando ela falha.
@@ -22,7 +25,15 @@ vi.mock('@modules/reenvios/actions/reenvioRecenteNoCosmos', async (importOrigina
 }));
 
 import { problemaNoCaso, type CasoCxhub } from '@shared/lib/airflow';
-import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro, type ResultadoFila } from '@shared/lib/fila';
+import {
+    enfileirarAtualizacao,
+    enfileirarCasos,
+    prazoDaFila,
+    solicitacaoRecenteNoRegistro,
+    tentativaSemExecucao,
+    type ResultadoFila,
+} from '@shared/lib/fila';
+import { stripAutomation } from '@modules/reenvios/actions/buildBotResendData';
 import { MetabaseError } from '@shared/lib/metabase';
 import { gravarNasPlanilhas } from '@shared/lib/sheets/gravarLinha';
 import { processResend, type ProcessResendInput } from '@modules/reenvios/actions/processResend';
@@ -38,6 +49,8 @@ const enfileirar = vi.mocked(enfileirarCasos);
 const prazoPadrao = vi.mocked(prazoDaFila);
 const planilhas = vi.mocked(gravarNasPlanilhas);
 const recente = vi.mocked(reenvioRecenteNoCosmos);
+const atualizar = vi.mocked(enfileirarAtualizacao);
+const tentativa = vi.mocked(tentativaSemExecucao);
 
 // 27/10/2026 15:00 em SP
 const AGORA = new Date(Date.UTC(2026, 9, 27, 18, 0, 0));
@@ -79,6 +92,8 @@ describe('processResend (registro na fila do Metabase e na planilha)', () => {
         prazoPadrao.mockReset().mockReturnValue(PRAZO_PADRAO);
         planilhas.mockReset().mockResolvedValue({ ok: true });
         recente.mockReset().mockResolvedValue({ tipo: 'nenhum' });
+        atualizar.mockReset().mockResolvedValue({ status: 'enfileirado' });
+        tentativa.mockReset().mockResolvedValue(null);
         cosmos = espionarCosmos();
         stubRegistroEnv();
         vi.stubEnv('COSMOS_API_URL', COSMOS_URL);
@@ -718,6 +733,183 @@ describe('processResend (registro na fila do Metabase e na planilha)', () => {
             const { body } = await processResend({ ...base, testMode: true });
 
             expect(body.code).toBe('SUCCESS_TEST_MODE');
+        });
+    });
+    describe('registro sem execução (REGISTRAR_FALHA_DA_TELA, 2026-11-27)', () => {
+        const TELA: ProcessResendInput = { ...base, idSolicitacao: 'req-1', registrarFalha: true };
+        const NAO_REALIZADO = { status_execucao: 'Cancelado', responsavel_execucao: 'CX Hub' };
+        const A_CONFERIR = { status_execucao: 'Pendente', responsavel_execucao: 'CX Hub' };
+        /** A tentativa anterior: um caso de 10 min antes (14:50 em SP). */
+        const ANTERIOR = { idSolicitacao: 'caso-1', criadoEm: new Date(AGORA.getTime() - 10 * 60_000) };
+
+        /** A linha que a solicitação sem execução grava: sem a automação, com o status e a nota nos comentários. */
+        function linhaSemExecucao(status: string, proximoPasso: string, carimbo = CARIMBO) {
+            return buildResendRow('kokeshi', {
+                ...stripAutomation(RESEND_DATA),
+                status,
+                comentarios: `COMENT | [CXHub] ${status}: ${proximoPasso}`,
+            }, carimbo);
+        }
+
+        it('dedup do Cosmos indefinido ⇒ o caso e a linha "não realizado", sem POST, e a resposta de antes com o id', async () => {
+            recente.mockResolvedValue({ tipo: 'indefinido', motivo: 'o Cosmos não respondeu em 5000 ms' });
+            const status = 'Reenvio não realizado (erro de comunicação com o Cosmos)';
+
+            const { body, status: http } = await processResend(TELA);
+
+            expect(http).toBe(200);
+            expect(body).toEqual({
+                code: 'API_ERROR',
+                // O texto que a Central reconhece para "Enviar de novo com os mesmos dados" não muda.
+                message: 'Não deu para conferir no Cosmos se o pedido já tem reenvio (o Cosmos não respondeu em 5000 ms). '
+                    + 'Nenhum reenvio foi criado e nada foi registrado: tente de novo em alguns instantes.',
+                sentToAPI: false,
+                idSolicitacao: 'req-1',
+                reason: 'REGISTRADO_SEM_EXECUCAO',
+                statusRegistrado: status,
+            });
+            expect(cosmos).not.toHaveBeenCalled();
+            const caso = casoEnfileirado();
+            expect(caso).toMatchObject({ id_solicitacao: 'req-1', automacao: false, valor: '' });
+            expect(problemaNoCaso(caso)).toBeNull();
+            expect(atualizar).toHaveBeenCalledWith('req-1', NAO_REALIZADO, PRAZO_PADRAO);
+            expect(enfileirar.mock.invocationCallOrder[0]).toBeLessThan(atualizar.mock.invocationCallOrder[0]);
+            const [[linha]] = planilhas.mock.calls[0];
+            expect(linha).toMatchObject({ idSolicitacao: 'req-1', criadoEm: AGORA, sobrescrever: false });
+            expect(linha.linha).toEqual(linhaSemExecucao(
+                status, 'não deu para conferir no Cosmos se o pedido já tinha reenvio (o Cosmos não respondeu em 5000 ms), '
+                    + 'e nenhum reenvio foi criado. Envie de novo pela Central.',
+            ));
+        });
+
+        it('Cosmos sem resposta depois do POST ⇒ "a conferir": Pendente (o dbt casa o -R-n se ele existir)', async () => {
+            cosmos.mockRejectedValue(new TypeError('fetch failed'));
+            const status = 'Reenvio a conferir no Cosmos (sem resposta depois do envio)';
+
+            const { body } = await processResend(TELA);
+
+            expect(body).toEqual({
+                code: 'API_ERROR',
+                message: 'O Cosmos não respondeu — o reenvio PODE ter sido criado. Confira no Cosmos antes de repetir.',
+                sentToAPI: false,
+                idSolicitacao: 'req-1',
+                reason: 'REGISTRADO_SEM_EXECUCAO',
+                statusRegistrado: status,
+            });
+            expect(cosmos).toHaveBeenCalledTimes(1);
+            expect(casoEnfileirado().automacao).toBe(false);
+            expect(atualizar).toHaveBeenCalledWith('req-1', A_CONFERIR, PRAZO_PADRAO);
+            expect(planilhas.mock.calls[0][0][0].linha).toEqual(linhaSemExecucao(
+                status, 'o reenvio PODE ter sido criado. Confira no Cosmos; enviar de novo pela Central confere antes de criar outro.',
+            ));
+        });
+
+        it('Cosmos recusou ⇒ "não realizado (Cosmos recusou: …)", com o texto do Cosmos nos comentários', async () => {
+            cosmosResponde(422, { error: 'SKU sem saldo: KIT-01' });
+
+            const { body } = await processResend(TELA);
+
+            expect(body).toMatchObject({ code: 'OUT_OF_STOCK', reason: 'REGISTRADO_SEM_EXECUCAO', statusRegistrado: 'Reenvio não realizado (Cosmos recusou: sem saldo)' });
+            expect(atualizar).toHaveBeenCalledWith('req-1', NAO_REALIZADO, PRAZO_PADRAO);
+            expect(planilhas.mock.calls[0][0][0].linha).toEqual(linhaSemExecucao(
+                'Reenvio não realizado (Cosmos recusou: sem saldo)',
+                'Não foi possível reenviar: o SKU KIT-01 está sem saldo no Cosmos. Verifique o estoque ou solicite reenvio manual. Nenhum reenvio foi criado.',
+            ));
+        });
+
+        it('fila recusou ⇒ a linha vai assim mesmo (é o único registro), e a resposta diz para NÃO repetir', async () => {
+            enfileirar.mockResolvedValue({ status: 'recusado', motivo: 'a fila respondeu HTTP 400' });
+
+            const { body } = await processResend(TELA);
+
+            expect(planilhas).toHaveBeenCalledTimes(1);
+            expect(planilhas.mock.calls[0][1]).toMatchObject({ statusDaFila: 'recusado' });
+            expect(body).toEqual({
+                code: 'SHEETS_ERROR',
+                message: 'O reenvio foi processado com sucesso no Cosmos e a solicitação foi registrada na planilha, mas a fila '
+                    + 'do Metabase a recusou (a fila respondeu HTTP 400). NÃO repita a solicitação: avise o suporte.',
+                sentToAPI: true,
+                reason: 'ROW_UNCERTAIN',
+                idSolicitacao: 'req-1',
+            });
+        });
+
+        it('fila recusou o "não realizado" ⇒ a linha fica de rastro, e a resposta é a de antes (não há caso para refazer)', async () => {
+            recente.mockResolvedValue({ tipo: 'indefinido', motivo: 'timeout' });
+            enfileirar.mockResolvedValue({ status: 'recusado', motivo: 'a fila respondeu HTTP 400' });
+
+            const { body } = await processResend(TELA);
+
+            expect(body).not.toHaveProperty('reason');
+            expect(body).not.toHaveProperty('idSolicitacao');
+            expect(atualizar).not.toHaveBeenCalled();
+            expect(planilhas).toHaveBeenCalledTimes(1);
+        });
+
+        it('nova tentativa que dá certo ⇒ o mesmo caso (atualização, "Automação") e a mesma linha, sem barrar no dedup', async () => {
+            tentativa.mockResolvedValue(ANTERIOR);
+            // O "a conferir" está aberto e o dedup o acha: é o caso que esta solicitação refaz.
+            buscar.mockResolvedValue({ ...DUPLICATA, idSolicitacao: 'caso-1' });
+
+            const { body } = await processResend({ ...TELA, tentativaAnterior: 'caso-1' });
+
+            expect(tentativa).toHaveBeenCalledWith('caso-1', 'REENVIO', 'kokeshi', '#SHOPIFY220183');
+            expect(body).toEqual({ code: 'SUCCESS', message: SUCESSO, sentToAPI: true, idSolicitacao: 'caso-1' });
+            expect(cosmos).toHaveBeenCalledTimes(1);
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(atualizar).toHaveBeenCalledTimes(1);
+            const [id, campos] = atualizar.mock.calls[0];
+            expect(id).toBe('caso-1');
+            expect(campos).toMatchObject({ status_execucao: 'Pendente', responsavel_execucao: 'Automação', nf: RESEND_DATA.numeroNF, valor: RESEND_DATA.valorReenvio });
+            expect(campos).not.toHaveProperty('automacao');
+            expect(campos).not.toHaveProperty('id_solicitacao');
+            const [[linha]] = planilhas.mock.calls[0];
+            expect(linha).toMatchObject({ idSolicitacao: 'caso-1', criadoEm: ANTERIOR.criadoEm, sobrescrever: true });
+            // O carimbo é o da tentativa anterior: é por ele (e pelo pedido) que a linha dela é achada.
+            expect(linha.linha).toEqual(buildResendRow('kokeshi', RESEND_DATA, '27/10/2026 14:50:00'));
+        });
+
+        it('nova tentativa que falha de novo ⇒ o mesmo caso e a mesma linha, com o status novo', async () => {
+            tentativa.mockResolvedValue(ANTERIOR);
+            cosmos.mockRejectedValue(new TypeError('fetch failed'));
+
+            const { body } = await processResend({ ...TELA, tentativaAnterior: 'caso-1' });
+
+            expect(body).toMatchObject({ idSolicitacao: 'caso-1', reason: 'REGISTRADO_SEM_EXECUCAO' });
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(atualizar).toHaveBeenCalledWith('caso-1', expect.objectContaining({ ...A_CONFERIR, nf: RESEND_DATA.numeroNF }), PRAZO_PADRAO);
+            expect(planilhas.mock.calls[0][0][0]).toMatchObject({ idSolicitacao: 'caso-1', criadoEm: ANTERIOR.criadoEm, sobrescrever: true });
+        });
+
+        it('o id de uma tentativa não pula o dedup de OUTRO reenvio do pedido', async () => {
+            tentativa.mockResolvedValue(ANTERIOR);
+            buscar.mockResolvedValue(DUPLICATA);
+
+            const { body } = await processResend({ ...TELA, tentativaAnterior: 'caso-1' });
+
+            expect(body.code).toBe('DUPLICATE_RESEND');
+            expect(cosmos).not.toHaveBeenCalled();
+            expect(atualizar).not.toHaveBeenCalled();
+        });
+
+        it('sem a trava (o bot, ou a tela com ela desligada) nada muda: o id de tentativa nem é lido', async () => {
+            recente.mockResolvedValue({ tipo: 'indefinido', motivo: 'timeout' });
+
+            const { body } = await processResend({ ...base, tentativaAnterior: 'caso-1' });
+
+            expect(body).not.toHaveProperty('reason');
+            expect(tentativa).not.toHaveBeenCalled();
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(planilhas).not.toHaveBeenCalled();
+        });
+
+        it('modo de teste nunca registra', async () => {
+            recente.mockResolvedValue({ tipo: 'indefinido', motivo: 'timeout' });
+
+            await processResend({ ...TELA, testMode: true });
+
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(planilhas).not.toHaveBeenCalled();
         });
     });
 });

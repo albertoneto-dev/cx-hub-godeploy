@@ -23,6 +23,12 @@ export type AlertReason =
      * recusado, nenhuma linha gravada
      */
     | 'ORDER_NOT_INVOICED'
+    /**
+     * Só a tela (`/api/sheets/append` e `/api/refund/submit`, com `REGISTRAR_FALHA_DA_TELA=on`): a solicitação não deu
+     * certo e foi registrada sem execução, com o status na linha. O `idSolicitacao` da resposta é o que a nova tentativa
+     * manda de volta. Nunca vem para o bot.
+     */
+    | 'REGISTRADO_SEM_EXECUCAO'
     /** ERP inacessível ou mal configurado, **depois** de esgotadas as retentativas */
     | 'COSMOS_UNAVAILABLE'
     /**

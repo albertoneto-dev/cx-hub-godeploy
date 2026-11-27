@@ -21,4 +21,13 @@ export {
     listarSolicitacoesNoRegistro,
 } from './estado';
 export type { EstadoDeps, ListaDeps } from './estado';
+export {
+    RESPONSAVEL_SEM_EXECUCAO,
+    atualizacaoDoCaso,
+    execucaoDoSemExecucao,
+    notaDoSemExecucao,
+    registrarFalhaDaTela,
+    tentativaSemExecucao,
+} from './semExecucao';
+export type { DesfechoSemExecucao, SemExecucao, TentativaAnterior } from './semExecucao';
 export type { AtualizacaoNaFila, CasoAbertoNaFila, CasoNaFila, ResultadoFila, SituacaoNaFila } from './types';

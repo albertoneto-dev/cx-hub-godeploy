@@ -81,8 +81,35 @@ describe('POST /api/sheets/append', () => {
             // A tela não manda id nem prazo: o processResend gera o id e usa o prazo padrão da fila.
             idSolicitacao: undefined,
             prazoFila: undefined,
+            // A trava REGISTRAR_FALHA_DA_TELA desligada (o padrão).
+            registrarFalha: false,
+            tentativaAnterior: undefined,
         });
         expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('com REGISTRAR_FALHA_DA_TELA=on, registra a falha e repassa o idSolicitacao da tentativa anterior', async () => {
+        vi.stubEnv('REGISTRAR_FALHA_DA_TELA', 'on');
+        processResendMock.mockResolvedValue({ body: { code: 'SUCCESS', message: 'ok', sentToAPI: true }, status: 200 });
+
+        await postar({ brand: 'kokeshi', data: SAMPLE_DATA, token: 'token-do-agente', idSolicitacao: 'caso-1' });
+
+        expect(processResendMock.mock.calls[0][0]).toMatchObject({ registrarFalha: true, tentativaAnterior: 'caso-1' });
+    });
+
+    it('com a trava desligada, o idSolicitacao da tela é ignorado', async () => {
+        processResendMock.mockResolvedValue({ body: { code: 'SUCCESS', message: 'ok', sentToAPI: true }, status: 200 });
+
+        await postar({ brand: 'kokeshi', data: SAMPLE_DATA, token: 'token-do-agente', idSolicitacao: 'caso-1' });
+
+        expect(processResendMock.mock.calls[0][0]).toMatchObject({ registrarFalha: false, tentativaAnterior: undefined });
+    });
+
+    it('idSolicitacao que não é texto ⇒ 400', async () => {
+        const res = await postar({ brand: 'kokeshi', data: SAMPLE_DATA, idSolicitacao: 7 });
+
+        expect(res.status).toBe(400);
+        expect(processResendMock).not.toHaveBeenCalled();
     });
 
     it('o maxDuration cabe o dedup, o Cosmos, a fila e a planilha com folga', () => {

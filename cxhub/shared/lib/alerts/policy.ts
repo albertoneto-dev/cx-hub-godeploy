@@ -190,6 +190,13 @@ export const ALERT_POLICY: Record<AlertReason, AlertPolicy> = {
         acao: 'Confirmar o número do pedido com a cliente; a solicitação fica registrada para tratativa manual.',
         agrupar: true,
     },
+    // A agente está na tela com a resposta, e a causa que for sistema quebrado já avisou por conta própria.
+    REGISTRADO_SEM_EXECUCAO: {
+        severidade: 'nenhuma',
+        titulo: 'Solicitação da tela registrada sem execução',
+        acao: 'Ler o status da linha na planilha e enviar de novo pela Central (o mesmo caso e a mesma linha).',
+        agrupar: true,
+    },
     NOT_ELIGIBLE: {
         severidade: 'nenhuma',
         titulo: 'Pedido não elegível à automação',
