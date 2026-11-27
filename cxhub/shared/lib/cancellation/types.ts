@@ -15,7 +15,8 @@ export interface CancellationPayload {
  * `API_TIMEOUT` é a fila do Metabase incerta com a linha já na planilha (ADR-012): o cancelamento não deve ser
  * repetido.
  */
-export type CancellationResponseCode = 'SUCCESS' | 'API_TIMEOUT' | 'UNKNOWN_ERROR';
+/** `DUPLICATE_CANCELLATION`: o mesmo pedido já tem cancelamento nas últimas 24 h (só com `REGISTRAR_FALHA_DA_TELA`). */
+export type CancellationResponseCode = 'SUCCESS' | 'DUPLICATE_CANCELLATION' | 'API_TIMEOUT' | 'UNKNOWN_ERROR';
 
 export interface CancellationResponse {
     code: CancellationResponseCode;

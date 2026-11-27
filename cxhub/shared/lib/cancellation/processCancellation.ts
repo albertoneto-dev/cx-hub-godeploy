@@ -1,6 +1,6 @@
 import type { SupportedBrand } from '../constants';
 import { configuracaoQueFalta } from '../backendDireto';
-import { enfileirarCasos, prazoDaFila } from '../fila/index';
+import { enfileirarCasos, prazoDaFila, solicitacaoRecenteNoRegistro } from '../fila/index';
 import { formatarCarimboSP } from '../format';
 import { gravarNasPlanilhas } from '../sheets/gravarLinha';
 import { buildCancellationRow, prepararCancelamento } from './buildCancellationRow';
@@ -13,12 +13,19 @@ export interface ProcessCancellationOptions {
     /** Instante-limite da entrega à fila do Metabase; ausente ⇒ `prazoDaFila()`, contado de quando ela começa */
     prazoFila?: number;
     agora?: Date;
+    /**
+     * Com `REGISTRAR_FALHA_DA_TELA=on` (2026-11-27): barra o cancelamento do mesmo pedido nas últimas 24 h, como o
+     * reembolso. A Central manda o cancelamento junto com o reenvio, e quem refaz o formulário depois de um reenvio que
+     * falhou gravava o cancelamento de novo (o SH698919LC ficou com dois na gold).
+     */
+    barrarDuplicado?: boolean;
 }
 
 /**
  * O que o workflow `[PROD] [AUX] - Cancelamento CXHub` fazia, dentro do CXHub, com o registro na fila do Metabase e
  * **junto dele** na planilha da marca (ADR-007, ADR-010, ADR-012): configuração (fila e planilha) → entrega o caso
- * CANCELAMENTO à fila → registra a linha na planilha. Sem dedup — o workflow também não tinha.
+ * CANCELAMENTO à fila → registra a linha na planilha. Sem dedup — o workflow também não tinha —, a não ser com
+ * `barrarDuplicado` (`REGISTRAR_FALHA_DA_TELA`), que barra o mesmo pedido em 24 h.
  *
  * A planilha só é gravada depois da fila, e só se a fila não recusou. Com a fila `incerto` a linha vai também, e a
  * resposta diz para NÃO repetir. Planilha que falha depois da fila não desfaz nada: responde dizendo para NÃO
@@ -44,6 +51,29 @@ export async function processCancellation(
             body: { code: 'UNKNOWN_ERROR', message: `Erro ao registrar o cancelamento (${faltaConfiguracao}).` },
             status: 500,
         };
+    }
+
+    if (opcoes.barrarDuplicado) {
+        const pedido = String(payload['Número do pedido (Shopify)'] ?? '');
+        try {
+            const existente = await solicitacaoRecenteNoRegistro('CANCELAMENTO', brand, pedido);
+            if (existente) {
+                console.log(`${LOG} Cancelamento duplicado barrado (${brand}, pedido ${existente.pedido})`);
+                return {
+                    body: {
+                        code: 'DUPLICATE_CANCELLATION',
+                        message: `Já existe um cancelamento para o pedido ${existente.pedido} feito por ${existente.responsavel} em ${formatarCarimboSP(new Date(existente.solicitadoEm))}`,
+                    },
+                    status: 200,
+                };
+            }
+        } catch (erro) {
+            console.error(`${LOG} Falha ao consultar as solicitações recentes (${brand}):`, erro);
+            return {
+                body: { code: 'UNKNOWN_ERROR', message: 'Não foi possível consultar as solicitações recentes — nada foi registrado. Tente novamente.' },
+                status: 503,
+            };
+        }
     }
 
     const idSolicitacao = crypto.randomUUID();

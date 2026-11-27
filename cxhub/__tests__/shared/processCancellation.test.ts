@@ -109,7 +109,7 @@ describe('processCancellation (registro na fila do Metabase e na planilha)', () 
         expect(casoEnfileirado()).toMatchObject({ responsavel: 'Bot', tratativa: 'Reembolso' });
     });
 
-    it('não tem dedup — o workflow também não tinha', async () => {
+    it('sem a trava não tem dedup — o workflow também não tinha', async () => {
         await processCancellation('kokeshi', PAYLOAD, { agora: AGORA });
 
         expect(buscar).not.toHaveBeenCalled();
@@ -231,6 +231,41 @@ describe('processCancellation (registro na fila do Metabase e na planilha)', () 
             expect(body.message).toContain(citado);
             expect(enfileirar).not.toHaveBeenCalled();
             expect(planilhas).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('cancelamento duplicado (REGISTRAR_FALHA_DA_TELA, 2026-11-27)', () => {
+        const DUPLICATA = { idSolicitacao: 'id-0', pedido: '220183', responsavel: 'Ana', solicitadoEm: '2026-10-27T12:00:00Z' };
+
+        it('o mesmo pedido nas últimas 24 h ⇒ DUPLICATE_CANCELLATION, sem fila e sem planilha', async () => {
+            buscar.mockResolvedValue(DUPLICATA);
+
+            const { body, status } = await processCancellation('kokeshi', PAYLOAD, { agora: AGORA, barrarDuplicado: true });
+
+            expect(buscar).toHaveBeenCalledWith('CANCELAMENTO', 'kokeshi', '220183');
+            expect(status).toBe(200);
+            expect(body).toEqual({
+                code: 'DUPLICATE_CANCELLATION',
+                message: 'Já existe um cancelamento para o pedido 220183 feito por Ana em 27/10/2026 09:00:00',
+            });
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(planilhas).not.toHaveBeenCalled();
+        });
+
+        it('sem cancelamento recente ⇒ registra como sempre', async () => {
+            const { body } = await processCancellation('kokeshi', PAYLOAD, { agora: AGORA, barrarDuplicado: true });
+
+            expect(body.code).toBe('SUCCESS');
+            expect(enfileirar).toHaveBeenCalledTimes(1);
+        });
+
+        it('o dedup fora do ar ⇒ 503, nada registrado (repetir é seguro)', async () => {
+            buscar.mockRejectedValue(new Error('Metabase não respondeu'));
+
+            const { status } = await processCancellation('kokeshi', PAYLOAD, { agora: AGORA, barrarDuplicado: true });
+
+            expect(status).toBe(503);
+            expect(enfileirar).not.toHaveBeenCalled();
         });
     });
 });

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from '../../../../../api/next-server';
 import type { CancellationPayload, CancellationResponse } from '../../../../shared/lib/cancellation/index';
 import type { SupportedBrand } from '../../../../shared/lib/constants';
 import { processCancellation } from '../../../../shared/lib/cancellation/processCancellation';
+import { registrarFalhaDaTela } from '../../../../shared/lib/fila/semExecucao';
 
 /**
  * A fila do Metabase (até 16 s, ADR-012) e a linha na planilha (até 15 s, ADR-010), com folga. Literal porque o Next
@@ -35,7 +36,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<Cancellat
         }
 
         // ADR-010 e ADR-012 — o CXHub entrega o caso à fila do Metabase e, logo depois, grava a linha na planilha.
-        const { body: resultado, status } = await processCancellation(brand, data);
+        // Com a trava (lida a cada chamada), o mesmo pedido não ganha um 2º cancelamento em 24 h.
+        const { body: resultado, status } = await processCancellation(brand, data, { barrarDuplicado: registrarFalhaDaTela() });
         return NextResponse.json(resultado, { status });
     } catch (error) {
         console.error('[Cancellation Submit API] Error:', error);

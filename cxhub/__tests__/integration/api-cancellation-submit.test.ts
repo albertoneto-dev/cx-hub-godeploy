@@ -47,7 +47,7 @@ describe('POST /api/cancellation/submit', () => {
         expect(await res.json()).toEqual(resposta);
         expect(processCancellationMock).toHaveBeenCalledTimes(1);
         // Sem opções: o prazo da fila é o padrão.
-        expect(processCancellationMock).toHaveBeenCalledWith('lescent', SAMPLE_CANCELLATION_DATA);
+        expect(processCancellationMock).toHaveBeenCalledWith('lescent', SAMPLE_CANCELLATION_DATA, { barrarDuplicado: false });
         expect(fetchSpy).not.toHaveBeenCalled();
     });
 
@@ -61,7 +61,7 @@ describe('POST /api/cancellation/submit', () => {
         const res = await postar({ brand: 'lescent', data: SAMPLE_CANCELLATION_DATA, assincrono: 'true' });
 
         expect(res.status).toBe(200);
-        expect(processCancellationMock).toHaveBeenCalledWith('lescent', SAMPLE_CANCELLATION_DATA);
+        expect(processCancellationMock).toHaveBeenCalledWith('lescent', SAMPLE_CANCELLATION_DATA, { barrarDuplicado: false });
     });
 
     it('falha do processCancellation volta com o status e o corpo dele', async () => {
