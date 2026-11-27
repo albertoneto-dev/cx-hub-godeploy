@@ -157,7 +157,7 @@ describe('sqlDoHistoricoDeReenvios', () => {
         // A Denavita é DV na base, embora o sufixo do pedido seja DN.
         expect(sql).toContain("sigla = 'DV'");
         expect(sql).toContain("chave_unica not like 'cxhub|%'");
-        expect(sql).toContain("regexp_replace(numero_pedido, '[^0-9]', '', 'g') = '1607929'");
+        expect(sql).toContain("(regexp_replace(coalesce(numero_pedido, ''), '[^0-9]', '', 'g') = '1607929' and not (coalesce(numero_pedido, '') ~* 'GC[0-9]'))");
         expect(sql).toContain(`limit ${LIMITE_DO_HISTORICO}`);
         // Sem `?`: o JDBC do Metabase o leria como parâmetro.
         expect(sql).not.toContain('?');

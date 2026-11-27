@@ -1,6 +1,6 @@
 import type { CosmosCarrier, CosmosDetailedOrder, CosmosOrder } from '../../../shared/types/index';
-import { sanitizeOrderId } from '../../../shared/lib/cosmos/index';
 import { isCepValido } from '../../../shared/lib/format';
+import { ehReenvioDoPedidoNoCosmos, lerNumeroDaLoja } from '../../../shared/lib/pedido/numeroDaLoja';
 import type {
     CosmosBillingAddressInput,
     CosmosCustomerInput,
@@ -55,17 +55,23 @@ export function buildCancelReason(request: ResendCancelRequest): string {
 
 /**
  * Reenvios de um pedido original. O Cosmos numera como `{external_id do original}-R-{n}`, e o original tem
- * os dois formatos que o `getCosmosOrder` já casa (`SH<id><sigla><n?>` e `#SHOPIFY<id>`). A busca no Cosmos
- * é `ILIKE`, então a lista vem com pedidos de número parecido: é este filtro que separa.
+ * os formatos que o `getCosmosOrder` já casa (`SH<id><sigla><n?>` e `#SHOPIFY<id>`, e o `GC<id><sigla>` da
+ * Gocreators). A busca no Cosmos é `ILIKE`, então a lista vem com pedidos de número parecido: é este filtro
+ * que separa. O SH nunca casa o reenvio de um GC de mesmos dígitos, nem o contrário.
+ *
+ * Vale o nome, de qualquer origem (decisão deste app em 2026-11-27): até a v24 só contava `origin = resend`, e os
+ * reenvios GC criados pela Shopify (`origin = shopify`, 370 da Barbour's em 25/11, como o `GC107465BB-R-1`) ficavam de
+ * fora. Nenhum `SH…-R-n` teve outra origem desde 01/11, então no SH nada muda na prática. A `marca` só completa a
+ * sigla de um GC digitado sem ela.
  */
-export function matchResendsOfOrder<T extends Pick<CosmosOrder, 'external_id' | 'origin'>>(
+export function matchResendsOfOrder<T extends Pick<CosmosOrder, 'external_id'>>(
     orders: T[],
     orderId: string,
+    marca?: string,
 ): T[] {
-    const id = sanitizeOrderId(orderId);
-    if (!id) return [];
-    const pattern = new RegExp(`^(SH${id}[a-zA-Z]{2}\\d*|#SHOPIFY${id})-R-\\d+$`);
-    return orders.filter((order) => order.origin === 'resend' && pattern.test(order.external_id));
+    const numero = lerNumeroDaLoja(orderId, marca);
+    if (!numero) return [];
+    return orders.filter((order) => ehReenvioDoPedidoNoCosmos(order.external_id, numero));
 }
 
 /** `id` interno do Cosmos (só dígitos), ou `null`. */

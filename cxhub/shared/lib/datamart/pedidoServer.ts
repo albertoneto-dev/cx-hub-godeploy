@@ -1,5 +1,6 @@
 import type { MarcaSemCosmosComPlanilha } from '../constants';
 import { consultarDataMart, literalSql, METABASE_TIMEOUT_MS } from '../metabase/index';
+import { INICIO_DOS_PEDIDOS_GC } from '../pedido/numeroDaLoja';
 import { pedidoEscolhidoNoTiny } from './pedido';
 import type {
     Leitura,
@@ -61,19 +62,41 @@ export interface DepsDaLeitura {
 
 // ── O SQL ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** As remessas do pedido, na ordem de criação (a primeira é a original). Medida: 0,03 s. */
+/**
+ * O `numero` das leituras é só os dígitos no SH e o nome inteiro no pedido da Gocreators (`GC104306YE`,
+ * `numeroDasLeituras`). O GC tem outro `order_number` (o interno da Shopify) e, na Intelipost, outro
+ * `shopify_order_number`: os dois são lidos pelo nome (decisão deste app em 2026-11-27).
+ */
+const ehNomeDeGc = (numero: string) => /^GC\d{1,12}[A-Z]{2}$/.test(numero);
+
+/**
+ * O pedido na `fct_shopify_orders`: o SH pelo índice de `(brand, order_number)`, numérico e sem aspas; o GC pelo
+ * `order_name`, que não tem índice, com a marca e o `created_at` desde o primeiro GC cortando a tabela pelos índices
+ * deles (0,5 s com a base aquecida e 2,6 s fria, medido em 26/11).
+ */
+function filtroNaShopify(marca: MarcaSemCosmosComPlanilha, numero: string): string {
+    return ehNomeDeGc(numero)
+        ? `brand = ${literalSql(marca)} and order_name = ${literalSql(numero)} and created_at >= ${literalSql(INICIO_DOS_PEDIDOS_GC)}`
+        : `brand = ${literalSql(marca)} and order_number = ${numero}`;
+}
+
+/**
+ * As remessas do pedido, na ordem de criação (a primeira é a original). Medida: 0,03 s. O GC vai pelo
+ * `sales_order_number`, que também tem índice.
+ */
 export function sqlDaIntelipost(marca: MarcaSemCosmosComPlanilha, numero: string): string {
+    const filtro = ehNomeDeGc(numero) ? `sales_order_number = ${literalSql(numero)}` : `shopify_order_number = ${literalSql(numero)}`;
     return `select invoice_number, origin_state_code, external_erp_id, dispatched_at, delivered_date, coalesce(track_code, '') <> '' as tem_rastreio
 from gold.fct_intelipost_orders
-where shopify_order_number = ${literalSql(numero)} and brand_code = ${literalSql(marca)}
+where ${filtro} and brand_code = ${literalSql(marca)}
 order by created_iso`;
 }
 
-/** O pedido na Shopify; o `order_number` é numérico, então vai sem aspas (`numero` já vem só com dígitos). */
+/** O pedido na Shopify (`filtroNaShopify`). */
 export function sqlDaShopify(marca: MarcaSemCosmosComPlanilha, numero: string): string {
     return `select order_id::text, created_at, value_total, value_shipment, cancelled_at is not null as cancelado, coalesce(track_code, '') <> '' as tem_rastreio
 from gold.fct_shopify_orders
-where brand = ${literalSql(marca)} and order_number = ${numero}
+where ${filtroNaShopify(marca, numero)}
 order by order_id desc limit 1`;
 }
 
@@ -81,7 +104,7 @@ order by order_id desc limit 1`;
 export function sqlDasExplodidas(marca: MarcaSemCosmosComPlanilha, numero: string): string {
     return `select e.source_sku, e.effective_sku, e.is_kit_component, e.qty_per_kit, e.component_units, e.allocated_revenue
 from gold.vw_shopify_order_items_exploded_priced_enriched e
-where e.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(marca)} and order_number = ${numero} order by order_id desc limit 1)
+where e.order_id = (select order_id from gold.fct_shopify_orders where ${filtroNaShopify(marca, numero)} order by order_id desc limit 1)
 order by e.line_item_id, e.effective_sku`;
 }
 
@@ -371,7 +394,8 @@ async function lerNota(
 }
 
 /**
- * Lê o pedido no Data Mart. `numero` é só os dígitos (quem chama já extraiu de `SH1731559AP`); `prazo` é o instante-limite
+ * Lê o pedido no Data Mart. `numero` é só os dígitos (quem chama já extraiu de `SH1731559AP`), ou o nome inteiro do
+ * pedido da Gocreators (`GC104306YE`, `numeroDasLeituras`); `prazo` é o instante-limite
  * (`Date.now()` + o que a rota pode gastar). Etapa 1, em paralelo: Intelipost, Shopify e explodidas. Só na Ápice, depois:
  * o pedido no Tiny (etapa 2) e a NF dele (etapa 3), que dependem das anteriores.
  */
@@ -384,7 +408,7 @@ export async function lerPedidoNoDataMart(
     const agora = deps.agora ?? Date.now;
     const comTiny = marca === 'apice';
 
-    if (!/^\d{1,12}$/.test(numeroDoPedido)) {
+    if (!/^\d{1,12}$/.test(numeroDoPedido) && !ehNomeDeGc(numeroDoPedido)) {
         const invalida = { ok: false, motivo: 'número do pedido inválido' } as const;
         return {
             marca,

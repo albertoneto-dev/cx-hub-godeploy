@@ -1,6 +1,6 @@
 import { ehMarcaSemCosmosComPlanilha } from '../constants';
 import { lerNfForaDoDataMart } from './nfForaDoDataMartServer';
-import { dataMartDeuANf, derivarContextoDoPedido, digitosDoPedido, nfAchadaForaDoDataMart } from './pedido';
+import { dataMartDeuANf, derivarContextoDoPedido, nfAchadaForaDoDataMart, numeroDasLeituras } from './pedido';
 import { lerPedidoNoDataMart } from './pedidoServer';
 import type { Conferencia, LeiturasDaNfForaDoDataMart } from './pedidoTipos';
 
@@ -51,7 +51,8 @@ export async function conferirPedidoNoDataMart(
     prazo: number,
 ): Promise<Conferencia> {
     if (!ehMarcaSemCosmosComPlanilha(marca)) return { tipo: 'nao_se_aplica' };
-    const numero = digitosDoPedido(numeroPedido);
+    // Os dígitos no SH; o GC inteiro (`GC104306YE`), que as leituras buscam pelo nome (decisão de 2026-11-27).
+    const numero = numeroDasLeituras(numeroPedido, marca);
     if (!numero) return { tipo: 'nao_conferido', motivo: 'o número do pedido não dá para consultar no Data Mart' };
     try {
         const leituras = await lerPedidoNoDataMart(marca, numero, prazo);

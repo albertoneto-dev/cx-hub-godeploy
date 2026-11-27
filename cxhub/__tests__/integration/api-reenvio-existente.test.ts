@@ -10,6 +10,7 @@ import { createRequest } from '../helpers/api-test-utils';
 
 const METABASE = 'https://metabase.test';
 const FILA = 'https://cx-hub.test';
+const INVALIDO = 'Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito (o da Gocreators, como GC107465BB).';
 
 type Consulta = 'dedup' | 'lista' | 'historico';
 
@@ -131,6 +132,38 @@ describe('GET /api/reenvio/existente', () => {
         expect(corpo.reenvios).toEqual([expect.objectContaining({ fonte: 'cxhub', id: 'caso-fila', situacaoNaFila: 'pendente' })]);
     });
 
+    describe('pedido da Gocreators (decisão de 2026-11-27)', () => {
+        const hoje = () => new Date().toISOString();
+        const casoNaFila = (id: string, numero: string) => ({
+            id_solicitacao: id, tipo: 'REENVIO', marca: 'barbours', numero_pedido: numero, criado_em: hoje(),
+            responsavel: 'Bia', situacao: 'pendente', motivo: 'Extravio',
+        });
+
+        it('o GC responde com o nome inteiro, e o caso do #n de mesmos dígitos não barra nem aparece', async () => {
+            instalarFetch();
+            casosNaFila = [casoNaFila('caso-sh', '#107465')];
+
+            const corpo = await (await consultar('marca=barbours&pedido=gc107465bb')).json();
+
+            expect(corpo).toMatchObject({ code: 'SUCCESS', marca: 'barbours', pedido: 'GC107465BB', bloqueiaNovo: false, reenvios: [] });
+            // A lista junta à raw só os casos da fila do mesmo pedido: o do #107465 nem entra no SQL.
+            expect(consultas.find((c) => c.tipo === 'lista')!.sql).not.toContain('caso-sh');
+            for (const c of consultas) expect(c.sql, c.tipo).toContain("= '107465' and coalesce(");
+            expect(consultas.find((c) => c.tipo === 'historico')!.sql).toContain("= '107465' and coalesce(numero_pedido, '') ~* 'GC[0-9]')");
+        });
+
+        it('o GC na fila barra o GC, e não o SH de mesmos dígitos', async () => {
+            instalarFetch();
+            casosNaFila = [casoNaFila('caso-gc', 'GC107465BB')];
+
+            const doGc = await (await consultar('marca=barbours&pedido=GC107465BB')).json();
+            expect(doGc).toMatchObject({ pedido: 'GC107465BB', bloqueiaNovo: true, bloqueadoPor: { idSolicitacao: 'caso-gc' } });
+
+            const doSh = await (await consultar('marca=barbours&pedido=107465')).json();
+            expect(doSh).toMatchObject({ pedido: '107465', bloqueiaNovo: false, bloqueadoPor: null });
+        });
+    });
+
     it('a gold que falha deixa a resposta de pé, com historicoLido false', async () => {
         instalarFetch();
         linhasDe.historico = new Error('rede');
@@ -148,9 +181,11 @@ describe('GET /api/reenvio/existente', () => {
         for (const [query, mensagem] of [
             ['pedido=123', 'Informe a marca.'],
             ['marca=gocase&pedido=123', 'Marca inválida: gocase.'],
-            ['marca=apice', 'Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito.'],
-            ['marca=apice&pedido=abc', 'Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito.'],
-            ["marca=apice&pedido=1'2", 'Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito.'],
+            ['marca=apice', INVALIDO],
+            ['marca=apice&pedido=abc', INVALIDO],
+            ["marca=apice&pedido=1'2", INVALIDO],
+            // O reenvio GC não é um pedido, e cair nos dígitos acharia o #n de mesmo número (decisão de 2026-11-27).
+            ['marca=barbours&pedido=GC107465BB-R-1', INVALIDO],
         ]) {
             const res = await consultar(query);
             expect(res.status, query).toBe(400);

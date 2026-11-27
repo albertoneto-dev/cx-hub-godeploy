@@ -8,6 +8,7 @@ import {
 import { ehMarcaCxHub } from '../../../../shared/lib/constants';
 import { FilaError } from '../../../../shared/lib/fila/index';
 import { MetabaseError, metabaseConfigurado } from '../../../../shared/lib/metabase/index';
+import { lerNumeroDaLoja, textoDoPedido } from '../../../../shared/lib/pedido/numeroDaLoja';
 
 /** O mesmo formato de pedido do `GET /api/solicitacoes`: letras, dígitos, `#` e `-`, com ao menos um dígito. */
 const PEDIDO = /^(?=.*\d)[A-Za-z0-9#-]{1,40}$/;
@@ -27,8 +28,12 @@ export async function GET(request: NextRequest): Promise<NextResponse<ReenvioExi
     if (!marca) return resposta(400, 'INVALID_REQUEST', 'Informe a marca.');
     if (!ehMarcaCxHub(marca)) return resposta(400, 'INVALID_REQUEST', `Marca inválida: ${marca}.`);
     const pedido = (params.get('pedido') ?? '').trim();
-    if (!PEDIDO.test(pedido)) {
-        return resposta(400, 'INVALID_REQUEST', 'Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito.');
+    // O GC só vale no formato `GC{n}{sigla}` (ou sem a sigla): o `GC107465BB-R-1` é um reenvio, não um pedido, e cair
+    // nos dígitos acharia o `#n` de mesmo número (decisão deste app em 2026-11-27).
+    const numero = PEDIDO.test(pedido) ? lerNumeroDaLoja(pedido, marca) : null;
+    if (!numero) {
+        return resposta(400, 'INVALID_REQUEST', 'Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito '
+            + '(o da Gocreators, como GC107465BB).');
     }
 
     if (!metabaseConfigurado()) {
@@ -41,7 +46,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<ReenvioExi
             code: 'SUCCESS',
             message: mensagemDosReenvios(resultado),
             marca,
-            pedido: pedido.replace(/\D/g, ''),
+            // Os dígitos no SH, como até a v24; o GC inteiro, com a sigla (`GC107465BB`).
+            pedido: textoDoPedido(numero),
             ...resultado,
         });
     } catch (erro) {

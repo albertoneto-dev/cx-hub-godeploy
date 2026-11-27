@@ -273,8 +273,9 @@ export class DataMartFalso {
   // Um pedido da Shopify no Data Mart (a loja é o brand: "lescent", "barbours", ...). O kit leva os itens, que vão para
   // a tabela explodida como no dbt (a linha que não é kit entra lá como ela mesma); `semExplosao` é o pedido das últimas
   // horas, que o dbt ainda não explodiu.
+  // `nome` é o order_name (por padrão, SH<numero>): o pedido da Gocreators tem o nome GC<n>XX e outro order_number.
   async pedidoShopify(p: {
-    loja: string; numero: number; total: number; frete: number; desconto: number; semExplosao?: boolean;
+    loja: string; numero: number; total: number; frete: number; desconto: number; semExplosao?: boolean; nome?: string;
     itens: Array<{
       id: number; sku: string; nome?: string; quantidade: number; preco: number;
       componentes?: Array<{ sku: string; quantidade: number; alocado?: number }>;
@@ -283,7 +284,7 @@ export class DataMartFalso {
     pedidos++;
     await this.pg.query(
       "insert into gold.fct_shopify_orders values ($1, $2, $3, $4, now(), $5, $6, $7)",
-      [pedidos, p.numero, `SH${p.numero}`, p.loja, p.total, p.frete, p.desconto],
+      [pedidos, p.numero, p.nome ?? `SH${p.numero}`, p.loja, p.total, p.frete, p.desconto],
     );
     for (const i of p.itens) {
       await this.pg.query("insert into gold.fct_shopify_order_items values ($1, $2, $3, $4, $5, $6, $7)", [pedidos, i.id, i.sku, i.nome ?? `Produto ${i.sku}`, null, i.quantidade, i.preco]);

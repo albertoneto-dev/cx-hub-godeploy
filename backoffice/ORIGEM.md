@@ -57,6 +57,11 @@ As regras de negócio estão no `CLAUDE.md` e no `README.md` de lá, e continuam
   `GET /api/v1/form-data` vem da cache do `env.DB` (`api/cacheDaRotaDados.ts`, renovada pelo cron a cada 5 min), a
   mesma que o formulário e o bot do CX Hub usam. Sem fonte, a busca é a de lá. A validação da lista e os 5 min em
   memória ficaram iguais.
+- **O pedido da Gocreators** (`servidor/pedido.ts`, 2026-11-27, decisão do usuário). Lá, o `numeroDaLoja` só lia
+  `SH<n>XX` e `#n`, e o caso `GC104306BB` ficava "fora do formato da loja", sem os itens. Aqui o GC vai pelo nome
+  (`order_name`, com a marca e `created_at >= 2026-09-01`), porque o `order_number` dele é o interno da Shopify e os
+  dígitos do GC são os de outro pedido da loja. O GC sem a sigla ganha a da loja. Teste novo em `testes/api.test.ts`; a
+  fixture `pedidoShopify` de `testes/ambiente.ts` ganhou o `nome`.
 
 ## Testes
 

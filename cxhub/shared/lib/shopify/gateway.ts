@@ -1,6 +1,7 @@
 import type { ShopifyOrder } from '../../types/index';
 import { ehMarcaCxHub, type MarcaCxHub } from '../constants';
 import { normalizarNf } from '../nfDaVenda';
+import { pareceGc } from '../pedido/numeroDaLoja';
 
 /**
  * Leitura do pedido de **toda** marca do CX Hub na Shopify pelo **gateway de integrações** (o GoAccess, desde
@@ -163,15 +164,16 @@ export interface PedidoDoGateway {
 
 /**
  * O pedido do nome procurado entre os que o filtro devolveu. O filtro `name:` da Shopify é tolerante (só os dígitos
- * acham o `SH…`), então o resultado é conferido: `SH{n}{sufixo}` casa o nome exato; só dígitos casam os dígitos do nome
- * (`#1475900` ou `SH1475900AP`). Nenhum ⇒ `null`.
+ * acham o `SH…`), então o resultado é conferido: `SH{n}{sufixo}` e `GC{n}{sufixo}` casam o nome exato; só dígitos casam
+ * os dígitos do nome (`#1475900` ou `SH1475900AP`), mas nunca um pedido da Gocreators (`GC109828LC` tem os dígitos do
+ * `#109828` da Lescent, e é outro pedido: decisão deste app em 2026-11-27). Nenhum ⇒ `null`.
  */
 export function escolherPedido(pedidos: PedidoDoGateway[], procurado: string): PedidoDoGateway | null {
     const alvo = procurado.trim().toUpperCase();
     const soDigitos = /^\d+$/.test(alvo);
     return pedidos.find((p) => {
         const nome = (p.name ?? '').trim().toUpperCase();
-        return soDigitos ? nome.replace(/\D/g, '') === alvo : nome === alvo;
+        return soDigitos ? nome.replace(/\D/g, '') === alvo && !pareceGc(nome) : nome === alvo;
     }) ?? null;
 }
 

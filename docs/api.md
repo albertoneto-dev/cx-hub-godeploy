@@ -218,9 +218,11 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   repetia, e 8 pedidos ficaram com dois reenvios ativos (o Lescent 716185 com três). O dedup não via o primeiro, que não
   tinha registro. Agora, com automação, o `/api/sheets/append` e o bot perguntam antes ao Cosmos
   (`reenvioRecenteNoCosmos`, junto do dedup e no mesmo prazo do `POST /resend`):
-  - `GET /organizations/{org}/orders?external_id=<dígitos>&origin=resend&per_page=100`, com o token de quem pede, até
-    5 s por tentativa, e uma segunda tentativa quando o Cosmos não responde, cai ou dá 5xx/429;
-  - conta o reenvio do pedido (o mesmo filtro `SH<n><sigla>-R-<k>` / `#SHOPIFY<n>-R-<k>` da gestão de reenvios)
+  - `GET /organizations/{org}/orders?external_id=<dígitos, ou o GC inteiro>&per_page=100`, com o token de quem pede,
+    até 5 s por tentativa, e uma segunda tentativa quando o Cosmos não responde, cai ou dá 5xx/429 (o `origin=resend`
+    saiu em 2026-11-27: veja "Pedidos da Gocreators", abaixo);
+  - conta o reenvio do pedido (o mesmo filtro `SH<n><sigla>-R-<k>` / `#SHOPIFY<n>-R-<k>` / `GC<n><sigla>-R-<k>` da
+    gestão de reenvios, de qualquer origem)
     criado nas últimas 24 h e não cancelado. Com um, a solicitação é registrada como automação e sem `POST`: `SUCCESS`,
     com a mensagem "O reenvio <SH…-R-n> já estava no Cosmos (nenhum outro foi criado)." e a nota
     `[REENVIO JÁ EXISTIA NO COSMOS: …]` na frente das observações da linha (a fila não leva as observações);
@@ -235,6 +237,36 @@ quer dizer "registrado, não repita", e o chamador depende disso.
   O `POST /resend` continua sem retentativa. A consulta gasta do mesmo prazo, então, com o Cosmos lento, sobra menos
   tempo para o `POST`; a repetição, que antes duplicava, agora acha o reenvio. Código:
   `cxhub/modules/reenvios/actions/reenvioRecenteNoCosmos.ts`.
+- **Pedidos da Gocreators (2026-11-27, decisão deste app).** Os pedidos da Gocreators estão na Shopify de cada marca
+  com o nome `GC{n}{sigla}` (`GC104306BB`, `GC109828LC`), em Aua, Barbour's, Kokeshi, Lescent, Rituária e Yenzah, desde
+  13/10/2026. Até a v24 o CX Hub reduzia o pedido aos dígitos em toda parte, e o GC achava o pedido errado: os dígitos
+  do GC são os de outro pedido da mesma loja (em 26/11, o `GC104306BB` devolvia o `#104306` de 2024, e o `GC109828LC`, o
+  `#109828` de 10/2025). O `order_number` do GC é o interno da Shopify (2901055), e o `external_id` dele no Cosmos é o
+  GC inteiro (`origin = gocreators`). Agora há um leitor só, `lerNumeroDaLoja` (`cxhub/shared/lib/pedido/numeroDaLoja.ts`),
+  que devolve `{ prefixo: 'SH' | 'GC', digitos, sufixo }`:
+  - **GC** é o texto com `GC` seguido de dígito, no formato `GC{n}` com ou sem a sigla (sem ela, vale a da marca). O GC
+    fora do formato (`GC107465BB-R-1`, que é um reenvio) não é procurado, em vez de cair nos dígitos;
+  - **SH** é o resto com dígito: `SH…XX`, `#n`, `n`, `#SHOPIFYn`. Só os dígitos continuam significando o SH/`#n`;
+  - **Shopify:** o GC por `name:GC…` e nome exato; os dígitos nunca escolhem um nome que comece com GC. No Data Mart, o GC
+    pelo `order_name`, com a marca e `created_at >= 2026-09-01` (o `order_name` não tem índice: 0,5 a 2,6 s);
+  - **Cosmos:** o GC por `external_id=GC…` e casado pelo nome inteiro; os reenvios, `GC…-R-n`. O reenvio criado pelo
+    `POST /resend` a partir do GC já sai `GC…-R-n`;
+  - **reenvios de qualquer origem:** os reenvios GC criados pela Shopify têm `origin = shopify` (370 da Barbour's em
+    25/11, como o `GC107465BB-R-1`), e o filtro `origin = resend` os perdia. Vale o nome, no SH e no GC (nenhum `SH…-R-n`
+    teve outra origem desde 01/11). Decisão do usuário em 27/11;
+  - **NF:** a Intelipost (Data Mart e ao vivo) pelo `sales_order_number = 'GC…'` e o metacampo pelo nome do GC. O
+    `shopify_order_number` do GC na Intelipost é o interno da Shopify, e os dígitos achariam a NF do `#n`. Os GC não
+    têm envio na Intelipost e, no Cosmos, estão em `status = erp` sem `invoice_number` desde 21/10, mas têm a NF no
+    metacampo `custom.nf_numero` da Shopify (conferido ao vivo na v25, em 27/11: os 4 GC testados tinham);
+  - **o reembolso GC precisa da NF** (decisão do usuário em 27/11), em toda marca: sem a NF que veio nem a achada,
+    `422` e nada gravado (`recusaDoReembolsoGcSemNf`). O reenvio GC não precisa: na Yenzah, a conferência da ADR-018 não
+    o dá como `ausente`, e sim `desconhecida` com o motivo `pedido_gocreators` e a nota
+    `[NF NÃO CONFERIDA: PEDIDO DA GOCREATORS SEM NF]`;
+  - **dedup e listas:** a fila continua consultada pelos dígitos (o contrato do `/api/v1` não mudou), e o resultado é
+    filtrado pelo pedido; a raw, a gold, o histórico e a planilha comparam os dígitos e o lado (GC ou não) com o
+    `sqlDoMesmoPedido`. O GC e o SH de mesmos dígitos nunca se barram;
+  - **`/api/reenvio/existente`:** o `pedido` da resposta é o GC inteiro no GC (os dígitos no SH, como antes);
+  - **backoffice:** os itens do GC vêm pelo `order_name` (`backoffice/servidor/pedido.ts`).
 - O `COSMOS_RESEND_SIMULADO` não vale aqui: este app é a produção. Para ensaiar, use o `testMode`.
 - Não existe `maxDuration`. O bot continua calculando o orçamento dele para 150 s, então quem chama precisa esperar
   pelo menos isso.
@@ -252,7 +284,7 @@ Três leituras em paralelo (`cxhub/modules/reenvios/actions/reenviosDoPedido.ts`
 
 | Leitura | De onde | O que dá |
 |---|---|---|
-| O bloqueio | `solicitacaoRecenteNoRegistro`, a mesma função do dedup do `POST /api/sheets/append` e do bot | `bloqueiaNovo` e `bloqueadoPor`: o reenvio das últimas 24 h, da mesma marca e do mesmo pedido (pelos dígitos), não cancelado, na fila ou na raw. É o `DUPLICATE_RESEND` que um reenvio novo levaria agora |
+| O bloqueio | `solicitacaoRecenteNoRegistro`, a mesma função do dedup do `POST /api/sheets/append` e do bot | `bloqueiaNovo` e `bloqueadoPor`: o reenvio das últimas 24 h, da mesma marca e do mesmo pedido (pelos dígitos e pelo lado: o GC só com o GC), não cancelado, na fila ou na raw. É o `DUPLICATE_RESEND` que um reenvio novo levaria agora |
 | O registro do CX Hub | `listarSolicitacoesNoRegistro` com o pedido: raw + fila, todo o histórico | `reenvios[]` com `fonte: "cxhub"`, sem o caso que a DAG recusou |
 | O histórico | `gold.fct_reenvio_reembolso_gobeaute`, só a `chave_unica` fora do `cxhub\|` | `reenvios[]` com `fonte: "historico"`: as linhas do Supabase, de antes do CX Hub |
 

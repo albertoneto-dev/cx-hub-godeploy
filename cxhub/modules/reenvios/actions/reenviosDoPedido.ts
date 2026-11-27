@@ -4,6 +4,7 @@ import type { MarcaCxHub } from '../../../shared/lib/constants';
 import { listarSolicitacoesNoRegistro, solicitacaoRecenteNoRegistro } from '../../../shared/lib/fila/index';
 import { formatarCarimboSP } from '../../../shared/lib/format';
 import { consultarDataMart, literalSql } from '../../../shared/lib/metabase/index';
+import { lerNumeroDaLoja, sqlDoMesmoPedido, textoDoPedido } from '../../../shared/lib/pedido/numeroDaLoja';
 import type { SolicitacaoListada } from '../../../shared/lib/solicitacoes/types';
 
 /**
@@ -77,7 +78,10 @@ export interface ReenvioExistenteResponse extends Partial<ReenviosDoPedido> {
     code: ReenvioExistenteCode;
     message: string;
     marca?: MarcaCxHub;
-    /** Os dígitos do pedido: é por eles que o registro e o histórico são comparados. */
+    /**
+     * O pedido como o registro e o histórico o comparam: os dígitos no SH (como até a v24) e o GC inteiro
+     * (`GC107465BB`), que só casa com GC (decisão deste app em 2026-11-27).
+     */
     pedido?: string;
 }
 
@@ -93,7 +97,11 @@ const PADRAO: DepsDosReenviosDoPedido = {
     consultar: (sql) => consultarDataMart(sql),
 };
 
-const digitos = (pedido: string) => pedido.replace(/\D/g, '');
+/** O pedido nos logs: os dígitos no SH e o GC inteiro. */
+function noLog(marca: MarcaCxHub, pedido: string): string {
+    const numero = lerNumeroDaLoja(pedido, marca);
+    return numero ? textoDoPedido(numero) : pedido;
+}
 
 const texto = (valor: unknown): string | null => {
     const limpo = valor === null || valor === undefined ? '' : String(valor).trim();
@@ -101,9 +109,9 @@ const texto = (valor: unknown): string | null => {
 };
 
 /**
- * As linhas do histórico do pedido na gold: as do tipo, da sigla da marca e dos dígitos do pedido que não vieram do
- * CX Hub. O `numero_pedido` do Supabase tem de tudo (`716185`, `#716185`, `716185 Concluído`, `SH716185KS`), e só os
- * dígitos o comparam. A data sai como texto, sem passar pelo fuso do Metabase: a coluna já é hora de São Paulo.
+ * As linhas do histórico do pedido na gold: as do tipo, da sigla da marca e do pedido que não vieram do CX Hub. O
+ * `numero_pedido` do Supabase tem de tudo (`716185`, `#716185`, `716185 Concluído`, `SH716185KS`), e os dígitos o
+ * comparam, com o lado (GC ou não): o `GC107465BB` não casa o `#107465`, nem o contrário. A data sai como texto, sem passar pelo fuso do Metabase: a coluna já é hora de São Paulo.
  */
 export function sqlDoHistoricoDeReenvios(marca: MarcaCxHub, pedido: string): string {
     return `select chave_unica, numero_pedido,
@@ -115,7 +123,7 @@ from ${TABELA_GOLD}
 where tipo = 'REENVIO'
   and sigla = ${literalSql(SIGLA_DA_MARCA[marca])}
   and chave_unica not like 'cxhub|%'
-  and regexp_replace(numero_pedido, '[^0-9]', '', 'g') = ${literalSql(digitos(pedido))}
+  and ${sqlDoMesmoPedido('numero_pedido', lerNumeroDaLoja(pedido, marca))}
 order by data_solicitacao desc, chave_unica desc
 limit ${LIMITE_DO_HISTORICO}`;
 }
@@ -180,7 +188,7 @@ export async function reenviosDoPedido(
     if (registro.status === 'rejected') throw registro.reason;
     if (historico.status === 'rejected') {
         const motivo = historico.reason instanceof Error ? historico.reason.message : String(historico.reason);
-        console.warn(`${LOG} ${marca} ${digitos(pedido)}: o histórico da gold não respondeu — ${motivo.slice(0, 200)}`);
+        console.warn(`${LOG} ${marca} ${noLog(marca, pedido)}: o histórico da gold não respondeu — ${motivo.slice(0, 200)}`);
     }
 
     const recente = bloqueio.value;

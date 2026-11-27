@@ -1,6 +1,7 @@
 import type { MarcaSemCosmosComPlanilha } from '../../../shared/lib/constants';
 import { motivosDoNaoConferido, nfDiverge, notaDeNaoConferido } from '../../../shared/lib/datamart/pedido';
 import type { CampoConferido, Conferencia, MotivoPorCampo } from '../../../shared/lib/datamart/pedidoTipos';
+import { ehGc, lerNumeroDaLoja, textoDoPedido } from '../../../shared/lib/pedido/numeroDaLoja';
 import { normalizarChavePix } from '../../../shared/lib/pix';
 import type { RefundSubmissionData } from '../types/index';
 
@@ -72,6 +73,21 @@ export function aplicarConferenciaAoReembolso(
 
     if (naoConferidos.length > 0) novo.notes = comNota(data.notes, naoConferidos, motivosDoNaoConferido(contexto));
     return { tipo: 'aplicado', data: novo, nfDivergente, naoConferidos };
+}
+
+/**
+ * O reembolso de um pedido da Gocreators (`GC{n}{sigla}`) só é registrado com a NF de venda, em toda marca (decisão do
+ * usuário em 2026-11-27: "pra reembolso precisa da NF"). Vale a NF que sobrou depois das leituras: a que veio de quem
+ * chamou, a do Data Mart, a do metacampo da Shopify ou a da Intelipost ao vivo. Sem nenhuma, a mensagem da recusa
+ * (422, nada é gravado); com NF, ou fora do GC, `null`. Os GC não têm envio na Intelipost, mas têm a NF no metacampo da
+ * Shopify (conferido ao vivo em 27/11): o normal é achá-la. O reenvio do GC não passa por aqui: é registrado sem a NF.
+ */
+export function recusaDoReembolsoGcSemNf(pedido: string, marca: string, temNf: boolean): string | null {
+    const numero = lerNumeroDaLoja(pedido, marca);
+    if (!ehGc(numero) || temNf) return null;
+    return `O pedido ${textoDoPedido(numero!)} é da Gocreators e está sem NF de venda: ela não veio na solicitação nem foi `
+        + 'achada na Intelipost ou na Shopify. O reembolso precisa da NF. Nada foi registrado. Se o pedido já foi faturado, '
+        + 'mande o número da NF, ou tente de novo em alguns minutos.';
 }
 
 /**

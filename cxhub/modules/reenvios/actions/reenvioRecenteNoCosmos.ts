@@ -1,8 +1,8 @@
 import { BRAND_TO_ORG_ID, type SupportedBrand } from '../../../shared/lib/constants';
-import { sanitizeOrderId } from '../../../shared/lib/cosmos/index';
 import { BRAND_CODE_NA_INTELIPOST } from '../../../shared/lib/datamart/nfDaIntelipostServer';
 import { pedidoNaIntelipost } from '../../../shared/lib/intelipost/gateway';
 import { consultarDataMart, literalSql, METABASE_TIMEOUT_MS } from '../../../shared/lib/metabase/index';
+import { buscaNoCosmos, ehGc, lerNumeroDaLoja, textoDoPedido } from '../../../shared/lib/pedido/numeroDaLoja';
 import { matchResendsOfOrder } from './resendManagement';
 
 /**
@@ -69,9 +69,11 @@ const REENVIOS_PROCURADOS_NO_DATA_MART = 10;
  * collation não é `C`) e levou de 4,4 s a mais de 5 s pelo Metabase em 22/11.
  */
 export function sqlDoReenvioNaIntelipost(brand: SupportedBrand, numero: string, desde: Date): string {
-    const sh = pedidoNaIntelipost(brand, numero);
+    // O GC (`GC107465BB-R-1`, decisão deste app em 2026-11-27) não tem a forma `#SHOPIFY`: só o nome inteiro.
+    const original = pedidoNaIntelipost(brand, numero);
+    const gc = ehGc(lerNumeroDaLoja(numero, brand));
     const candidatos = Array.from({ length: REENVIOS_PROCURADOS_NO_DATA_MART }, (_, i) => i + 1)
-        .flatMap((k) => [`${sh}-R-${k}`, `#SHOPIFY${numero}-R-${k}`])
+        .flatMap((k) => (gc ? [`${original}-R-${k}`] : [`${original}-R-${k}`, `#SHOPIFY${numero}-R-${k}`]))
         .map(literalSql)
         .join(', ');
     return `select sales_order_number, created_iso from gold.fct_intelipost_orders
@@ -104,16 +106,20 @@ async function procurar(
     agora: Date,
     deps: DepsDoReenvioRecente,
 ): Promise<ReenvioRecente> {
-    const id = sanitizeOrderId(numeroPedido ?? '');
+    // O SH é dito pelos dígitos, como até a v24; o GC, pelo nome inteiro (decisão deste app em 2026-11-27).
+    const numero = lerNumeroDaLoja(numeroPedido, brand);
+    const id = numero ? textoDoPedido(numero) : '';
     const baseUrl = process.env.COSMOS_API_URL;
     // Sem pedido não há o que procurar, e sem token ou URL o `executarNoCosmos` recusa sozinho ("dados incompletos"),
     // sem chamar o Cosmos: nos dois casos, fica tudo como antes desta consulta.
-    if (!id || !token || !baseUrl) return { tipo: 'nenhum' };
+    if (!numero || !token || !baseUrl) return { tipo: 'nenhum' };
 
     const relogio = deps.agora ?? Date.now;
     const desde = agora.getTime() - JANELA_DO_REENVIO_RECENTE_MS;
+    // Sem o `origin=resend` desde 2026-11-27: o reenvio GC criado pela Shopify tem `origin = shopify`, e quem separa os
+    // reenvios do pedido é o nome (`matchResendsOfOrder`).
     const url = `${baseUrl}/organizations/${BRAND_TO_ORG_ID[brand]}/orders`
-        + `?external_id=${encodeURIComponent(id)}&origin=resend&per_page=100`;
+        + `?external_id=${encodeURIComponent(buscaNoCosmos(numero))}&per_page=100`;
 
     let motivo = 'o prazo acabou antes da consulta ao Cosmos';
     for (let tentativa = 1; tentativa <= TENTATIVAS_NO_COSMOS; tentativa++) {
@@ -121,7 +127,7 @@ async function procurar(
         if (restante < MIN_PRAZO_MS) break;
         const resposta = await consultarCosmos(url, token, Math.min(TETO_DA_CONSULTA_AO_COSMOS_MS, restante), deps.fetch ?? fetch);
         if (resposta.ok) {
-            const achado = maisRecente(matchResendsOfOrder(resposta.pedidos, id), desde);
+            const achado = maisRecente(matchResendsOfOrder(resposta.pedidos, id, brand), desde);
             return achado ? { tipo: 'existe', externalId: achado.external_id, criadoEm: achado.created_at, fonte: 'cosmos' } : { tipo: 'nenhum' };
         }
         motivo = resposta.motivo;
@@ -208,7 +214,7 @@ async function reenvioNoDataMart(
             .filter((l) => typeof l[0] === 'string' && typeof l[1] === 'string')
             .map((l) => ({ external_id: String(l[0]), origin: 'resend', created_at: String(l[1]) }));
         // O mesmo filtro do Cosmos, por garantia: a lista de candidatos já é só do pedido.
-        const achado = maisRecente(matchResendsOfOrder(remessas, numero), desde.getTime());
+        const achado = maisRecente(matchResendsOfOrder(remessas, numero, brand), desde.getTime());
         return achado
             ? { achado: { externalId: achado.external_id, criadoEm: achado.created_at }, motivo: 'achou' }
             : { achado: null, motivo: 'sem reenvio do pedido (ele só recebe os novos com cerca de 1 h de atraso)' };

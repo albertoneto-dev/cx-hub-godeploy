@@ -1,5 +1,6 @@
 import { SUFIXO_DO_PEDIDO, type MarcaSemCosmosComPlanilha, type SupportedBrand } from '../constants';
 import { normalizarNf } from '../nfDaVenda';
+import { lerNumeroDaLoja, nomeDoGc } from '../pedido/numeroDaLoja';
 
 /**
  * A Intelipost ao vivo pelo gateway (2026-11-19), puro: a conta de cada marca, os caminhos e a leitura da resposta. A
@@ -75,11 +76,14 @@ function siglaDoPedido(marca: MarcaComIntelipost): string {
 
 /**
  * O pedido como a Intelipost o guarda no `sales_order_number`: `SH{dígitos}{sigla}`. Só o SH da própria marca, porque
- * a conta atende mais de uma marca e só os dígitos podiam achar o envio de outra. `null` sem dígitos.
+ * a conta atende mais de uma marca e só os dígitos podiam achar o envio de outra. O pedido da Gocreators vai inteiro
+ * (`GC107465BB`, decisão deste app em 2026-11-27): os dígitos dele são os de outro pedido. `null` sem dígitos, ou com
+ * um GC fora do formato.
  */
 export function pedidoNaIntelipost(marca: MarcaComIntelipost, pedido: string | null | undefined): string | null {
-    const digitos = (pedido ?? '').replace(/\D/g, '');
-    return digitos ? `SH${digitos}${siglaDoPedido(marca)}` : null;
+    const numero = lerNumeroDaLoja(pedido, marca);
+    if (!numero) return null;
+    return numero.prefixo === 'GC' ? nomeDoGc(numero) : `SH${numero.digitos}${siglaDoPedido(marca)}`;
 }
 
 /** O caminho da busca pelo pedido (`SH…`): devolve o envio enxuto. */

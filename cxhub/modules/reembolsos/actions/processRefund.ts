@@ -19,7 +19,7 @@ import { gravarNasPlanilhas, type LinhaDaSolicitacao } from '../../../shared/lib
 import type { RefundSubmissionData, RefundSubmitResponse } from '../types/index';
 import { buildRefundRow, COLUNA_DA_CHAVE_PIX, prepararReembolso } from './buildRefundRow';
 import { casoDoReembolso } from './casoDoReembolso';
-import { aplicarConferenciaAoReembolso, chavePixDoReembolso } from './conferenciaDoReembolso';
+import { aplicarConferenciaAoReembolso, chavePixDoReembolso, recusaDoReembolsoGcSemNf } from './conferenciaDoReembolso';
 import { camposFaltandoNoReembolso } from './validateRefundBody';
 
 const LOG = '[Refund Direct]';
@@ -154,6 +154,13 @@ export async function processRefund(
             console.log(`${LOG} NF ${achada.nf} (${achada.origem}) no pedido ${data.ecommerceOrderId} (${brand}; veio "${data.invoiceNumber ?? ''}")`);
             dados = { ...dados, invoiceNumber: achada.nf };
         }
+    }
+
+    // ─── Pedido da Gocreators: o reembolso só com NF (decisão do usuário em 2026-11-27) ──────────
+    const recusaDoGc = recusaDoReembolsoGcSemNf(String(data.ecommerceOrderId), brand, !nfAusente(dados.invoiceNumber));
+    if (recusaDoGc) {
+        console.log(`${LOG} Recusado (${brand}): o pedido ${data.ecommerceOrderId} é da Gocreators e está sem NF de venda`);
+        return { body: { code: 'UNKNOWN_ERROR', message: recusaDoGc }, status: 422 };
     }
 
     // ─── Fila do Metabase ─────────────────────────────────────────────────────────────────────────

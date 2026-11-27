@@ -99,8 +99,8 @@ describe('matchResendsOfOrder', () => {
         expect(matchResendsOfOrder([{ external_id: 'SH12345LC1-R-1', origin: 'resend' }], '12345')).toHaveLength(1);
     });
 
-    it('ignora sufixo de reenvio com origem diferente de resend', () => {
-        expect(matchResendsOfOrder([{ external_id: 'SH12345LC-R-1', origin: 'internal' }], '12345')).toEqual([]);
+    it('conta o reenvio de qualquer origem: vale o nome (decisão de 2026-11-27, os GC-R-n de origin = shopify)', () => {
+        expect(matchResendsOfOrder([{ external_id: 'SH12345LC-R-1', origin: 'internal' }], '12345')).toHaveLength(1);
     });
 
     it('número sem dígitos não casa nada', () => {

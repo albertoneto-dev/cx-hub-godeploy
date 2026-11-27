@@ -3,7 +3,8 @@ import { BRAND_TO_ORG_ID, type SupportedBrand } from '../constants';
 import { KOKESHI_GIFT_SKUS } from '../productSelectionLogic';
 import { readJwtExpiry } from '../jwt';
 import { adaptCosmosOrder } from './adapter';
-import { sanitizeOrderId, enrichOrderWithProductDetails, type EnrichDeps } from './client';
+import { buscaNoCosmos, ehOPedidoNoCosmos, lerNumeroDaLoja } from '../pedido/numeroDaLoja';
+import { enrichOrderWithProductDetails, type EnrichDeps } from './client';
 
 /**
  * Acesso ao Cosmos a partir do SERVIDOR.
@@ -176,25 +177,28 @@ export async function fetchNormalizedCosmosOrder(
         const orgId = BRAND_TO_ORG_ID[brand.toLowerCase() as SupportedBrand] || brand;
         const authToken = token || await getCosmosServiceToken(deadline);
 
-        const sanitizedId = sanitizeOrderId(orderId);
-        const listUrl = `${baseUrl}/organizations/${orgId}/orders?external_id=${encodeURIComponent(sanitizedId)}`;
+        // O SH é buscado pelos dígitos e casado pela regra do n8n; o GC, pelo nome inteiro (decisão deste app em
+        // 2026-11-27: os dígitos do GC colidem com o `#n` antigo). Fora do formato, não há o que buscar.
+        const numero = lerNumeroDaLoja(orderId, brand);
+        if (!numero) {
+            console.warn(`${LOG} Número de pedido fora do formato: nada a buscar`);
+            return null;
+        }
+        const busca = buscaNoCosmos(numero);
+        const listUrl = `${baseUrl}/organizations/${orgId}/orders?external_id=${encodeURIComponent(busca)}`;
         console.log(`${LOG} Fetching orders:`, listUrl);
 
         const orders = await getJson<CosmosOrder[]>(listUrl, authToken, deadline);
         if (!Array.isArray(orders) || orders.length === 0) {
-            console.warn(`${LOG} No orders returned for external_id=${sanitizedId}`);
+            console.warn(`${LOG} No orders returned for external_id=${busca}`);
             return null;
         }
 
-        const regexPattern = new RegExp(`^SH${sanitizedId}[a-zA-Z]{2}\\d*$`);
-        const exactMatch = `#SHOPIFY${sanitizedId}`;
-        const matched = orders.find(
-            (order) => regexPattern.test(order.external_id) || order.external_id === exactMatch
-        );
+        const matched = orders.find((order) => ehOPedidoNoCosmos(order.external_id, numero));
 
         if (!matched) {
             console.warn(
-                `${LOG} No external_id matched the rule for ${sanitizedId}:`,
+                `${LOG} No external_id matched the rule for ${busca}:`,
                 orders.map((o) => o.external_id)
             );
             return null;

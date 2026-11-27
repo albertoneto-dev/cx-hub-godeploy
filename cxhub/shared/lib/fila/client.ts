@@ -1,6 +1,7 @@
 import { problemaNaAtualizacao, problemaNoCaso } from '../airflow/contrato';
 import type { AtualizacaoCxhub, CasoCxhub, TipoCasoCxhub } from '../airflow/types';
 import { valorEmReais } from '../airflow/listarCasos';
+import { lerNumeroDaLoja, mesmoPedido } from '../pedido/numeroDaLoja';
 import type { AtualizacaoNaFila, CasoAbertoNaFila, CasoNaFila, ResultadoFila, SituacaoNaFila } from './types';
 
 /**
@@ -207,12 +208,17 @@ function lista(json: unknown, campo: string): unknown[] {
     return valor;
 }
 
-/** Os casos de um tipo, marca e pedido (só os dígitos) que a fila guarda, o mais novo primeiro. Erro sobe. */
+/**
+ * Os casos de um tipo, marca e pedido que a fila guarda, o mais novo primeiro. Erro sobe. A fila busca pelos dígitos (o
+ * contrato do `/api/v1` não mudou), e o resultado é filtrado pelo pedido (`mesmoPedido`): o `GC109828LC` e o `#109828`
+ * da Lescent têm os mesmos dígitos e são pedidos diferentes (decisão deste app em 2026-11-27).
+ */
 export async function casosDoPedidoNaFila(tipo: TipoCasoCxhub, marca: string, pedido: string): Promise<CasoNaFila[]> {
-    const digitos = pedido.replace(/\D/g, '');
-    if (!digitos) return [];
-    const query = new URLSearchParams({ tipo, marca, pedido: digitos });
-    const casos = lista(await ler(`/api/v1/casos?${query}`), 'casos').map(casoDaResposta);
+    const numero = lerNumeroDaLoja(pedido, marca);
+    if (!numero) return [];
+    const query = new URLSearchParams({ tipo, marca, pedido: numero.digitos });
+    const casos = lista(await ler(`/api/v1/casos?${query}`), 'casos').map(casoDaResposta)
+        .filter((c) => mesmoPedido(c.numeroPedido, numero));
     return casos.sort((a, b) => Date.parse(b.criadoEm) - Date.parse(a.criadoEm));
 }
 
@@ -227,8 +233,10 @@ export async function casosAbertosNaFila(filtro: {
 }): Promise<CasoAbertoNaFila[]> {
     const query = new URLSearchParams({ tipo: filtro.tipo });
     if (filtro.marca) query.set('marca', filtro.marca);
-    const digitos = (filtro.pedido ?? '').replace(/\D/g, '');
-    if (digitos) query.set('pedido', digitos);
+    // Como em `casosDoPedidoNaFila`: os dígitos para a fila, e o filtro do pedido (GC ou não) aqui.
+    const numero = filtro.pedido ? lerNumeroDaLoja(filtro.pedido, filtro.marca) : null;
+    if (filtro.pedido && !numero) return [];
+    if (numero) query.set('pedido', numero.digitos);
     let json: unknown;
     try {
         json = await ler(`/api/v1/casos/abertos?${query}`);
@@ -239,7 +247,7 @@ export async function casosAbertosNaFila(filtro: {
     return lista(json, 'casos').map((bruto): CasoAbertoNaFila => {
         const c = (bruto ?? {}) as Record<string, unknown>;
         return { ...casoDaResposta(bruto), valor: valorEmReais(c.valor), motivo: texto(c.motivo) || null };
-    });
+    }).filter((c) => !numero || mesmoPedido(c.numeroPedido, numero));
 }
 
 /** O caso com esse id na fila, ou `null`. Erro sobe. */

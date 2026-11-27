@@ -1,7 +1,7 @@
 import type { CosmosCarrier, CosmosDetailedOrder, CosmosOrder } from '../../../shared/types/index';
 import { BRAND_TO_ORG_ID, type SupportedBrand } from '../../../shared/lib/constants';
-import { sanitizeOrderId } from '../../../shared/lib/cosmos/index';
 import { cosmosFetch, type CosmosFetchResult } from '../../../shared/lib/cosmos/http';
+import { buscaNoCosmos, lerNumeroDaLoja } from '../../../shared/lib/pedido/numeroDaLoja';
 import type {
     ResendCancelRequest,
     ResendManagementCode,
@@ -89,17 +89,24 @@ export function mapCosmosFailure(result: CosmosFetchResult): ResendManagementRes
     }
 }
 
+/**
+ * Os reenvios do pedido no Cosmos. Sem o filtro `origin=resend` desde 2026-11-27: o reenvio GC criado pela Shopify tem
+ * `origin = shopify`, e quem separa os reenvios do pedido é o nome (`matchResendsOfOrder`). O SH vai pelos dígitos e o
+ * GC pelo nome inteiro (`buscaNoCosmos`); fora do formato, a lista é vazia sem chamar o Cosmos.
+ */
 export async function listResendsOfOrder(ctx: CosmosContext, orderId: string): Promise<ResendManagementResult> {
-    const id = sanitizeOrderId(orderId);
-    const url = `${ctx.baseUrl}/organizations/${ctx.orgId}/orders`
-        + `?external_id=${encodeURIComponent(id)}&origin=resend&per_page=100`;
+    const numero = lerNumeroDaLoja(orderId, ctx.brand);
+    let resends: CosmosOrder[] = [];
+    if (numero) {
+        const url = `${ctx.baseUrl}/organizations/${ctx.orgId}/orders`
+            + `?external_id=${encodeURIComponent(buscaNoCosmos(numero))}&per_page=100`;
 
-    const res = await cosmosFetch(url, { method: 'GET', authorization: ctx.authorization });
-    if (res.status !== 200 || !Array.isArray(res.data)) {
-        return mapCosmosFailure(res);
+        const res = await cosmosFetch(url, { method: 'GET', authorization: ctx.authorization });
+        if (res.status !== 200 || !Array.isArray(res.data)) {
+            return mapCosmosFailure(res);
+        }
+        resends = matchResendsOfOrder(res.data as CosmosOrder[], orderId, ctx.brand);
     }
-
-    const resends = matchResendsOfOrder(res.data as CosmosOrder[], id);
     return {
         status: 200,
         body: {

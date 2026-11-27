@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from '../../../../../api/next-server';
 import { BRAND_TO_ORG_ID, ehMarcaSemCosmosComPlanilha } from '../../../../shared/lib/constants';
 import { conferirTokenNoCosmos } from '../../../../shared/lib/cosmos/http';
 import { conferirPedidoNoDataMart, prazoDaConferencia } from '../../../../shared/lib/datamart/conferenciaServer';
-import { digitosDoPedido, motivosDoNaoConferido } from '../../../../shared/lib/datamart/pedido';
+import { motivosDoNaoConferido, numeroDasLeituras } from '../../../../shared/lib/datamart/pedido';
 import type {
     CampoConferido,
     EstadoDaNf,
@@ -37,8 +37,9 @@ export interface ContextoDoPedidoNaResposta {
     nfOrigem?: OrigemDaNf;
     /**
      * Só com `nfStatus: 'desconhecida'`: `sem_resposta` (o Data Mart, a Shopify ou a Intelipost ao vivo não
-     * responderam a tempo), `nf_fora_do_data_mart` (o Tiny já emitiu a NF, e ela ainda não chegou ao Data Mart) ou
-     * `pedido_cancelado_no_tiny` (o Tiny só tem o pedido cancelado, que pode ter sido refeito em outro CD).
+     * responderam a tempo), `nf_fora_do_data_mart` (o Tiny já emitiu a NF, e ela ainda não chegou ao Data Mart),
+     * `pedido_cancelado_no_tiny` (o Tiny só tem o pedido cancelado, que pode ter sido refeito em outro CD) ou
+     * `pedido_gocreators` (o pedido GC sem NF em fonte nenhuma: o reenvio grava sem ela, e o reembolso é recusado).
      */
     nfMotivo?: MotivoDoNaoConferido;
     /** `CD ES`, `CD RJ`, `CD MG`, ou `null` quando não se sabe */
@@ -74,8 +75,9 @@ export async function GET(request: NextRequest): Promise<NextResponse<Resposta>>
     if (!ehMarcaSemCosmosComPlanilha(marca)) {
         return erro(400, `A marca ${marca} não tem a conferência do pedido no Data Mart: use apice, yenzah ou denavita.`);
     }
-    const numero = digitosDoPedido(request.nextUrl.searchParams.get('order'));
-    if (!numero) return erro(400, 'Parâmetro order ausente ou inválido: use o número do pedido (ex.: SH1731559AP).');
+    // Os dígitos no SH; o pedido da Gocreators vai inteiro (GC104306YE), decisão deste app em 2026-11-27.
+    const numero = numeroDasLeituras(request.nextUrl.searchParams.get('order'), marca);
+    if (!numero) return erro(400, 'Parâmetro order ausente ou inválido: use o número do pedido (ex.: SH1731559AP ou GC104306YE).');
 
     const authorization = request.headers.get('authorization');
     if (!authorization) return erro(401, 'Header Authorization ausente.');

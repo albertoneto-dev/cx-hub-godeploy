@@ -267,6 +267,38 @@ O GoDeploy roda no workerd sem `nodejs_compat`: sem `Buffer`, `node:crypto` nem 
   `cxhub|`, que são o histórico do Supabase. Arquivos novos: `modules/reenvios/actions/reenviosDoPedido.ts` e
   `app/api/reenvio/existente/route.ts`. Nenhum arquivo vindo do CX Hub mudou. A rota não existe no repositório antigo,
   então não entra na lista `ROTAS` do `ferramentas/portar-do-cxhub.mjs`.
+- Os pedidos da Gocreators (`GC{n}{sigla}`, 2026-11-27, pedido do usuário para tirar a trava `MOTIVO_DO_GC` do
+  extravios-gobeaute; decisões dele no mesmo dia). O CX Hub reduzia o pedido aos dígitos em toda parte, e os dígitos do
+  GC são os de outro pedido da mesma loja: em 26/11, o `/api/shopify/orders` devolvia o `#104306` de 2024 para o
+  `GC104306BB`. O GC agora é sempre o pedido inteiro, e o SH/`#n`/só dígitos nunca acham um GC. Arquivo novo:
+  `shared/lib/pedido/numeroDaLoja.ts` (o leitor `lerNumeroDaLoja`, a régua `mesmoPedido`/`sqlDoMesmoPedido` e as regras
+  do Cosmos). Mudaram:
+  - Shopify: `shared/lib/shopify/nomeDoPedido.ts` (o GC por `name:GC…`), `shopify/gateway.ts` (`escolherPedido`: o GC por
+    nome exato, os dígitos nunca escolhem um GC), `shopify/client.ts` (o navegador manda o GC inteiro) e
+    `datamart/pedidoDaShopifyServer.ts` (o GC pelo `order_name`, com `created_at >= 2026-09-01`, e o SH nunca aceita um GC);
+  - Cosmos: `cosmos/server.ts` e `cosmos/client.ts` (o GC por `external_id=GC…` e casado pelo nome),
+    `modules/reenvios/actions/resendManagement.ts` (`matchResendsOfOrder` pelo nome, **sem o filtro `origin = resend`**:
+    os reenvios GC criados pela Shopify têm `origin = shopify`), `resendCosmos.ts`, `reenvioRecenteNoCosmos.ts` (sem o
+    `&origin=resend` na URL; no Data Mart, `GC…-R-k`) e `app/api/cosmos/resends/route.ts` (aceita o GC; GC fora do formato
+    é 400);
+  - NF: `intelipost/gateway.ts` (`pedidoNaIntelipost` devolve o GC inteiro), `datamart/nfDaIntelipostServer.ts` (o GC
+    pelo `sales_order_number`), `datamart/pedido.ts` (`numeroDasLeituras`, `pedidoDaPlanilha`, e o GC sem NF em fonte
+    nenhuma vira `desconhecida` com o motivo `pedido_gocreators`, e não `ausente`), `datamart/pedidoTipos.ts`,
+    `datamart/pedidoServer.ts` (as 3 consultas da ADR-018 pelo nome do GC), `datamart/conferenciaServer.ts` e
+    `app/api/datamart/order-context/route.ts`;
+  - reembolso: `modules/reembolsos/actions/conferenciaDoReembolso.ts` (`recusaDoReembolsoGcSemNf`) e `processRefund.ts`:
+    o reembolso GC sem NF é recusado com 422 em toda marca (o usuário: "pra reembolso precisa da NF"). O reenvio GC é
+    registrado sem a NF;
+  - dedup e listas: `fila/client.ts` (a fila continua pelos dígitos, e o resultado é filtrado pelo pedido),
+    `airflow/raw.ts`, `airflow/listarCasos.ts`, `airflow/atualizarCaso.ts`, `modules/reenvios/actions/reenviosDoPedido.ts`,
+    `sheets/casoNaPlanilha.ts` e `registro/enviadas.ts` (os dígitos e o lado, GC ou não);
+  - `app/api/reenvio/existente/route.ts`: o `pedido` da resposta é o GC inteiro no GC; GC fora do formato é 400.
+
+  Testes mudados: os SQLs esperados (`rawEventos`, `atualizarCasoNaGold`, `reenviosDoPedido`), a URL sem o
+  `origin=resend` (`api-cosmos-resends`, `reenvioRecenteNoCosmos`), o reenvio de outra origem, que passou a contar
+  (`resendManagement`, `reenvioRecenteNoCosmos`), e a mensagem do 400 (`api-reenvio-existente`). Testes novos:
+  `shared/pedidosGocreators.test.ts` (com o predicado SQL rodando no PGlite) e os casos GC em `pedidoDaShopifyNoDataMart`,
+  `processNfForaDoDataMart` e `api-reenvio-existente`.
 
 ## Testes
 

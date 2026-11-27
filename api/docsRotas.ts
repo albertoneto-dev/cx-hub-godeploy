@@ -178,7 +178,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "Número do pedido na loja, só os dígitos (ex.: 123456)."
+        "description": "Número do pedido na loja, só os dígitos (ex.: 123456). O pedido da Gocreators vai inteiro (GC104306BB): é o external_id dele no Cosmos, e os dígitos dele são os de outro pedido."
       }
     ],
     "requestBody": null,
@@ -331,10 +331,10 @@ export const ENDPOINTS: Endpoint[] = [
     ],
     "notes": [
       "A resposta de sucesso é repasse do Cosmos (tipo CosmosOrder em cxhub/shared/types/cosmos.ts), sem filtro nem transformação.",
-      "A busca do Cosmos por external_id é por semelhança: a lista pode trazer pedidos de número parecido e os reenvios (-R-n). A tela fica com o primeiro cujo external_id casa ^SH{n}[A-Za-z]{2}[0-9]*$ ou é #SHOPIFY{n}.",
+      "A busca do Cosmos por external_id é por semelhança: a lista pode trazer pedidos de número parecido e os reenvios (-R-n). A tela fica com o primeiro cujo external_id casa ^SH{n}[A-Za-z]{2}[0-9]*$ ou é #SHOPIFY{n}; no pedido da Gocreators, o que é exatamente o GC (GC104306BB, origin gocreators).",
       "Qualquer outro erro do Cosmos (403, 404, 422, 5xx...) volta com o mesmo status e {\"error\": \"Cosmos API error: <status>\"}; a mensagem do Cosmos não é repassada.",
       "Pedido inexistente pode vir como 200 com lista vazia ou como 404 do Cosmos; a tela trata os dois como não encontrado.",
-      "O orderId vai ao Cosmos sem codificação: mande só os dígitos (a tela tira #, SH e o sufixo).",
+      "O orderId vai ao Cosmos sem codificação: mande só os dígitos (a tela tira #, SH e o sufixo), ou o GC inteiro no pedido da Gocreators.",
       "Uma brand fora da lista (e que não seja sem Cosmos) vai crua como id da organização: brand=3 consulta a org 3."
     ],
     "sources": [
@@ -1063,7 +1063,7 @@ export const ENDPOINTS: Endpoint[] = [
     "path": "/api/cosmos/resends",
     "tag": "Reenvios no Cosmos",
     "summary": "Lista os reenvios de um pedido original",
-    "description": "Consulta o Cosmos (GET /organizations/{org}/orders?external_id={dígitos}&origin=resend&per_page=100) com o token de quem chama e devolve só os reenvios do pedido, os de external_id {pedido original}-R-{n}. Não grava nada; o Cosmos tem 10 s para responder por padrão (env TIMEOUT).",
+    "description": "Consulta o Cosmos (GET /organizations/{org}/orders?external_id={dígitos, ou o GC inteiro}&per_page=100) com o token de quem chama e devolve só os reenvios do pedido, os de external_id {pedido original}-R-{n}, de qualquer origem (o reenvio GC criado pela Shopify tem origin shopify). Não grava nada; o Cosmos tem 10 s para responder por padrão (env TIMEOUT).",
     "routeHeader": "x-cosmos-token",
     "params": [
       {
@@ -1086,7 +1086,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "Número do pedido original; a rota fica só com os dígitos (#123456 e SH123456LC viram 123456)."
+        "description": "Número do pedido original; a rota fica só com os dígitos (#123456 e SH123456LC viram 123456). O pedido da Gocreators vai inteiro (GC107465BB; sem a sigla, vale a da marca), e só acha os reenvios GC107465BB-R-n: nunca os do SH de mesmos dígitos, nem o contrário. Sem dígito, ou com um GC fora do formato (GC107465BB-R-1), é 400."
       }
     ],
     "requestBody": null,
@@ -1231,8 +1231,8 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Erros sempre em {code, message}: decida pelo code, não pelo texto.",
       "'Header Authorization ausente.' quer dizer que faltou o x-cosmos-token (o app o põe no Authorization para a rota).",
-      "Os itens de resends são repasse do Cosmos (tipo CosmosOrder em cxhub/shared/types/cosmos.ts), filtrados pelo external_id ^(SH{n}[A-Za-z]{2}[0-9]*|#SHOPIFY{n})-R-[0-9]+$ e por origin = resend.",
-      "Só a primeira página do Cosmos é lida (até 100 pedidos de origem resend parecidos com o número)."
+      "Os itens de resends são repasse do Cosmos (tipo CosmosOrder em cxhub/shared/types/cosmos.ts), filtrados pelo external_id: ^(SH{n}[A-Za-z]{2}[0-9]*|#SHOPIFY{n})-R-[0-9]+$ no SH e ^GC{n}{sigla}-R-[0-9]+$ no pedido da Gocreators, de qualquer origem. Até a v24 só contava origin = resend; o filtro saiu em 27/11/2026 porque os reenvios GC criados pela Shopify têm origin shopify, e nenhum SH-R-n teve outra origem desde 01/11.",
+      "Só a primeira página do Cosmos é lida (até 100 pedidos parecidos com o número)."
     ],
     "sources": [
       "cxhub/app/api/cosmos/resends/route.ts",
@@ -1731,7 +1731,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "Número do pedido na loja; mande só os dígitos (nas marcas sem Cosmos, SH1629891AP ou #1475900 também servem)."
+        "description": "Número do pedido na loja; mande só os dígitos (nas marcas sem Cosmos, SH1629891AP ou #1475900 também servem). O pedido da Gocreators vai inteiro (GC104306BB; sem a sigla, vale a da marca): só ele acha o GC, e só os dígitos, o #n ou o SH nunca devolvem um GC. Os dígitos do GC são os de outro pedido da mesma loja (o #104306 da Barbour's é de 2024)."
       }
     ],
     "requestBody": null,
@@ -1920,8 +1920,9 @@ export const ENDPOINTS: Endpoint[] = [
     "notes": [
       "Desde 2026-11-17 o app não usa token de loja da Shopify: Lescent, Kokeshi, BySamia, Auá e Barbours, que liam o REST orders.json da loja, passaram ao gateway. A resposta delas deixou de ser o objeto completo da Shopify (com mais de um pedido às vezes) e ficou como a das outras: 0 ou 1 pedido, com os campos acima.",
       "O gateway é o da SHOPIFY_GATEWAY_URL, com a SHOPIFY_GATEWAY_KEY (desde 23/11/2026; o integrations-gateway foi descontinuado), sem endereço padrão, e a loja vem do nome da marca: POST {SHOPIFY_GATEWAY_URL}/{marca}, com o GraphQL da Shopify direto (sem o /graphql do gateway antigo, que o GoAccess recusa com 400). A URL vale com ou sem o /shopify no fim: o app o acrescenta quando falta.",
-      "Pelo gateway, só os últimos 60 dias de pedidos aparecem. Nas sem Cosmos, procura SH{n}{sufixo} (AP, YE, DN, GB) e depois só os dígitos; nas 6 do Cosmos, só os dígitos.",
-      "O nome do pedido achado é conferido pelos dígitos: o reenvio do Cosmos (SH1452727BB-R-1, um pedido da loja), que o filtro da Shopify devolve junto, não é escolhido no lugar do original.",
+      "Pelo gateway, só os últimos 60 dias de pedidos aparecem. Nas sem Cosmos, procura SH{n}{sufixo} (AP, YE, DN, GB) e depois só os dígitos; nas 6 do Cosmos, só os dígitos. O pedido da Gocreators, em toda marca, só pelo nome inteiro (name:GC104306BB).",
+      "O nome do pedido achado é conferido: pelos dígitos no SH, e nunca um nome que comece com GC; pelo nome exato no GC. O reenvio do Cosmos (SH1452727BB-R-1, um pedido da loja), que o filtro da Shopify devolve junto, não é escolhido no lugar do original.",
+      "No Data Mart, o GC é lido pelo order_name (o order_number dele é o interno da Shopify: 2901055 no GC104306BB), com a marca e o created_at desde 01/09/2026, porque o order_name não tem índice: de 0,5 a 2,6 s, medidos em 26/11/2026.",
       "O pedido que o gateway não acha (mais de 60 dias) ou com o gateway fora do ar vem do Data Mart (api.vw_shopify_orders, pela chave do Metabase), no mesmo formato e com os mesmos campos. Vale para as 9 marcas com planilha; a Gobeaute não está no Data Mart. Não achado nos dois é 200 {\"orders\": []}; com o gateway com erro e o pedido fora do Data Mart, vale o erro do gateway.",
       "Ficam de fora tags, note e os atributos com CPF e endereço; de note_attributes só passa o nf_number, que é a NF do metacampo custom.nf_numero (2026-11-19: o atributo nf_number não existe em nenhum pedido consultado). O reenvio SH…-R-1, que vem junto no filtro com a NF dele, não é escolhido.",
       "Um 429 do gateway tem uma nova tentativa depois do Retry-After (até 3 s).",
@@ -2108,7 +2109,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "O número do pedido, com ou sem o prefixo e o sufixo: SH1234567AP, #1234567 e 1234567 valem o mesmo. Só os dígitos contam, e precisam ser de 3 a 9."
+        "description": "O número do pedido, com ou sem o prefixo e o sufixo: SH1234567AP, #1234567 e 1234567 valem o mesmo. Só os dígitos contam, e precisam ser de 3 a 9. O pedido da Gocreators (GC104306YE, só a Yenzah tem entre estas marcas) é lido pelo nome inteiro: a Intelipost pelo sales_order_number e a Shopify pelo order_name."
       }
     ],
     "requestBody": null,
@@ -2127,7 +2128,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "order",
             "type": "string",
             "required": true,
-            "description": "O número como a planilha o guarda: SH, os dígitos e o sufixo da marca (AP, YE, DE)."
+            "description": "O número como a planilha o guarda: SH, os dígitos e o sufixo da marca (AP, YE, DE); o pedido da Gocreators, inteiro (GC104306YE)."
           },
           {
             "name": "nf",
@@ -2161,11 +2162,12 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "nfMotivo",
             "type": "string",
             "required": false,
-            "description": "Só com nfStatus desconhecida: por que a NF não deu para conferir. sem_resposta: o Data Mart não respondeu a tempo, ou não tinha a NF e a Shopify ou a Intelipost ao vivo não responderam (sem a chave do gateway, chave recusada, gateway fora ou passou do prazo); neste caso a nota é [NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]. nf_fora_do_data_mart: o pedido da Ápice já tem a NF emitida no Tiny, e ela ainda não chegou ao Data Mart (a tabela de NFs chega em lotes, horas depois, e a Intelipost, cerca de 1 h depois); a NF já está na Intelipost. pedido_cancelado_no_tiny: o Tiny só tem o pedido da Ápice cancelado, que pode ter sido refeito em outro CD; o cd fica null, a menos que a Intelipost dê a UF. Nos três, a tela pede a NF, e o registro a grava com a nota do motivo nas observações, como [NF NÃO CONFERIDA: AINDA FORA DO DATA MART] ou [CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY].",
+            "description": "Só com nfStatus desconhecida: por que a NF não deu para conferir. sem_resposta: o Data Mart não respondeu a tempo, ou não tinha a NF e a Shopify ou a Intelipost ao vivo não responderam (sem a chave do gateway, chave recusada, gateway fora ou passou do prazo); neste caso a nota é [NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]. nf_fora_do_data_mart: o pedido da Ápice já tem a NF emitida no Tiny, e ela ainda não chegou ao Data Mart (a tabela de NFs chega em lotes, horas depois, e a Intelipost, cerca de 1 h depois); a NF já está na Intelipost. pedido_cancelado_no_tiny: o Tiny só tem o pedido da Ápice cancelado, que pode ter sido refeito em outro CD; o cd fica null, a menos que a Intelipost dê a UF. pedido_gocreators: o pedido da Gocreators (GC104306YE) sem NF em fonte nenhuma, que não é ausente: o reenvio é registrado com a nota [NF NÃO CONFERIDA: PEDIDO DA GOCREATORS SEM NF], e o reembolso é recusado com 422, porque precisa da NF. Nos três primeiros, a tela pede a NF, e o registro a grava com a nota do motivo nas observações, como [NF NÃO CONFERIDA: AINDA FORA DO DATA MART] ou [CD/NF NÃO CONFERIDOS: PEDIDO CANCELADO NO TINY].",
             "enum": [
               "sem_resposta",
               "nf_fora_do_data_mart",
-              "pedido_cancelado_no_tiny"
+              "pedido_cancelado_no_tiny",
+              "pedido_gocreators"
             ]
           },
           {
@@ -2290,7 +2292,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 400,
-        "description": "Falta brand; a marca não tem a conferência (inclusive gobeaute e as marcas do Cosmos: \"A marca <brand> não tem a conferência do pedido no Data Mart: use apice, yenzah ou denavita.\"); ou o order falta ou não tem de 3 a 9 dígitos (\"Parâmetro order ausente ou inválido: use o número do pedido (ex.: SH1731559AP).\"). Nada é consultado.",
+        "description": "Falta brand; a marca não tem a conferência (inclusive gobeaute e as marcas do Cosmos: \"A marca <brand> não tem a conferência do pedido no Data Mart: use apice, yenzah ou denavita.\"); ou o order falta, não tem de 3 a 9 dígitos ou é um GC fora do formato (\"Parâmetro order ausente ou inválido: use o número do pedido (ex.: SH1731559AP ou GC104306YE).\"). Nada é consultado.",
         "example": {
           "error": "Parâmetro brand ausente."
         }
@@ -2329,6 +2331,7 @@ export const ENDPOINTS: Endpoint[] = [
       "Nada da marca vai ao Cosmos: ele só confere o token, na org da Lescent.",
       "As funções são as da gravação (conferirPedidoNoDataMart): o que esta rota mostra é o que vai para a planilha, a menos que o Data Mart mude entre a leitura e o envio.",
       "nfStatus ausente não é erro desta rota: avisa que o registro seria recusado com 422.",
+      "O pedido da Gocreators (decisão de 2026-11-27) é lido pelo nome inteiro em todas as fontes: a Intelipost do Data Mart e a ao vivo pelo sales_order_number (GC104306YE), a Shopify pelo order_name (com created_at desde 01/09/2026) e o metacampo por name:GC104306YE. Os dígitos dele são os de outro pedido da loja, e o shopify_order_number dele na Intelipost é o número interno da Shopify. Os GC não têm envio na Intelipost; a NF deles está no metacampo da Shopify (conferido ao vivo em 27/11/2026).",
       "O Data Mart tem atraso de carga: a Intelipost chega ao gold cerca de 1 h depois da NF, e a tabela de NFs do Tiny, em lotes, horas depois. Por isso, sem a NF no Data Mart, a rota procura no metacampo custom.nf_numero da Shopify (só na Yenzah: a Ápice e a Denavita não o preenchem, medido em 19/11/2026) e depois na Intelipost ao vivo, pelo SH da marca (GET {INTELIPOST_GATEWAY_URL}/{marca}/shipment_order/sales_order_number/SH…; se o gateway não conhece a marca, a conta antiga: lescent ou beautyhub), até 4 s cada. Só com as duas respondendo sem NF a prova do Data Mart vale como ausente; uma delas sem resposta dá desconhecida (sem_resposta). Na Ápice, o pedido ativo que já tem o id da NF no Tiny dá desconhecida (nf_fora_do_data_mart), e não ausente.",
       "As fontes de fora do Data Mart usam os secrets do app (desde 23/11/2026): a SHOPIFY_GATEWAY_URL e a SHOPIFY_GATEWAY_KEY (o metacampo da Shopify), e a INTELIPOST_GATEWAY_URL e a INTELIPOST_GATEWAY_KEY (a Intelipost ao vivo). Sem elas, nenhum pedido sem a NF no Data Mart dá ausente: dá desconhecida.",
       "Sem a Intelipost no gold, o pedido da Ápice é procurado no Tiny pela data e pelo número da Shopify, no numero_ordem_compra ou no numero_ecommerce (no RJ, o numero_ecommerce vem vazio): de 1 dia antes da criação na Shopify a 12 dias depois no ES e a 60 no RJ, que recebe os pedidos cancelados no ES e refeitos lá. Achando o mesmo número mais de uma vez, vale o pedido ativo; entre eles, o que tem a NF, depois o mais recente, depois o do ES.",
@@ -2620,7 +2623,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.numeroPedido",
           "type": "string",
           "required": true,
-          "description": "Número do pedido (ex.: SH1029384KS ou #SHOPIFY220183); a rota não valida, mas o dedup usa e a fila recusa o caso sem ele (SHEETS_ERROR/RECORD_UNAVAILABLE)."
+          "description": "Número do pedido (ex.: SH1029384KS, #SHOPIFY220183 ou o da Gocreators, GC104306BB, que vai inteiro); a rota não valida, mas o dedup usa e a fila recusa o caso sem ele (SHEETS_ERROR/RECORD_UNAVAILABLE). O dedup compara os dígitos e o lado: o GC104306BB e o #104306 são pedidos diferentes, e um não barra o outro."
         },
         {
           "name": "data.numeroNF",
@@ -3463,8 +3466,9 @@ export const ENDPOINTS: Endpoint[] = [
       "Decida pelo code (e pelo reason) do corpo, não pelo status HTTP: DUPLICATE_RESEND, OUT_OF_STOCK, API_ERROR e SHEETS_ERROR chegam como 200.",
       "A rota não confere credencial própria: o token do Cosmos vai no corpo (token), e o header x-cosmos-token não é lido aqui.",
       "Ordem do processamento: configuração → dedup de 24 h (com a conferência no Data Mart junto, nas sem Cosmos com planilha, a busca da NF que não veio e a do reenvio que o pedido já tem, nas do Cosmos) → POST /resend no Cosmos, só sem reenvio anterior → fila do Metabase → planilha; recusa ou silêncio do Cosmos voltam sem registro nenhum (diferente do /api/reenvio/bot, que garante a linha).",
-      "O reenvio que o pedido já tem: com automação, a rota lista os reenvios do pedido no Cosmos (GET /organizations/{org}/orders?external_id=<dígitos>&origin=resend, com o token do agente, até 5 s por tentativa e duas tentativas quando o Cosmos não responde ou dá 5xx) e conta o criado nas últimas 24 h e não cancelado. Sem resposta do Cosmos, procura a remessa do reenvio na Intelipost do Data Mart, que só a recebe cerca de 1 h depois; sem ela lá, a resposta é API_ERROR, porque o reenvio pode ser de minutos atrás. O motivo: em 19/11/2026 o Cosmos criou reenvios de 10 a 50 s depois de a rota desistir do POST, e a repetição do agente criava outro.",
-      "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai na frente dos comentários. Sem a NF no Data Mart, ela é procurada no metacampo da Shopify (yenzah) e na Intelipost ao vivo, no mesmo teto. Só o pedido que o Data Mart prova não faturado, e que essas fontes confirmam sem NF, é recusado (422). As 6 marcas do Cosmos e a gobeaute não passam por ela.",
+      "O reenvio que o pedido já tem: com automação, a rota lista os reenvios do pedido no Cosmos (GET /organizations/{org}/orders?external_id=<dígitos, ou o GC inteiro>, de qualquer origem desde 27/11/2026, com o token do agente, até 5 s por tentativa e duas tentativas quando o Cosmos não responde ou dá 5xx) e conta o criado nas últimas 24 h e não cancelado. Sem resposta do Cosmos, procura a remessa do reenvio na Intelipost do Data Mart, que só a recebe cerca de 1 h depois; sem ela lá, a resposta é API_ERROR, porque o reenvio pode ser de minutos atrás. O motivo: em 19/11/2026 o Cosmos criou reenvios de 10 a 50 s depois de a rota desistir do POST, e a repetição do agente criava outro.",
+      "A conferência no Data Mart (apice, yenzah, denavita) tem teto de 12 s e nunca impede o registro: o que não deu para conferir fica com o valor que veio, e a nota com o motivo vai na frente dos comentários. Sem a NF no Data Mart, ela é procurada no metacampo da Shopify (yenzah) e na Intelipost ao vivo, no mesmo teto. Só o pedido que o Data Mart prova não faturado, e que essas fontes confirmam sem NF, é recusado (422). O pedido da Gocreators (GC104306YE) sem NF não é recusado: é registrado com a nota [NF NÃO CONFERIDA: PEDIDO DA GOCREATORS SEM NF]. As 6 marcas do Cosmos e a gobeaute não passam por ela.",
+      "Pedido da Gocreators (decisão de 2026-11-27): o GC vai inteiro (GC104306BB) e é tratado como o pedido inteiro em toda parte: no Cosmos (o external_id dele), no reenvio que o Cosmos cria (GC104306BB-R-n), na NF (Intelipost pelo sales_order_number) e no dedup, que compara os dígitos e o lado. O GC e o #n/SH de mesmos dígitos são pedidos diferentes: um nunca barra nem acha o outro.",
       "O dedup procura o mesmo tipo (REENVIO), marca e data.numeroPedido nas últimas 24 h, na fila e na raw; um reenvio cancelado libera o pedido.",
       "O POST /resend no Cosmos não é retentado; o prazo dele é a env TIMEOUT (10 s sem ela), contado do início da requisição, e a consulta do reenvio anterior gasta desse mesmo prazo.",
       "Marcas sem Cosmos (apice, yenzah, denavita, gobeaute) nunca executam no Cosmos, mesmo com data.automacao preenchida; a gobeaute não tem planilha e o registro termina na fila.",
@@ -3589,7 +3593,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "order.ecommerceOrderId",
           "type": "string",
           "required": "condicional",
-          "description": "Número do pedido na loja (ex.: SH1029384KS); obrigatório fora do modo de teste, é a chave do dedup e da busca do pedido."
+          "description": "Número do pedido na loja (ex.: SH1029384KS); obrigatório fora do modo de teste, é a chave do dedup e da busca do pedido. O pedido da Gocreators vai inteiro (GC104306BB): só os dígitos continuam significando o SH/#n de mesmo número, que é outro pedido."
         },
         {
           "name": "order.invoiceNumber",
@@ -4624,7 +4628,7 @@ export const ENDPOINTS: Endpoint[] = [
       "Decida pelo code e pelo reason do corpo, nunca pelo status HTTP nem pelo texto do message: DUPLICATE_RESEND, OUT_OF_STOCK e SHEETS_ERROR chegam como 200, e o message muda de redação.",
       "Ordem das checagens: segredo configurado (503) → x-bot-secret (401) → JSON (400) → brand presente e aceita (400) → testMode booleano (400) → order.ecommerceOrderId fora do teste (400) → reenvio parcial com itens (422) → busca do pedido e guardas.",
       "As marcas aceitas vêm da rota dados (as mesmas do formulário de reenvio da tela); se ela não responder em 5 s, valem as 10 marcas do enum.",
-      "Busca do pedido: nas marcas com Cosmos usa só os dígitos de order.ecommerceOrderId e aceita o external_id SH<dígitos><2 letras> ou #SHOPIFY<dígitos>; nas marcas sem Cosmos procura SH<dígitos><sufixo da marca> (AP, YE, DN, GB) e depois só os dígitos na Shopify (últimos 60 dias) e, sem o pedido, no Data Mart (a Gobeaute só na Shopify).",
+      "Busca do pedido: nas marcas com Cosmos usa só os dígitos de order.ecommerceOrderId e aceita o external_id SH<dígitos><2 letras> ou #SHOPIFY<dígitos>; nas marcas sem Cosmos procura SH<dígitos><sufixo da marca> (AP, YE, DN, GB) e depois só os dígitos na Shopify (últimos 60 dias) e, sem o pedido, no Data Mart (a Gobeaute só na Shopify). O pedido da Gocreators (GC<dígitos><sigla>) é buscado pelo nome inteiro em todas as fontes: no Cosmos, o external_id dele é o GC; na Shopify, name:GC…; no Data Mart, o order_name. Os valores do reason não mudam.",
       "Toda reprovação de guarda grava a solicitação sem automação, então corrigir o dado (endereço, CEP, número) e chamar de novo para o mesmo pedido em 24 h volta DUPLICATE_RESEND; não confirmado se há um caminho previsto para reenviar com a correção.",
       "OUT_OF_STOCK é a única recusa do Cosmos que a rota não regrava como ERP_REFUSED (ela só reposta quando o code é API_ERROR): pelo código, a solicitação não fica registrada em lugar nenhum, sem reason e sem aviso ao time.",
       "API_ERROR e API_TIMEOUT nunca chegam a quem chama esta rota: API_ERROR vira a repostagem com reason ERP_REFUSED, e API_TIMEOUT não é mais produzido.",
@@ -4767,7 +4771,7 @@ export const ENDPOINTS: Endpoint[] = [
           "name": "data.ecommerceOrderId",
           "type": "string",
           "required": true,
-          "description": "Número do pedido na loja, como a solicitação o grava; o dedup compara só os dígitos."
+          "description": "Número do pedido na loja, como a solicitação o grava; o dedup compara os dígitos e o lado (GC ou não). O pedido da Gocreators vai inteiro (GC104306BB) e só é registrado com NF (veja o 422)."
         },
         {
           "name": "data.refundAmount",
@@ -4929,7 +4933,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 200,
-        "description": "DUPLICATE_REFUND: já há reembolso não cancelado do mesmo pedido (mesmos dígitos) e marca nas últimas 24 h; nada foi registrado e repetir dá o mesmo resultado.",
+        "description": "DUPLICATE_REFUND: já há reembolso não cancelado do mesmo pedido (mesmos dígitos e o mesmo lado: o GC104306BB e o #104306 são pedidos diferentes) e marca nas últimas 24 h; nada foi registrado e repetir dá o mesmo resultado.",
         "fields": [
           {
             "name": "code",
@@ -5184,6 +5188,31 @@ export const ENDPOINTS: Endpoint[] = [
         }
       },
       {
+        "status": 422,
+        "description": "UNKNOWN_ERROR, em toda marca: o pedido é da Gocreators (GC<dígitos><sigla>) e está sem NF de venda. O reembolso precisa da NF (decisão de 2026-11-27): vale a que veio no invoiceNumber ou a que o servidor achar (Intelipost do Data Mart e ao vivo pelo sales_order_number do GC, metacampo da Shopify pelo nome do GC; na yenzah, a conferência do Data Mart). Sem nenhuma, inclusive quando uma fonte não respondeu, nada é registrado. Os GC não têm envio na Intelipost, mas têm a NF no metacampo custom.nf_numero da Shopify (conferido ao vivo em 27/11/2026): o normal é o servidor achá-la, e esta recusa ficar para o GC ainda sem NF ou com a Shopify fora. O reenvio do GC não tem esta recusa.",
+        "fields": [
+          {
+            "name": "code",
+            "type": "string",
+            "required": true,
+            "description": "Resultado.",
+            "enum": [
+              "UNKNOWN_ERROR"
+            ]
+          },
+          {
+            "name": "message",
+            "type": "string",
+            "required": true,
+            "description": "Diz o pedido GC, que a NF falta e que nada foi registrado."
+          }
+        ],
+        "example": {
+          "code": "UNKNOWN_ERROR",
+          "message": "O pedido GC104306BB é da Gocreators e está sem NF de venda: ela não veio na solicitação nem foi achada na Intelipost ou na Shopify. O reembolso precisa da NF. Nada foi registrado. Se o pedido já foi faturado, mande o número da NF, ou tente de novo em alguns minutos."
+        }
+      },
+      {
         "status": 503,
         "description": "UNKNOWN_ERROR: falta configuração do app (fila ou planilha da marca); recusado antes do dedup, nada registrado, pode repetir depois de configurar.",
         "fields": [
@@ -5264,7 +5293,8 @@ export const ENDPOINTS: Endpoint[] = [
       "Decida pelo code (e pelo reason), não só pelo HTTP: DUPLICATE_REFUND e os dois SHEETS_ERROR vêm com 200.",
       "Só brand e data são lidos; outros campos no topo (ex.: assincrono) e campos extras em data são ignorados.",
       "Os campos obrigatórios só não podem faltar nem ser null: string vazia passa na validação.",
-      "Dedup: mesmo tipo (REEMBOLSO), mesma marca e mesmos dígitos do pedido, criado nas últimas 24 h, na fila ou na raw; um reembolso já cancelado não conta.",
+      "Dedup: mesmo tipo (REEMBOLSO), mesma marca e mesmos dígitos do pedido, criado nas últimas 24 h, na fila ou na raw; um reembolso já cancelado não conta. O lado também conta: o pedido da Gocreators (GC104306BB) só barra o GC, e o #104306 só barra o SH/#n.",
+      "Pedido da Gocreators (decisão de 2026-11-27): o ecommerceOrderId vai inteiro (GC104306BB) e é gravado como veio; a NF é procurada pelo GC (a Intelipost pelo sales_order_number, o metacampo pelo nome), nunca pelos dígitos, que achariam a NF do #n antigo. Sem NF, 422.",
       "Guarde o idSolicitacao: é o id que /api/refund/complete e /api/refund/sync pedem.",
       "handledBy = \"Bot\": entrega também um caso CANCELAMENTO (tratativa Reembolso) à fila e, nas 6 marcas do Cosmos, grava a linha na planilha de cancelamento.",
       "Toda marca com planilha grava a pixKey só na planilha (dado sensível: não vai à fila nem ao log); na kokeshi ela vai no fim das Observações da linha, porque a planilha dela está deslocada. A planilha da apice, yenzah e denavita recebe fórmulas de prazo e SLA, e é daí que vem a variante \"sem as fórmulas\" do SHEET_WRITE_FAILED.",
@@ -5726,7 +5756,7 @@ export const ENDPOINTS: Endpoint[] = [
       "Ordem das conferências: x-cosmos-token, corpo, token no Cosmos (GET /organizations/{org da marca}/carriers?per_page=1, com o TIMEOUT do app, padrão 10 s), configuração, solicitação, travas, fila e planilha.",
       "Corpo estrito: campo fora de brand, ecommerceOrderId, handledBy e reason dá 400.",
       "As marcas sem Cosmos (apice, yenzah, denavita, gobeaute) não são aceitas aqui: 400 \"Marca inválida\".",
-      "O alvo é o reembolso mais recente do pedido, achado pelos dígitos do número, na raw ou ainda na fila; um caso de agora pode ser cancelado antes de o lote rodar.",
+      "O alvo é o reembolso mais recente do pedido, achado pelos dígitos do número (e pelo lado: o GC104306BB nunca acha o caso do #104306, nem o contrário), na raw ou ainda na fila; um caso de agora pode ser cancelado antes de o lote rodar.",
       "A planilha vence: se ela marca Realizado, nada é alterado (422); planilha fora do ar ou sem a linha não bloqueia o cancelamento.",
       "Pior caso calculado no código para a gestão ≈ 92,5 s; a rota declara maxDuration de 120 s.",
       "Exceção não tratada vira 500 {\"code\": \"UNKNOWN_ERROR\", \"message\": \"Erro interno. Veja o log do app.\"} (roteador); método diferente de POST, 405 METHOD_NOT_ALLOWED."
@@ -6162,7 +6192,7 @@ export const ENDPOINTS: Endpoint[] = [
       "O token do Cosmos vai no x-cosmos-token, com ou sem \"Bearer \"; sem ele a rota responde 401 antes de ler o corpo.",
       "Corpo estrito, no topo e em changes: campo desconhecido dá 400, para um nome errado não virar sucesso sem mudar nada.",
       "Só as 6 marcas do Cosmos; as sem Cosmos dão 400 \"Marca inválida\".",
-      "O alvo é o reembolso mais recente do pedido, achado pelos dígitos do número, na raw ou ainda na fila.",
+      "O alvo é o reembolso mais recente do pedido, achado pelos dígitos do número (e pelo lado: o GC104306BB nunca acha o caso do #104306, nem o contrário), na raw ou ainda na fila.",
       "Na planilha o valor vai como número e o motivo como texto; se o cabeçalho não tiver uma das colunas, a outra é escrita e a resposta traz SHEET_WRITE_FAILED.",
       "A edição não reescreve a planilha de um caso cancelado: só responde 422.",
       "Exceção não tratada vira 500 {\"code\": \"UNKNOWN_ERROR\", \"message\": \"Erro interno. Veja o log do app.\"} (roteador); método diferente de POST, 405 METHOD_NOT_ALLOWED."
@@ -7903,7 +7933,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": false,
-        "description": "Número do pedido em qualquer formato (SH9000105LC, #9000105): letras, dígitos, # e -, até 40 caracteres, com ao menos um dígito; compara só os dígitos e tira a janela de 30 dias."
+        "description": "Número do pedido em qualquer formato (SH9000105LC, #9000105, GC104306BB): letras, dígitos, # e -, até 40 caracteres, com ao menos um dígito; compara os dígitos e o lado (o pedido da Gocreators só acha os casos GC, e o SH/#n nunca os acha) e tira a janela de 30 dias. Um GC fora do formato (GC104306BB-R-1) não acha nada."
       },
       {
         "name": "pagina",
@@ -8341,7 +8371,7 @@ export const ENDPOINTS: Endpoint[] = [
         "in": "query",
         "type": "string",
         "required": true,
-        "description": "Número do pedido em qualquer formato (SH1607929AP, #1607929, 1607929): letras, dígitos, # e -, até 40 caracteres, com ao menos um dígito. Compara só os dígitos."
+        "description": "Número do pedido em qualquer formato (SH1607929AP, #1607929, 1607929): letras, dígitos, # e -, até 40 caracteres, com ao menos um dígito. Compara os dígitos. O pedido da Gocreators vai inteiro (GC107465BB; sem a sigla, vale a da marca) e só acha os reenvios do GC: o reenvio do GC não conta para o SH/#n de mesmos dígitos, nem o contrário. Um GC fora do formato (GC107465BB-R-1, que é um reenvio) é 400."
       }
     ],
     "requestBody": null,
@@ -8375,7 +8405,7 @@ export const ENDPOINTS: Endpoint[] = [
             "name": "pedido",
             "type": "string",
             "required": true,
-            "description": "Os dígitos do pedido, que é o que se compara."
+            "description": "O pedido como se compara: os dígitos no SH/#n (1607929) e o GC inteiro, com a sigla, no pedido da Gocreators (GC107465BB). Até a v24 eram sempre os dígitos."
           },
           {
             "name": "bloqueiaNovo",
@@ -8514,7 +8544,7 @@ export const ENDPOINTS: Endpoint[] = [
       },
       {
         "status": 400,
-        "description": "Parâmetro inválido, antes de qualquer leitura. Outras mensagens: \"Marca inválida: <marca>.\", \"Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito.\".",
+        "description": "Parâmetro inválido, antes de qualquer leitura. Outras mensagens: \"Marca inválida: <marca>.\", \"Informe o número do pedido: letras, dígitos, # e -, com ao menos um dígito (o da Gocreators, como GC107465BB).\" (também para um GC fora do formato).",
         "example": {
           "code": "INVALID_REQUEST",
           "message": "Informe a marca."

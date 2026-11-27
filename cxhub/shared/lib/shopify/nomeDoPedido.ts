@@ -1,4 +1,5 @@
 import { SUFIXO_DO_PEDIDO, ehMarcaSemCosmos } from '../constants';
+import { lerNumeroDaLoja, nomeDoGc } from '../pedido/numeroDaLoja';
 import type { MarcaNoGateway } from './gateway';
 
 /**
@@ -13,12 +14,18 @@ import type { MarcaNoGateway } from './gateway';
  * dígitos do nome achado. Assim o reenvio do Cosmos (`SH1452727RT-R-1`, um pedido da loja desde 01/11), que o filtro
  * também devolve, não é escolhido no lugar do original: os dígitos dele são outros.
  *
+ * O pedido da Gocreators (`GC{n}{sigla}`, decisão deste app em 2026-11-27) é procurado só pelo nome inteiro, em toda
+ * marca: os dígitos dele colidem com o `#n` antigo da mesma loja. Sem a sigla, vale a da marca. O GC fora do formato
+ * (`lerNumeroDaLoja` devolve `null`) não é procurado.
+ *
  * ⚠️ Na Denavita, o número que a Intelipost mostra é o do **Bling**, não o da loja: digitado aqui, ele pode casar com
  * outro pedido `#n`. A tela mostra o nome do pedido achado para a agente conferir.
  */
 export function nomesDoPedidoNaShopify(marca: MarcaNoGateway, pedido: string): string[] {
-    const digitos = pedido.replace(/\D/g, '');
-    if (!digitos) return [];
+    const numero = lerNumeroDaLoja(pedido, marca);
+    if (!numero) return [];
+    if (numero.prefixo === 'GC') return [nomeDoGc(numero)];
+    const { digitos } = numero;
     if (!ehMarcaSemCosmos(marca)) return [digitos];
     return [`SH${digitos}${SUFIXO_DO_PEDIDO[marca]}`, digitos];
 }

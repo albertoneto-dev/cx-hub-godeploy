@@ -89,7 +89,7 @@ describe('GET /api/cosmos/resends', () => {
         expect(body.code).toBe('SUCCESS');
         expect(body.resends.map((resend: { id: number }) => resend.id)).toEqual([42]);
         expect(fetchSpy.mock.calls[0][0])
-            .toBe(`${BASE}/organizations/3/orders?external_id=12345&origin=resend&per_page=100`);
+            .toBe(`${BASE}/organizations/3/orders?external_id=12345&per_page=100`);
     });
 
     it('recusa marca fora do CX Hub em vez de usar o valor cru como org', async () => {

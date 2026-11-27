@@ -1,4 +1,5 @@
 import type { MarcaComPlanilha, MarcaCxHub, SupportedBrand } from '../constants';
+import { lerNumeroDaLoja, mesmoPedido } from '../pedido/numeroDaLoja';
 import { letraDaColuna } from './a1';
 import { CABECALHO_ESPERADO, divergenciaNoCabecalho } from './cabecalhos';
 import { SheetsError, lerAba, lerIntervalos } from './server';
@@ -6,7 +7,7 @@ import { resolverPlanilha } from './targets';
 import type { FluxoPlanilha, SheetCell } from './types';
 
 /**
- * Como o CX Hub acha, na planilha da marca, a linha de um caso: **pelo número do pedido (só os dígitos) e pelo
+ * Como o CX Hub acha, na planilha da marca, a linha de um caso: **pelo número do pedido (os dígitos, e GC ou não) e pelo
  * carimbo de data/hora a até 2 minutos do `criado_em` do caso** (ADR-010). Não há coluna de id: o carimbo que o CX Hub
  * escreve na linha é o próprio `criado_em` (o mesmo instante que vai para a gold), e é ele, junto do pedido, que
  * identifica o caso.
@@ -137,22 +138,23 @@ export function lerCarimbo(celula: SheetCell | undefined): number | null {
     return parede.getTime() + OFFSET_SP_MS;
 }
 
-const digitos = (celula: SheetCell | undefined): string => (celula === null || celula === undefined ? '' : String(celula)).replace(/\D/g, '');
+const textoDaCelula = (celula: SheetCell | undefined): string => (celula === null || celula === undefined ? '' : String(celula));
 
 /**
- * Diz se uma linha é a do caso: o pedido (só os dígitos) é o mesmo **e** o carimbo está a até
+ * Diz se uma linha é a do caso: o pedido é o mesmo (os dígitos e o lado, GC ou não: o `GC109828LC` e o `#109828` têm os
+ * mesmos dígitos e são pedidos diferentes, decisão deste app em 2026-11-27) **e** o carimbo está a até
  * `TOLERANCIA_CARIMBO_MS` do `criado_em`. Devolve a distância em ms (a menor vence quando há mais de uma linha), ou
  * `null` quando a linha **não** é a do caso: pedido diferente, carimbo vazio ou fora do formato, fora da janela, ou
- * caso sem dígito no pedido (não há o que comparar) ou sem data válida.
+ * caso sem pedido legível (não há o que comparar) ou sem data válida.
  */
 export function distanciaAoCaso(
     linha: { carimbo: SheetCell | undefined; pedido: SheetCell | undefined },
     caso: CasoNaPlanilha,
 ): number | null {
-    const pedido = digitos(caso.pedido);
+    const pedido = lerNumeroDaLoja(caso.pedido);
     const criadoEm = caso.criadoEm.getTime();
     if (!pedido || Number.isNaN(criadoEm)) return null;
-    if (digitos(linha.pedido) !== pedido) return null;
+    if (!mesmoPedido(textoDaCelula(linha.pedido), pedido)) return null;
 
     const carimbo = lerCarimbo(linha.carimbo);
     if (carimbo === null) return null;
@@ -268,9 +270,12 @@ export async function lerColunasDosCasos(
 
 // ─── Achar a linha ───────────────────────────────────────────────────
 
-/** O caso tem o que comparar: algum dígito no pedido e um `criado_em` válido. Sem nenhum caso assim, nem se lê a planilha. */
+/**
+ * O caso tem o que comparar: um pedido legível (algum dígito, e o GC no formato) e um `criado_em` válido. Sem nenhum
+ * caso assim, nem se lê a planilha.
+ */
 export function casoComparavel(caso: CasoNaPlanilha): boolean {
-    return Boolean(digitos(caso.pedido)) && !Number.isNaN(caso.criadoEm.getTime());
+    return lerNumeroDaLoja(caso.pedido) !== null && !Number.isNaN(caso.criadoEm.getTime());
 }
 
 /**

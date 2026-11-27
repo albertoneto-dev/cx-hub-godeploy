@@ -1,5 +1,6 @@
 import type { MarcaCxHub } from '../constants';
 import { consultarDataMart, literalSql } from '../metabase/index';
+import { lerNumeroDaLoja, sqlDoMesmoPedido, type NumeroDaLoja } from '../pedido/numeroDaLoja';
 import type { TipoCasoCxhub } from './types';
 
 /**
@@ -14,7 +15,11 @@ import type { TipoCasoCxhub } from './types';
 
 export const TABELA_RAW = 'raw.cxhub_reenvio_reembolso_eventos';
 
-const digitos = (pedido: string) => pedido.replace(/\D/g, '');
+/**
+ * O pedido como o dedup o compara: os dígitos e o lado (GC ou não), porque o `GC109828LC` e o `#109828` da Lescent têm
+ * os mesmos dígitos e são pedidos diferentes (decisão deste app em 2026-11-27). `null` quando não há o que procurar.
+ */
+const numeroDoPedido = (pedido: string, marca: MarcaCxHub): NumeroDaLoja | null => lerNumeroDaLoja(pedido, marca);
 
 /**
  * O status de execução mais recente de cada caso, a partir das atualizações (a criação não traz status). Com
@@ -45,7 +50,7 @@ export const ULTIMO_STATUS = ultimoStatus();
 function criacoesDoPedido(
     tipo: TipoCasoCxhub,
     marca: MarcaCxHub,
-    numero: string,
+    numero: NumeroDaLoja | null,
     janela24h: boolean,
     comCriadoEm = false,
 ): string {
@@ -64,16 +69,16 @@ function criacoesDoPedido(
         : ''}
       and upper(btrim(e.payload ->> 'tipo')) = ${literalSql(tipo)}
       and lower(btrim(e.marca)) = ${literalSql(marca)}
-      and regexp_replace(e.payload ->> 'numero_pedido', '[^0-9]', '', 'g') = ${literalSql(numero)}
+      and ${sqlDoMesmoPedido(`e.payload ->> 'numero_pedido'`, numero)}
     order by e.id_solicitacao, e.disparado_em desc, e.evento_id desc`;
 }
 
 /**
- * Solicitação do mesmo tipo, marca e pedido (comparado pelos dígitos) aberta nas últimas 24h e não cancelada:
+ * Solicitação do mesmo tipo, marca e pedido (os dígitos e o lado, GC ou não) aberta nas últimas 24h e não cancelada:
  * refazer depois de cancelar é abrir outro caso, como o guia da DAG trata.
  */
 export function sqlDaSolicitacaoRecente(tipo: TipoCasoCxhub, marca: MarcaCxHub, pedido: string): string {
-    return `with c as (${criacoesDoPedido(tipo, marca, digitos(pedido), true)})
+    return `with c as (${criacoesDoPedido(tipo, marca, numeroDoPedido(pedido, marca), true)})
 select c.numero_pedido, c.responsavel,
        to_char(c.disparado_em at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as solicitado_em,
        c.id_solicitacao
@@ -99,7 +104,7 @@ export async function buscarSolicitacaoRecente(
     marca: MarcaCxHub,
     pedido: string,
 ): Promise<SolicitacaoRecente | null> {
-    if (!digitos(pedido)) return null;
+    if (!numeroDoPedido(pedido, marca)) return null;
     const [linha] = await consultarDataMart(sqlDaSolicitacaoRecente(tipo, marca, pedido));
     if (!linha) return null;
     const [numero, responsavel, solicitadoEm, id] = linha;
@@ -113,7 +118,7 @@ export async function buscarSolicitacaoRecente(
 
 /** O reembolso mais recente do pedido (pela criação), com o status de execução atual. */
 export function sqlDoReembolsoMaisRecente(marca: MarcaCxHub, pedido: string): string {
-    return `with c as (${criacoesDoPedido('REEMBOLSO', marca, digitos(pedido), false, true)}),
+    return `with c as (${criacoesDoPedido('REEMBOLSO', marca, numeroDoPedido(pedido, marca), false, true)}),
 alvo as (select * from c order by disparado_em desc limit 1)
 select c.id_solicitacao, c.numero_pedido, coalesce(s.status, 'aberto') as status_execucao, c.criado_em
 from alvo c
@@ -137,7 +142,7 @@ export interface ReembolsoNaRaw {
 
 /** `null` quando o pedido não tem reembolso registrado pelo CX Hub. Erro do Metabase sobe. */
 export async function buscarReembolsoMaisRecente(marca: MarcaCxHub, pedido: string): Promise<ReembolsoNaRaw | null> {
-    if (!digitos(pedido)) return null;
+    if (!numeroDoPedido(pedido, marca)) return null;
     const [linha] = await consultarDataMart(sqlDoReembolsoMaisRecente(marca, pedido));
     if (!linha) return null;
     const [id, numero, status, criadoEm] = linha;

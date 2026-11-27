@@ -162,6 +162,80 @@ describe('processRefund — a NF fora do Data Mart', () => {
         expect(JSON.stringify(linhasGravadas[0].linha)).toContain('[NF NÃO CONFERIDA: CONSULTA AO VIVO SEM RESPOSTA]');
     });
 
+    describe('pedido da Gocreators: o reembolso só com NF (decisão do usuário em 2026-11-27)', () => {
+        const sqlsDoDataMart = () => fetchSpy.mock.calls
+            .filter(([url]) => String(url) === `${METABASE}/api/dataset`)
+            .map(([, init]) => JSON.parse(String(init?.body)).native.query as string);
+        const corposAoGateway = () => fetchSpy.mock.calls
+            .filter(([url]) => String(url).startsWith(`${GATEWAY}/shopify/`))
+            .map(([, init]) => String(init?.body ?? ''));
+
+        it('Barbour\'s, GC sem NF em fonte nenhuma: 422 e nada gravado; todas as leituras pelo GC inteiro', async () => {
+            const { body, status } = await processRefund('barbours', { ...reembolso('barbours', 'GC104306BB'), refundScope: 'BB001 - 1' }, { agora: AGORA });
+
+            expect(status).toBe(422);
+            expect(body.message).toContain('O pedido GC104306BB é da Gocreators e está sem NF de venda');
+            expect(enfileirar).not.toHaveBeenCalled();
+            expect(planilhas).not.toHaveBeenCalled();
+            // Nada pelos dígitos: o #104306 de 2024 tem NF e é outro pedido.
+            expect(sqlsDoDataMart()).toEqual([expect.stringContaining("where sales_order_number = 'GC104306BB' and brand_code = 'barbours'")]);
+            expect(corposAoGateway()).toEqual([expect.stringContaining('"q":"name:GC104306BB"')]);
+            expect(chamadasAoGateway()).toEqual([
+                `${GATEWAY}/shopify/barbours`,
+                `${GATEWAY}/intelipost/barbours/shipment_order/sales_order_number/GC104306BB`,
+            ]);
+        });
+
+        it('GC com a NF na solicitação: grava, com o GC inteiro, sem procurar a NF', async () => {
+            const { status } = await processRefund('barbours', { ...reembolso('barbours', 'GC104306BB'), invoiceNumber: '1905557', refundScope: 'BB001 - 1' }, { agora: AGORA });
+
+            expect(status).toBe(200);
+            expect(enfileirar.mock.calls[0][0][0]).toMatchObject({ numero_pedido: 'GC104306BB', nf: '1905557' });
+            expect(chamadasAoGateway()).toEqual([]);
+        });
+
+        it('GC com a NF no metacampo do próprio GC: grava com ela', async () => {
+            gateway = (url) => (url.includes('/shopify/lescent') ? metacampo('GC109828LC', '001905557') : intelipostSemEnvio());
+
+            const { status } = await processRefund('lescent', { ...reembolso('lescent', 'GC109828LC'), refundScope: 'LC001 - 1' }, { agora: AGORA });
+
+            expect(status).toBe(200);
+            expect(enfileirar.mock.calls[0][0][0]).toMatchObject({ numero_pedido: 'GC109828LC', nf: '1905557' });
+        });
+
+        it('o metacampo que só devolve o #n de mesmos dígitos não vale para o GC: 422', async () => {
+            gateway = (url) => (url.includes('/shopify/lescent') ? metacampo('#109828', '001700001') : intelipostSemEnvio());
+
+            const { status } = await processRefund('lescent', { ...reembolso('lescent', 'GC109828LC'), refundScope: 'LC001 - 1' }, { agora: AGORA });
+
+            expect(status).toBe(422);
+            expect(enfileirar).not.toHaveBeenCalled();
+        });
+
+        it('Yenzah, GC sem NF: a conferência não recusa (o GC não é "ausente"), e a regra do GC recusa o reembolso', async () => {
+            const { body, status } = await processRefund('yenzah', reembolso('yenzah', 'GC104306YE'), { agora: AGORA });
+
+            expect(status).toBe(422);
+            expect(body.message).toContain('O pedido GC104306YE é da Gocreators e está sem NF de venda');
+            expect(enfileirar).not.toHaveBeenCalled();
+            const sqls = sqlsDoDataMart();
+            expect(sqls).toContainEqual(expect.stringContaining("where sales_order_number = 'GC104306YE' and brand_code = 'yenzah'"));
+            expect(sqls).toContainEqual(expect.stringContaining("order_name = 'GC104306YE' and created_at >= '2026-09-01'"));
+            expect(chamadasAoGateway()).toEqual([
+                `${GATEWAY}/shopify/yenzah`,
+                `${GATEWAY}/intelipost/yenzah/shipment_order/sales_order_number/GC104306YE`,
+            ]);
+        });
+
+        it('regressão: o SH da marca do Cosmos sem NF continua gravando com "-" (a regra é só do GC)', async () => {
+            const { status } = await processRefund('barbours', { ...reembolso('barbours', 'SH1954655BB'), refundScope: 'BB001 - 1' }, { agora: AGORA });
+
+            expect(status).toBe(200);
+            expect(enfileirar.mock.calls[0][0][0]).toMatchObject({ numero_pedido: 'SH1954655BB' });
+            expect(sqlsDoDataMart()).toEqual([expect.stringContaining("where shopify_order_number = '1954655'")]);
+        });
+    });
+
     it('marca do Cosmos sem NF no Data Mart: a do metacampo, pelos dígitos (o reenvio SH…-R-1 vem junto e não vale)', async () => {
         gateway = (url) => (url.includes('/shopify/bysamia')
             ? json({ data: { orders: { edges: [

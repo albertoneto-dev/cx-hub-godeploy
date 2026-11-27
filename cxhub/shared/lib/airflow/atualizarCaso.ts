@@ -2,6 +2,7 @@ import { after } from '../../../../api/next-server';
 import { sendAlert, type AlertReason } from '../alerts/index';
 import { consultarDataMart, literalSql, metabaseConfigurado, MetabaseError } from '../metabase/index';
 import { enfileirarAtualizacao, filaConfigurada, prazoDaFila } from '../fila/client';
+import { lerNumeroDaLoja, sqlDoMesmoPedido } from '../pedido/numeroDaLoja';
 import { SIGLA_DA_MARCA, TABELA_GOLD } from './gold';
 import { esperar, tentarComRetentativa } from './retentativa';
 import type { AlteracaoGold, LocalizadorCasoGold, TipoCasoCxhub } from './types';
@@ -27,19 +28,20 @@ const TIPO_LEGIVEL: Record<TipoCasoCxhub, string> = {
 /**
  * SELECT que acha na gold o caso de uma alteração, ou `null` quando o localizador não tem como casar.
  *
- * O pedido é comparado só pelos dígitos: é o número da loja, o mesmo dentro de `SH9000106BB` e de
- * `#9000106`. Caso já cancelado fica de fora: cancelado é final, e o reenvio refeito é outro caso.
+ * O pedido é comparado pelos dígitos: é o número da loja, o mesmo dentro de `SH9000106BB` e de `#9000106`. O pedido da
+ * Gocreators (`GC107465BB`, o original do `GC107465BB-R-1`) só casa com GC, e o SH nunca casa um GC (decisão deste app
+ * em 2026-11-27). Caso já cancelado fica de fora: cancelado é final, e o reenvio refeito é outro caso.
  */
 export function sqlDoCasoNaGold(localizador: LocalizadorCasoGold): string | null {
     const sigla = SIGLA_DA_MARCA[localizador.marca];
-    const numero = pedidoDoLocalizador(localizador).replace(/-R-\d+$/i, '').replace(/\D/g, '');
+    const numero = lerNumeroDaLoja(pedidoDoLocalizador(localizador).replace(/-R-\d+$/i, ''), localizador.marca);
     if (!sigla || !numero) return null;
 
     const filtros = [
         `fonte = 'CX Hub'`,
         `tipo = ${literalSql(localizador.tipo)}`,
         `sigla = ${literalSql(sigla)}`,
-        `regexp_replace(numero_pedido, '[^0-9]', '', 'g') = ${literalSql(numero)}`,
+        sqlDoMesmoPedido('numero_pedido', numero),
         `coalesce(status_execucao, '') <> 'Cancelado'`,
     ];
     const selecao = `select chave_unica from ${TABELA_GOLD} where `;

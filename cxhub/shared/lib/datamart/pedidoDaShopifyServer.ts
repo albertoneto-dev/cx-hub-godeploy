@@ -1,4 +1,5 @@
 import { consultarDataMart, literalSql } from '../metabase/index';
+import { INICIO_DOS_PEDIDOS_GC, lerNumeroDaLoja, nomeDoGc, pareceGc } from '../pedido/numeroDaLoja';
 import type { ShopifyOrder } from '../../types/index';
 
 /**
@@ -62,14 +63,32 @@ function sqlDoTelefoneNoTiny(marca: string, numero: string): string {
  */
 export function sqlDoPedidoDaShopify(marca: string, numero: string): string {
     const marcaNoDataMart = MARCA_NO_DATA_MART.get(marca) ?? marca;
+    return colunasDoPedido(sqlDoTelefoneNoTiny(marca, numero))
+        + `where o.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(marcaNoDataMart)} and order_number = ${numero} order by order_id desc limit 1)`;
+}
+
+/**
+ * O pedido da Gocreators (`GC104306BB`) pelo nome: o `order_number` dele é o interno da Shopify (2901055), e os
+ * dígitos do nome são de outro pedido (decisão deste app em 2026-11-27). O `order_name` não tem índice: a marca e o
+ * `created_at` desde o primeiro GC (`INICIO_DOS_PEDIDOS_GC`) cortam a tabela pelos índices deles. Medido em 26/11: 0,5 s
+ * com a base aquecida e 2,6 s fria. Sem telefone do Tiny: a Ápice não tem GC.
+ */
+export function sqlDoGcDaShopify(marca: string, nome: string): string {
+    const marcaNoDataMart = MARCA_NO_DATA_MART.get(marca) ?? marca;
+    return colunasDoPedido('null')
+        + `where o.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(marcaNoDataMart)} `
+        + `and order_name = ${literalSql(nome)} and created_at >= ${literalSql(INICIO_DOS_PEDIDOS_GC)} order by order_id desc limit 1)`;
+}
+
+function colunasDoPedido(foneDoTiny: string): string {
     return `select o.order_id::text, o.order_name, o.created_at, coalesce(o.order_email, o.customer_email, o.contact_email) as email,
   o.financial_status, o.current_total_price, o.value_total, o.value_shipment,
   o.customer_name, o.customer_phone, o.order_phone,
   o.shipping_first_name, o.shipping_last_name, o.shipping_address1, o.shipping_address2, o.shipping_city, o.shipping_zip, o.shipping_state,
   o.line_items_data, o.shipping_lines_data, o.fulfillments_data, o.note_attributes_data,
-  ${sqlDoTelefoneNoTiny(marca, numero)} as fone_do_tiny
+  ${foneDoTiny} as fone_do_tiny
 from api.vw_shopify_orders o
-where o.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(marcaNoDataMart)} and order_number = ${numero} order by order_id desc limit 1)`;
+`;
 }
 
 type Objeto = Record<string, unknown>;
@@ -167,13 +186,19 @@ export function pedidoDoDataMartParaShopify(linha: unknown[]): ShopifyOrder | nu
  * ausente ⇒ `nao_encontrado`; erro do Metabase ⇒ `falha` (sem dado pessoal no motivo).
  */
 export async function buscarPedidoDaShopifyNoDataMart(marca: string, orderId: string): Promise<ResultadoDaBuscaNoDataMart> {
-    const numero = (orderId ?? '').replace(/\D/g, '');
-    if (!MARCA_NO_DATA_MART.has(marca) || !/^\d{1,12}$/.test(numero)) return { tipo: 'nao_encontrado' };
+    const lido = lerNumeroDaLoja(orderId, marca);
+    const numero = lido?.digitos ?? '';
+    if (!lido || !MARCA_NO_DATA_MART.has(marca) || !/^\d{1,12}$/.test(numero)) return { tipo: 'nao_encontrado' };
     try {
-        const linhas = await consultarDataMart(sqlDoPedidoDaShopify(marca, numero));
+        const gc = lido.prefixo === 'GC' ? nomeDoGc(lido) : null;
+        const linhas = await consultarDataMart(gc ? sqlDoGcDaShopify(marca, gc) : sqlDoPedidoDaShopify(marca, numero));
         const pedido = linhas[0] ? pedidoDoDataMartParaShopify(linhas[0]) : null;
-        // A consulta é pelo `order_number`; o nome (`#n` ou `SH{n}{sufixo}`) confirma que é o pedido procurado.
-        if (!pedido || pedido.name.replace(/\D/g, '') !== numero) return { tipo: 'nao_encontrado' };
+        // O GC é conferido pelo nome inteiro. O SH é lido pelo `order_number`, e o nome (`#n` ou `SH{n}{sufixo}`) confirma
+        // que é o pedido procurado: nunca um GC, cujo `order_number` interno pode ser os dígitos procurados.
+        const confere = gc
+            ? pedido?.name.trim().toUpperCase() === gc
+            : pedido?.name.replace(/\D/g, '') === numero && !pareceGc(pedido.name);
+        if (!pedido || !confere) return { tipo: 'nao_encontrado' };
         return { tipo: 'achado', pedido };
     } catch (erro) {
         const motivo = (erro instanceof Error ? erro.message : String(erro)).slice(0, 200);

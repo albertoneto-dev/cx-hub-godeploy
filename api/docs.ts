@@ -432,6 +432,19 @@ const GUIA_HTML = `
         resposta do Cosmos em duas tentativas, vale a Intelipost do Data Mart, que só recebe o reenvio cerca de 1 h depois;
         sem ele lá, nada é criado nem registrado (<code>API_ERROR</code>), e repetir é seguro. Assim, repetir depois de
         "o reenvio PODE ter sido criado" não cria uma segunda caixa. Na Vercel, a repetição criava outro reenvio.</td></tr>
+      <tr><td>Pedido da Gocreators (<code>GC104306BB</code>) em toda rota que recebe o pedido</td><td>Mande o
+        <strong>GC inteiro</strong>. Os dígitos dele são os de outro pedido da mesma loja (o <code>#104306</code> da Barbour's
+        é de 2024), então o GC é sempre o pedido inteiro: na Shopify (<code>name:GC…</code>), no Cosmos (o
+        <code>external_id</code> dele), no Data Mart (o <code>order_name</code>), na Intelipost (o
+        <code>sales_order_number</code>), no reenvio (<code>GC…-R-n</code>) e no bloqueio de 24 h. Só os dígitos, o
+        <code>#n</code> e o SH continuam valendo o pedido da loja de mesmo número e <strong>nunca devolvem um GC</strong>; o
+        GC nunca acha o <code>#n</code>. Um reenvio do GC não conta para o SH, nem o contrário. O
+        <code>/api/reenvio/existente</code> devolve o <code>pedido</code> como o GC inteiro. O
+        <strong>reembolso</strong> do GC só é registrado com a NF de venda (a que veio ou a que o servidor achar): sem ela,
+        <span class="status s4xx">422</span> e nada gravado. O reenvio do GC não precisa dela (na Yenzah, vai com a nota
+        <code>[NF NÃO CONFERIDA: PEDIDO DA GOCREATORS SEM NF]</code>). Os reenvios no Cosmos contam pelo nome, de qualquer
+        origem: os do GC criados pela Shopify têm <code>origin = shopify</code>. Até a v24, o GC era lido pelos dígitos e
+        achava o pedido errado.</td></tr>
       <tr><td>Modo simulado</td><td>O <code>COSMOS_RESEND_SIMULADO</code> da Vercel não existe aqui: este app é a produção.
         Para ensaiar, use <code>testMode: true</code>.</td></tr>
       <tr><td>Tempo de execução</td><td>Não há o <code>maxDuration</code> da Vercel. O bot continua planejando o trabalho para

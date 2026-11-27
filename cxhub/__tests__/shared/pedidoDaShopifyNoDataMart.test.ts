@@ -230,4 +230,37 @@ describe('buscarPedidoDaShopifyNoDataMart', () => {
 
         expect(await buscarPedidoDaShopifyNoDataMart('denavita', '423209')).toEqual({ tipo: 'falha', erro: 'Metabase não respondeu em 5s' });
     });
+
+    describe('pedido da Gocreators (decisão de 2026-11-27)', () => {
+        it('o GC pelo nome inteiro, com a marca e o created_at desde o primeiro GC, e conferido pelo nome', async () => {
+            consultar.mockResolvedValue([linha({ 0: '2901055', 1: 'GC104306BB' })]);
+
+            const r = await buscarPedidoDaShopifyNoDataMart('barbours', 'gc104306');
+
+            expect(r.tipo === 'achado' && r.pedido.name).toBe('GC104306BB');
+            const sql = consultar.mock.calls[0][0];
+            expect(sql).toContain("brand = 'barbours' and order_name = 'GC104306BB' and created_at >= '2026-09-01'");
+            expect(sql).not.toContain('order_number');
+            expect(sql).toContain('null as fone_do_tiny');
+        });
+
+        it('o GC nunca acha o #n de mesmos dígitos', async () => {
+            consultar.mockResolvedValue([linha({ 1: '#104306' })]);
+            expect(await buscarPedidoDaShopifyNoDataMart('barbours', 'GC104306BB')).toEqual({ tipo: 'nao_encontrado' });
+        });
+
+        it('os dígitos nunca acham um GC, nem quando o order_number interno do GC é o número procurado', async () => {
+            // O order_number do GC104306BB é 2901055: a busca pelo 2901055 traz a linha dele, que não vale.
+            consultar.mockResolvedValueOnce([linha({ 0: '2901055', 1: 'GC104306BB' })]);
+            expect(await buscarPedidoDaShopifyNoDataMart('barbours', '2901055')).toEqual({ tipo: 'nao_encontrado' });
+            // Nem um GC cujos dígitos sejam os procurados.
+            consultar.mockResolvedValueOnce([linha({ 0: '2901056', 1: 'GC2901056BB' })]);
+            expect(await buscarPedidoDaShopifyNoDataMart('barbours', '2901056')).toEqual({ tipo: 'nao_encontrado' });
+        });
+
+        it('o GC fora do formato (o reenvio GC…-R-1) nem consulta', async () => {
+            expect(await buscarPedidoDaShopifyNoDataMart('barbours', 'GC107465BB-R-1')).toEqual({ tipo: 'nao_encontrado' });
+            expect(consultar).not.toHaveBeenCalled();
+        });
+    });
 });

@@ -1,13 +1,16 @@
 import { ShopifyOrder } from '../../types/index';
-import { sanitizeOrderId } from '../cosmos/client';
+import { lerNumeroDaLoja, nomeDoGc } from '../pedido/numeroDaLoja';
 
 /**
  * Busca pedido na Shopify via API Route (evita CORS)
  * Chama: /api/shopify/orders?brand={brandId}&orderId={orderId}
  */
 export async function getShopifyOrderData(brandId: string, orderId: string): Promise<ShopifyOrder | null> {
-    // Sanitiza o ID do pedido removendo caracteres não numéricos
-    const sanitizedOrderId = sanitizeOrderId(orderId);
+    // Sanitiza o ID do pedido removendo caracteres não numéricos; o pedido da Gocreators vai inteiro (GC104306BB), porque
+    // os dígitos dele são os de outro pedido (decisão deste app em 2026-11-27). GC fora do formato: nada a buscar.
+    const numero = lerNumeroDaLoja(orderId, brandId);
+    if (!numero) return null;
+    const sanitizedOrderId = numero.prefixo === 'GC' ? nomeDoGc(numero) : numero.digitos;
 
     try {
         const url = `/api/shopify/orders?brand=${encodeURIComponent(brandId)}&orderId=${encodeURIComponent(sanitizedOrderId)}`;

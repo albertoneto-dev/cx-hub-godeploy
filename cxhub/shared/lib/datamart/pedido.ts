@@ -1,6 +1,7 @@
 import { repartirPeloMaiorResto } from '../centavos';
 import { SUFIXO_DO_PEDIDO, type MarcaSemCosmosComPlanilha } from '../constants';
 import { temNfNaShopify, type OrigemDaNf } from '../nfDaVenda';
+import { lerNumeroDaLoja, nomeDoGc, pareceGc } from '../pedido/numeroDaLoja';
 import type {
     BaseDoValorDaNf,
     CampoConferido,
@@ -58,9 +59,22 @@ export function digitosDoPedido(texto: string | null | undefined): string | null
     return digitos.length >= 3 && digitos.length <= 9 ? digitos : null;
 }
 
-/** O número do pedido como a planilha o guarda: `1731559` na Ápice vira `SH1731559AP`. */
+/**
+ * O pedido como as leituras do Data Mart e das fontes de fora o recebem (decisão deste app em 2026-11-27): só os
+ * dígitos no SH, como até a v24 (`SH1731559AP` → `1731559`), e o GC inteiro, com a sigla da marca (`GC104306YE`),
+ * porque os dígitos do GC são os de outro pedido. `null` quando não é número de pedido da Shopify (fora de 3 a 9
+ * dígitos, ou um GC fora do formato).
+ */
+export function numeroDasLeituras(texto: string | null | undefined, marca?: string | null): string | null {
+    const numero = lerNumeroDaLoja(texto, marca);
+    if (!numero || !digitosDoPedido(numero.digitos)) return null;
+    if (numero.prefixo === 'SH') return numero.digitos;
+    return numero.sufixo ? nomeDoGc(numero) : null;
+}
+
+/** O número do pedido como a planilha o guarda: `1731559` na Ápice vira `SH1731559AP`; o GC fica inteiro. */
 export function pedidoDaPlanilha(marca: MarcaSemCosmosComPlanilha, numero: string): string {
-    return `SH${numero}${SUFIXO_DO_PEDIDO[marca]}`;
+    return pareceGc(numero) ? numero : `SH${numero}${SUFIXO_DO_PEDIDO[marca]}`;
 }
 
 /** Os kits do pedido, na ordem em que aparecem: cada um com os componentes únicos e as unidades de cada um em UM kit. */
@@ -211,6 +225,13 @@ export function derivarContextoDoPedido(leituras: LeiturasDoPedido): ContextoDoP
         avisoDaNf = 'O Data Mart ainda não tem a NF deste pedido, e '
             + `${temNfNaShopify(marca) ? 'a Shopify e a Intelipost não responderam' : 'a Intelipost não respondeu'} a tempo para confirmar. `
             + 'Confira o número na Intelipost; ao gravar, o servidor confere de novo.';
+    } else if (pareceGc(numero)) {
+        // O pedido da Gocreators sem NF em fonte nenhuma (ele não tem envio na Intelipost; a NF vem do metacampo) não é
+        // recusado aqui: o reenvio é registrado com a NF que veio e a nota do motivo, e o reembolso, que precisa da NF, é
+        // recusado pela regra dele (`recusaDoReembolsoGcSemNf`). Decisão do usuário em 2026-11-27.
+        nf = { estado: 'desconhecida', numero: null, motivo: 'pedido_gocreators' };
+        avisoDaNf = 'Pedido da Gocreators: a NF de venda não está na Intelipost nem na Shopify. O reenvio é registrado sem a '
+            + 'NF; o reembolso precisa dela.';
     } else {
         nf = { estado: 'ausente', numero: null };
         avisoDaNf = ehApice
@@ -446,6 +467,7 @@ const TEXTO_DO_MOTIVO: Record<MotivoDaNota, string> = {
     sem_resposta: 'DATA MART SEM RESPOSTA',
     nf_fora_do_data_mart: 'AINDA FORA DO DATA MART',
     pedido_cancelado_no_tiny: 'PEDIDO CANCELADO NO TINY',
+    pedido_gocreators: 'PEDIDO DA GOCREATORS SEM NF',
     consulta_ao_vivo_sem_resposta: 'CONSULTA AO VIVO SEM RESPOSTA',
 };
 

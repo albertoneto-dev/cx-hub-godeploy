@@ -1,6 +1,7 @@
 import { CosmosOrder, CosmosDetailedOrder, CosmosProduct } from '../../types/index';
 import { NormalizedOrder, NormalizedProduct } from '../../types/index';
 import { handleUnauthorized } from '../auth/auth-utils';
+import { buscaNoCosmos, ehOPedidoNoCosmos, lerNumeroDaLoja } from '../pedido/numeroDaLoja';
 
 /**
  * Sanitiza o ID do pedido, removendo caracteres não numéricos
@@ -15,11 +16,12 @@ export function sanitizeOrderId(orderId: string): string {
  * Chama: /api/cosmos/orders?brand={brandId}&orderId={orderId}
  */
 export async function getCosmosOrder(brandId: string, orderId: string, token: string): Promise<CosmosOrder | null> {
-    // Sanitiza o ID do pedido removendo caracteres não numéricos
-    const sanitizedOrderId = sanitizeOrderId(orderId);
+    // O SH vai pelos dígitos; o GC, pelo nome inteiro (decisão deste app em 2026-11-27). Fora do formato, nada a buscar.
+    const numero = lerNumeroDaLoja(orderId, brandId);
+    if (!numero) return null;
 
     try {
-        const url = `/api/cosmos/orders?brand=${encodeURIComponent(brandId)}&orderId=${encodeURIComponent(sanitizedOrderId)}`;
+        const url = `/api/cosmos/orders?brand=${encodeURIComponent(brandId)}&orderId=${encodeURIComponent(buscaNoCosmos(numero))}`;
         console.log('[getCosmosOrder] Fetching via API route:', url);
 
         const res = await fetch(url, {
@@ -53,23 +55,10 @@ export async function getCosmosOrder(brandId: string, orderId: string, token: st
                 return null;
             }
 
-            // Filter: external_id validation using regex (based on n8n logic)
-            // Rule 1: Regex match - ^SH{orderId}[a-zA-Z]{2}\d*$ (e.g., SH12345BB, SH12345BB1)
-            // Rule 2: Exact match - #SHOPIFY{orderId}
-            const sanitizedId = sanitizeOrderId(orderId);
-            const regexPattern = new RegExp(`^SH${sanitizedId}[a-zA-Z]{2}\\d*$`);
-            const exactMatch = `#SHOPIFY${sanitizedId}`;
-
-            console.log('[getCosmosOrder] Looking for external_id matching:', {
-                regexPattern: regexPattern.toString(),
-                exactMatch,
-            });
-
-            const filteredOrder = data.find(order => {
-                const matchesRegex = regexPattern.test(order.external_id);
-                const matchesExact = order.external_id === exactMatch;
-                return matchesRegex || matchesExact;
-            });
+            // Filter: external_id validation (based on n8n logic), em `ehOPedidoNoCosmos`:
+            // SH: ^SH{orderId}[a-zA-Z]{2}\d*$ (e.g., SH12345BB, SH12345BB1) ou #SHOPIFY{orderId}
+            // GC: o nome inteiro (GC104306BB)
+            const filteredOrder = data.find(order => ehOPedidoNoCosmos(order.external_id, numero));
 
             if (filteredOrder) {
                 console.log('[getCosmosOrder] Found order with id:', filteredOrder.id, 'external_id:', filteredOrder.external_id);

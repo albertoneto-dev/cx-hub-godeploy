@@ -4,6 +4,7 @@ import type {
     SolicitacaoListada,
     TipoSolicitacaoListada,
 } from '../solicitacoes/types';
+import { lerNumeroDaLoja, mesmoPedido } from '../pedido/numeroDaLoja';
 import { consultarRegistro } from './client';
 import type { EstadoDoEnvio, EstadoDoRegistro, SolicitacaoEnviada } from './types';
 
@@ -79,23 +80,21 @@ export function esquecerSolicitacoesEnviadas(ids: string[]): void {
     gravarTudo(lerTudo().filter((enviada) => !apagar.has(enviada.idSolicitacao)));
 }
 
-const digitos = (pedido: string) => pedido.replace(/\D/g, '');
-
 /**
- * As enviadas que a lista mostra: as do filtro da busca (marca e pedido, pelos dígitos, como a lista) que a raw
- * ainda não trouxe.
+ * As enviadas que a lista mostra: as do filtro da busca (marca e pedido, pelos dígitos e pelo lado, GC ou não, como a
+ * lista) que a raw ainda não trouxe.
  */
 export function enviadasDaLista(
     enviadas: SolicitacaoEnviada[],
     filtro: FiltroSolicitacoes,
     idsNaLista: ReadonlySet<string>,
 ): SolicitacaoEnviada[] {
-    const pedido = filtro.pedido ? digitos(filtro.pedido) : '';
+    const pedido = filtro.pedido ? lerNumeroDaLoja(filtro.pedido, filtro.marca) : null;
     return enviadas.filter((enviada) =>
         enviada.tipo === filtro.tipo
         && !idsNaLista.has(enviada.idSolicitacao)
         && (!filtro.marca || enviada.marca === filtro.marca)
-        && (!pedido || digitos(enviada.numeroPedido) === pedido));
+        && (!filtro.pedido || mesmoPedido(enviada.numeroPedido, pedido)));
 }
 
 /** Onde está a página que a tela mostra: as enviadas só entram na primeira. */

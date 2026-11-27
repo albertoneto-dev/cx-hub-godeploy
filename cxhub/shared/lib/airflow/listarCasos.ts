@@ -3,6 +3,7 @@ import { janelaDaLista } from '../solicitacoes/paginacao';
 import type { FiltroSolicitacoes, SolicitacaoListada } from '../solicitacoes/types';
 import { SIGLA_DA_MARCA } from './gold';
 import { TABELA_RAW, ULTIMO_STATUS } from './raw';
+import { lerNumeroDaLoja, sqlDaChaveDoPedido, sqlDoMesmoPedido } from '../pedido/numeroDaLoja';
 
 /** Quantas solicitações cada página traz. É também o que a fila aceita numa pergunta das atualizações (20 ids). */
 export const TAMANHO_DA_PAGINA = 20;
@@ -24,8 +25,6 @@ export interface OpcoesDaLista {
     /** Agora, em ms: o começo da janela de 30 dias. */
     agora: number;
 }
-
-const digitos = (texto: string) => texto.replace(/\D/g, '');
 
 /** O começo da janela (ISO), ou `null` na busca por pedido, que não tem janela (`janelaDaLista`). */
 export function inicioDaJanela(filtro: FiltroSolicitacoes, agora: number): string | null {
@@ -54,14 +53,15 @@ const ordem = (alias: string) => `${alias}.criado collate "C" desc, ${alias}.id_
  * id. Só entram valores montados no código e escapados (`literalSql`).
  */
 export function sqlDaListaDeSolicitacoes(filtro: FiltroSolicitacoes, opcoes: OpcoesDaLista): string {
-    const numero = digitos(filtro.pedido ?? '');
     const desde = inicioDaJanela(filtro, opcoes.agora);
     const pagina = Math.max(1, Math.trunc(opcoes.pagina) || 1);
 
     const filtros = [`e.tipo_evento = 'caso'`, `upper(btrim(e.payload ->> 'tipo')) = ${literalSql(filtro.tipo)}`];
     if (filtro.marca) filtros.push(`lower(btrim(e.marca)) = ${literalSql(filtro.marca)}`);
-    if (numero) {
-        filtros.push(`regexp_replace(e.payload ->> 'numero_pedido', '[^0-9]', '', 'g') = ${literalSql(numero)}`);
+    // O pedido pelos dígitos e pelo lado (GC ou não): o `GC109828LC` e o `#109828` são pedidos diferentes (decisão deste
+    // app em 2026-11-27). Um GC fora do formato não acha nada.
+    if (filtro.pedido) {
+        filtros.push(sqlDoMesmoPedido(`e.payload ->> 'numero_pedido'`, lerNumeroDaLoja(filtro.pedido, filtro.marca)));
     }
     // O lote roda depois da criação (`disparado_em` >= `criado_em`): este corte não perde nada da janela.
     if (desde) filtros.push(`e.disparado_em >= ${literalSql(desde)}::timestamptz`);
@@ -92,7 +92,7 @@ j as (
     from c${uniaoComAFila}),
 o as (
     select j.*,
-           row_number() over (partition by j.marca, regexp_replace(j.numero_pedido, '[^0-9]', '', 'g') order by ${ordem('j')}) = 1 as mais_recente
+           row_number() over (partition by j.marca, ${sqlDaChaveDoPedido('j.numero_pedido')} order by ${ordem('j')}) = 1 as mais_recente
     from j${desde ? `\n    where j.criado collate "C" >= ${literalSql(desde)}` : ''}),
 p as (
     select o.* from o

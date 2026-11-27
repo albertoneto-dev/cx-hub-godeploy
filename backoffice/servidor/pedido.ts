@@ -3,7 +3,8 @@
 // drawer (escopo e valor do reembolso; SKUs do reenvio) e o teto do valor.
 //
 // O de-para é o mesmo que o dbt usa para a coorte (rr_brand_shopify e o número SH<n>XX → n): a loja pela sigla da marca
-// e o order_number pelos dígitos do pedido. A Gobeaute não está na tabela (a loja dela não é ingerida): sem pedido.
+// e o order_number pelos dígitos do pedido. O pedido da Gocreators (GC<n>XX) vai pelo nome (numeroDaLoja). A Gobeaute
+// não está na tabela (a loja dela não é ingerida): sem pedido.
 
 import type { CasoGold } from "../shared/tipos";
 import { montarPedido, type PedidoDoCaso } from "../shared/itens";
@@ -15,11 +16,34 @@ export const LOJA_DA_SIGLA: Readonly<Record<string, string>> = {
   LE: "lescent", KO: "kokeshi", BS: "by_samia", AU: "aua", BB: "barbours", RT: "rituaria", AP: "apice", YE: "yenzah", DV: "denavita",
 };
 
-// "SH2779726BB" → 2779726; "#1234" → 1234 (o número antigo). Fora disso, null.
-export function numeroDaLoja(numeroPedido: unknown): string | null {
+// A sigla do pedido da Gocreators em cada loja (GC104306BB), para o GC registrado sem ela.
+const SIGLA_DO_GC_NA_LOJA: Readonly<Record<string, string>> = {
+  lescent: "LC", kokeshi: "KS", by_samia: "BS", aua: "AU", barbours: "BB", rituaria: "RT", apice: "AP", yenzah: "YE", denavita: "DN",
+};
+
+// "SH2779726BB" → 2779726; "#1234" → 1234 (o número antigo); "GC104306BB" → "GC104306BB", o pedido da Gocreators, que
+// vai pelo nome: o order_number dele é o interno da Shopify, e os dígitos do GC são os de outro pedido da loja (decisão
+// do app cx-hub em 2026-11-27). O GC sem a sigla ganha a da loja. Fora disso (inclusive um GC fora do formato), null.
+export function numeroDaLoja(numeroPedido: unknown, loja?: string): string | null {
   const limpo = String(numeroPedido ?? "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  if (/GC[0-9]/.test(limpo)) {
+    const gc = /^GC([0-9]{1,18})([A-Z]{2})?$/.exec(limpo);
+    const sigla = gc?.[2] ?? (loja ? SIGLA_DO_GC_NA_LOJA[loja] : undefined);
+    return gc && sigla ? `GC${gc[1]}${sigla}` : null;
+  }
   const n = limpo.replace(/^SH([0-9]+)[A-Z]{2}$/, "$1");
   return /^[0-9]{1,18}$/.test(n) ? n : null;
+}
+
+// Desde quando há pedido GC na Shopify (o primeiro é de 13/10/2026): corta a busca pelo order_name, que não tem índice.
+const INICIO_DOS_PEDIDOS_GC = "2026-09-01";
+
+// O pedido na fct_shopify_orders: o SH pelo índice de (brand, order_number); o GC pelo order_name, com a marca e o
+// created_at cortando a tabela pelos índices deles.
+function filtroDoPedido(loja: string, numero: string): string {
+  return numero.startsWith("GC")
+    ? `brand = ${literalSql(loja)} and order_name = ${literalSql(numero)} and created_at >= ${literalSql(INICIO_DOS_PEDIDOS_GC)}`
+    : `brand = ${literalSql(loja)} and order_number = ${numero}`;
 }
 
 // Os itens de cada kit vêm num texto só: um item por registro (separador chr(30)), e em cada um o SKU, as unidades, o
@@ -43,7 +67,7 @@ export function sqlDoPedido(loja: string, numero: string): string {
     + "exists (select 1 from gold.fct_shopify_order_items_exploded_priced_mat e where e.order_id = o.order_id) as explodido "
     + "from gold.fct_shopify_orders o "
     + "left join gold.fct_shopify_order_items i on i.order_id = o.order_id "
-    + `where o.order_id = (select order_id from gold.fct_shopify_orders where brand = ${literalSql(loja)} and order_number = ${numero} `
+    + `where o.order_id = (select order_id from gold.fct_shopify_orders where ${filtroDoPedido(loja, numero)} `
     + "order by created_at desc limit 1) "
     + "order by i.line_item_id";
 }
@@ -55,7 +79,7 @@ const numero = (v: unknown) => (typeof v === "number" ? v : Number(v ?? 0)) || 0
 export async function pedidoDoCaso(m: ConfigMetabase, f: Busca, caso: CasoGold): Promise<PedidoNoDataMart> {
   const loja = LOJA_DA_SIGLA[String(caso.sigla ?? "")];
   if (!loja) return { pedido: null, erro: "A loja desta marca não está no Data Mart: os itens do pedido não se marcam." };
-  const n = numeroDaLoja(caso.numero_pedido);
+  const n = numeroDaLoja(caso.numero_pedido, loja);
   if (!n) return { pedido: null, erro: "Número do pedido fora do formato da loja: os itens do pedido não se marcam." };
   const linhas = await consultar(m, f, sqlDoPedido(loja, n));
   if (!linhas.length) return { pedido: null, erro: "Pedido não encontrado no Data Mart: os itens do pedido não se marcam." };

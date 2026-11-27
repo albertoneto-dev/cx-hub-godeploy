@@ -1,8 +1,9 @@
 import type { SupportedBrand } from '../constants';
 import { consultarDataMart, literalSql, METABASE_TIMEOUT_MS } from '../metabase/index';
 import { normalizarNf, type OrigemDaNf } from '../nfDaVenda';
+import { pareceGc } from '../pedido/numeroDaLoja';
 import { lerNfForaDoDataMart, type DepsDaNfForaDoDataMart } from './nfForaDoDataMartServer';
-import { digitosDoPedido, nfAchadaForaDoDataMart } from './pedido';
+import { nfAchadaForaDoDataMart, numeroDasLeituras } from './pedido';
 import type { DepsDaLeitura } from './pedidoServer';
 
 /**
@@ -36,10 +37,15 @@ export function nfAusente(nf: string | null | undefined): boolean {
     return texto === '' || texto === '-' || texto === 'na' || texto === 'n/a' || /^0+$/.test(texto);
 }
 
-/** As remessas do pedido, da primeira à última, pelo índice `(shopify_order_number, brand_code)`. Medida: 0,03 s. */
+/**
+ * As remessas do pedido, da primeira à última, pelo índice `(shopify_order_number, brand_code)`. Medida: 0,03 s. O
+ * pedido da Gocreators (`GC107465BB`, decisão deste app em 2026-11-27) vai pelo `sales_order_number`, que também tem
+ * índice: o `shopify_order_number` dele é o número interno da Shopify, e os dígitos do GC achariam a NF do `#n` antigo.
+ */
 export function sqlDaNfNaIntelipost(brandCode: string, numero: string): string {
+    const filtro = pareceGc(numero) ? `sales_order_number = ${literalSql(numero)}` : `shopify_order_number = ${literalSql(numero)}`;
     return `select invoice_number from gold.fct_intelipost_orders
-where shopify_order_number = ${literalSql(numero)} and brand_code = ${literalSql(brandCode)}
+where ${filtro} and brand_code = ${literalSql(brandCode)}
 order by created_iso limit 10`;
 }
 
@@ -57,7 +63,7 @@ export async function nfDaIntelipost(
     prazo: number,
     deps: DepsDaLeitura = {},
 ): Promise<string | null> {
-    const numero = digitosDoPedido(numeroPedido);
+    const numero = numeroDasLeituras(numeroPedido, marca);
     const brandCode = BRAND_CODE_NA_INTELIPOST[marca];
     if (!numero || !brandCode) return null;
     const agora = deps.agora ?? Date.now;
@@ -91,7 +97,7 @@ export async function nfDoPedidoDoCosmos(
 ): Promise<{ nf: string; origem: OrigemDaNf } | null> {
     const doDataMart = await nfDaIntelipost(marca, numeroPedido, prazo, deps);
     if (doDataMart) return { nf: doDataMart, origem: 'datamart' };
-    const numero = digitosDoPedido(numeroPedido);
+    const numero = numeroDasLeituras(numeroPedido, marca);
     if (!numero) return null;
     return nfAchadaForaDoDataMart(await lerNfForaDoDataMart(marca, numero, prazo, deps));
 }

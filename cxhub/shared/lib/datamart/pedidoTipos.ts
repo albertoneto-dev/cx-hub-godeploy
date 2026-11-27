@@ -154,9 +154,11 @@ export type EstadoDaNf = 'achada' | 'ausente' | 'desconhecida';
  * - `sem_resposta`: uma leitura falhou ou passou do prazo (do Data Mart, ou, na NF, a Shopify ou a Intelipost ao vivo);
  * - `nf_fora_do_data_mart`: o pedido ativo no Tiny já tem o id da NF, e a NF ainda não chegou à tabela de NFs (ela
  *   chega em lotes, horas depois);
- * - `pedido_cancelado_no_tiny`: o Tiny só tem o pedido cancelado, que pode ter sido refeito fora do que a busca alcança.
+ * - `pedido_cancelado_no_tiny`: o Tiny só tem o pedido cancelado, que pode ter sido refeito fora do que a busca alcança;
+ * - `pedido_gocreators`: o pedido da Gocreators (`GC{n}{sigla}`) sem NF em fonte nenhuma. Não é `ausente`: o reenvio é
+ *   registrado sem a NF, e o reembolso, que precisa dela, é recusado pela regra dele (decisão de 2026-11-27).
  */
-export type MotivoDoNaoConferido = 'sem_resposta' | 'nf_fora_do_data_mart' | 'pedido_cancelado_no_tiny';
+export type MotivoDoNaoConferido = 'sem_resposta' | 'nf_fora_do_data_mart' | 'pedido_cancelado_no_tiny' | 'pedido_gocreators';
 
 /** Um kit do pedido e a composição dele: os componentes e as unidades de cada um em UM kit. */
 export interface KitDoPedido {
@@ -177,9 +179,9 @@ export interface BaseDoValorDaNf {
 /** O que o servidor deriva do pedido: para gravar a solicitação e para a tela mostrar (`/api/datamart/order-context`). */
 export interface ContextoDoPedido {
     marca: MarcaSemCosmosComPlanilha;
-    /** Só os dígitos */
+    /** Só os dígitos; no pedido da Gocreators, o nome inteiro (`GC104306YE`, `numeroDasLeituras`) */
     numero: string;
-    /** O número como a planilha o guarda: `SH1731559AP` */
+    /** O número como a planilha o guarda: `SH1731559AP`, ou o GC inteiro */
     pedido: string;
     /**
      * `numero` e `origem` só com `estado: 'achada'`, e o `motivo` só com `desconhecida`. `foraDoDataMart` marca a NF sem

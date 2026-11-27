@@ -280,6 +280,23 @@ describe("itens do reembolso (o pedido da Shopify no Data Mart)", () => {
     return { a, chave: String(linha.chave_unica) };
   }
 
+  it("o pedido da Gocreators traz os itens dele, pelo nome, e não os do #n de mesmos dígitos (decisão de 2026-11-27)", async () => {
+    const a = await criarAmbiente();
+    const linha = linhaGold({ status_execucao: null, numero_pedido: "GC109828LC", escopo_reembolso: "LC01002 - 1" });
+    await a.datamart.inserir(linha);
+    // O #109828 da Lescent (10/2025) e o GC109828LC (order_number 741050) são pedidos diferentes.
+    await a.datamart.pedidoShopify({
+      loja: "lescent", numero: 109828, total: 30, frete: 0, desconto: 0, itens: [{ id: 701, sku: "LC09999", quantidade: 1, preco: 30 }],
+    });
+    await a.datamart.pedidoShopify({
+      loja: "lescent", numero: 741050, nome: "GC109828LC", total: 49.9, frete: 0, desconto: 0,
+      itens: [{ id: 801, sku: "LC01002", quantidade: 1, preco: 49.9 }],
+    });
+    const d = (await caso(a, String(linha.chave_unica))).json;
+    expect(d.pedidoErro).toBeNull();
+    expect(d.pedido).toMatchObject({ total: 49.9, itens: [{ id: "801", sku: "LC01002" }] });
+  });
+
   it("o detalhe traz os itens, o frete e o total do pedido", async () => {
     const { a, chave } = await comPedido();
     const d = (await caso(a, chave)).json;

@@ -54,7 +54,7 @@ describe('sqlDaSolicitacaoRecente (o dedup de 24h)', () => {
     });
 
     it('compara o pedido só pelos dígitos, dos dois lados', () => {
-        expect(sql).toContain("and regexp_replace(e.payload ->> 'numero_pedido', '[^0-9]', '', 'g') = '9000106'");
+        expect(sql).toContain("and (regexp_replace(coalesce(e.payload ->> 'numero_pedido', ''), '[^0-9]', '', 'g') = '9000106' and not (coalesce(e.payload ->> 'numero_pedido', '') ~* 'GC[0-9]'))");
         expect(plano(sqlDaSolicitacaoRecente('REENVIO', 'barbours', '#9000106'))).toBe(sql);
     });
 
@@ -102,9 +102,9 @@ describe('sqlDaSolicitacaoRecente (o dedup de 24h)', () => {
             "and upper(btrim(e.payload ->> 'tipo')) = 'REENVIO'' or ''1''=''1' and lower(btrim(e.marca))",
         );
         expect(injetado).toContain(
-            "and lower(btrim(e.marca)) = 'barbours''; drop table x; --' and regexp_replace(",
+            "and lower(btrim(e.marca)) = 'barbours''; drop table x; --' and (regexp_replace(",
         );
-        expect(injetado).toContain("'[^0-9]', '', 'g') = '9000106' order by e.id_solicitacao");
+        expect(injetado).toContain("'[^0-9]', '', 'g') = '9000106' and not (coalesce(e.payload ->> 'numero_pedido', '') ~* 'GC[0-9]')) order by e.id_solicitacao");
     });
 });
 
@@ -116,7 +116,7 @@ describe('sqlDoReembolsoMaisRecente', () => {
         expect(sql).toContain("where e.tipo_evento = 'caso'");
         expect(sql).toContain("and upper(btrim(e.payload ->> 'tipo')) = 'REEMBOLSO'");
         expect(sql).toContain("and lower(btrim(e.marca)) = 'lescent'");
-        expect(sql).toContain("and regexp_replace(e.payload ->> 'numero_pedido', '[^0-9]', '', 'g') = '9000105'");
+        expect(sql).toContain("and (regexp_replace(coalesce(e.payload ->> 'numero_pedido', ''), '[^0-9]', '', 'g') = '9000105' and not (coalesce(e.payload ->> 'numero_pedido', '') ~* 'GC[0-9]'))");
     });
 
     it('sem a janela de 24h: vale o reembolso mais recente, de quando for', () => {
@@ -141,8 +141,8 @@ describe('sqlDoReembolsoMaisRecente', () => {
     it('aspas na marca ficam dentro do literal; do pedido só vão os dígitos', () => {
         const injetado = plano(sqlDoReembolsoMaisRecente("lescent' or 'x'='x" as SupportedBrand, "SH9000105'; drop table x; --"));
 
-        expect(injetado).toContain("and lower(btrim(e.marca)) = 'lescent'' or ''x''=''x' and regexp_replace(");
-        expect(injetado).toContain("'[^0-9]', '', 'g') = '9000105' order by e.id_solicitacao");
+        expect(injetado).toContain("and lower(btrim(e.marca)) = 'lescent'' or ''x''=''x' and (regexp_replace(");
+        expect(injetado).toContain("'[^0-9]', '', 'g') = '9000105' and not (coalesce(e.payload ->> 'numero_pedido', '') ~* 'GC[0-9]')) order by e.id_solicitacao");
         expect(injetado).not.toContain('drop');
     });
 });

@@ -59,7 +59,7 @@ describe('reenvioRecenteNoCosmos (o pedido já tem reenvio antes do POST /resend
             expect(r).toEqual({ tipo: 'existe', externalId: 'SH1585904KS-R-1', criadoEm: '2026-11-19T11:32:33.441-03:00', fonte: 'cosmos' });
             expect(f).toHaveBeenCalledTimes(1);
             const [url, init] = f.mock.calls[0];
-            expect(url).toBe(`${COSMOS_URL}/organizations/4/orders?external_id=1585904&origin=resend&per_page=100`);
+            expect(url).toBe(`${COSMOS_URL}/organizations/4/orders?external_id=1585904&per_page=100`);
             expect(init?.method).toBe('GET');
             expect(init?.headers).toMatchObject({ Authorization: 'Bearer tok' });
             expect(consultar).not.toHaveBeenCalled();
@@ -90,7 +90,6 @@ describe('reenvioRecenteNoCosmos (o pedido já tem reenvio antes do POST /resend
             ['cancelado pela data', pedido('SH1585904KS-R-1', '2026-11-19T11:00:00-03:00', { canceled_at: '2026-11-19T11:05:00-03:00' })],
             ['de mais de 24 h', pedido('SH1585904KS-R-1', '2026-11-18T11:00:00-03:00')],
             ['de outro pedido com número parecido (a busca é ILIKE)', pedido('SH15859041KS-R-1', '2026-11-19T11:00:00-03:00')],
-            ['que não é reenvio', pedido('SH1585904KS-R-1', '2026-11-19T11:00:00-03:00', { origin: 'ecommerce' })],
         ])('reenvio %s não conta ⇒ nenhum', async (_caso, item) => {
             const { d, consultar } = deps(async () => respostaJson([item]));
 

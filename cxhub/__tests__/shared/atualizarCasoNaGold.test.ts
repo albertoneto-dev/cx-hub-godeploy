@@ -59,7 +59,7 @@ describe('sqlDoCasoNaGold', () => {
         expect(sql).toContain("fonte = 'CX Hub'");
         expect(sql).toContain("tipo = 'REEMBOLSO'");
         expect(sql).toContain("sigla = 'LE'");
-        expect(sql).toContain("regexp_replace(numero_pedido, '[^0-9]', '', 'g') = '9000105'");
+        expect(sql).toContain("(regexp_replace(coalesce(numero_pedido, ''), '[^0-9]', '', 'g') = '9000105' and not (coalesce(numero_pedido, '') ~* 'GC[0-9]'))");
         expect(sql).toContain("coalesce(status_execucao, '') <> 'Cancelado'");
         expect(sql).toMatch(/order by data_solicitacao desc limit 1$/);
     });
